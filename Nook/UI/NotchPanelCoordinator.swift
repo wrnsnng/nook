@@ -19,7 +19,7 @@ enum NotchPanelMetrics {
         case .idle:
             return CGSize(width: 388, height: 78)
         case .detected:
-            return CGSize(width: 548, height: 110)
+            return CGSize(width: 420, height: 64)
         case .recording:
             guard showsCaptions else {
                 return CGSize(width: 286, height: 30)
@@ -105,6 +105,8 @@ final class NotchPanelCoordinator {
         panel.orderFrontRegardless()
         if case .completed = meeting.phase {
             scheduleCompletionReset()
+        } else if case .detected = meeting.phase {
+            scheduleDetectionHide()
         }
 
         guard !wasVisible, shouldAnimate else { return }
@@ -192,7 +194,9 @@ final class NotchPanelCoordinator {
             panelMode: panelMode
         )
 
-        if case .idle = phase {
+        if case .detected = phase, panel.isVisible {
+            scheduleDetectionHide()
+        } else if case .idle = phase {
             // Idle owns the delayed exit below.
         } else {
             hideTask?.cancel()
@@ -303,6 +307,31 @@ final class NotchPanelCoordinator {
             try? await Task.sleep(for: .seconds(4.8))
             guard !Task.isCancelled, let self else { return }
             self.meeting.resetStatus()
+        }
+    }
+
+    private func scheduleDetectionHide() {
+        hideTask?.cancel()
+        hideTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(8))
+            guard
+                !Task.isCancelled,
+                let self,
+                case .detected = self.meeting.phase
+            else {
+                return
+            }
+
+            if self.shouldAnimate {
+                withAnimation(.easeIn(duration: 0.16)) {
+                    self.geometry.revealProgress = 0
+                }
+                try? await Task.sleep(for: .milliseconds(180))
+            }
+
+            guard !Task.isCancelled else { return }
+            self.panel.orderOut(nil)
+            self.geometry.revealProgress = 1
         }
     }
 

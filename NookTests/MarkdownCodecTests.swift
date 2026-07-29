@@ -142,6 +142,23 @@ struct MarkdownCodecTests {
     }
 
     @Test
+    func detectedMeetingPromptStaysGlanceablyCompact() {
+        let size = NotchPanelMetrics.bodySize(
+            for: .detected(
+                DetectedMeeting(
+                    appName: "Teams",
+                    windowTitle: "Design review"
+                )
+            ),
+            showsCaptions: true,
+            panelMode: .transcript
+        )
+
+        #expect(size.width == 420)
+        #expect(size.height == 64)
+    }
+
+    @Test
     func heuristicTitlesSkipMeetingChatterAndUseConversationContent() {
         let title = MeetingTitleGenerator.heuristicTitle(
             from: [

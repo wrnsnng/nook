@@ -47,7 +47,7 @@ final class MeetingNotificationService: NSObject, UNUserNotificationCenterDelega
             content.title = "Meeting detected"
             content.subtitle = detection.appName
             content.body = "Record “\(detection.suggestedTitle)” locally with Nook?"
-            content.sound = .default
+            content.interruptionLevel = .passive
             content.categoryIdentifier = Action.category
 
             let request = UNNotificationRequest(
@@ -63,7 +63,7 @@ final class MeetingNotificationService: NSObject, UNUserNotificationCenterDelega
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
-        [.banner, .list, .sound]
+        [.banner, .list]
     }
 
     nonisolated func userNotificationCenter(

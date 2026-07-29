@@ -43,11 +43,19 @@ struct NotchPanelView: View {
         meeting.phase.isRecording && !meeting.showLiveCaptions
     }
 
+    private var isDetected: Bool {
+        if case .detected = meeting.phase { true } else { false }
+    }
+
+    private var shellBottomRadius: CGFloat {
+        if isUltraCompact { return 15 }
+        if isDetected { return 22 }
+        return meeting.phase.isRecording && meeting.showLiveCaptions ? 38 : 30
+    }
+
     private var shellShape: TopAnchoredPanelShape {
         TopAnchoredPanelShape(
-            bottomRadius: isUltraCompact
-                ? 15
-                : (meeting.showLiveCaptions ? 38 : 30),
+            bottomRadius: shellBottomRadius,
             revealProgress: geometry.revealProgress
         )
     }
@@ -55,9 +63,7 @@ struct NotchPanelView: View {
     private var shellOutlineShape: TopAnchoredPanelOutline {
         TopAnchoredPanelOutline(
             topInset: geometry.topInset,
-            bottomRadius: isUltraCompact
-                ? 15
-                : (meeting.showLiveCaptions ? 38 : 30),
+            bottomRadius: shellBottomRadius,
             revealProgress: geometry.revealProgress
         )
     }
@@ -86,10 +92,16 @@ struct NotchPanelView: View {
                     }
                     .shadow(
                         color: .black.opacity(
-                            colorScheme == .dark ? 0.30 : 0.065
+                            isDetected
+                                ? (colorScheme == .dark ? 0.20 : 0.045)
+                                : (colorScheme == .dark ? 0.30 : 0.065)
                         ),
-                        radius: colorScheme == .dark ? 32 : 22,
-                        y: colorScheme == .dark ? 16 : 8
+                        radius: isDetected
+                            ? 16
+                            : (colorScheme == .dark ? 32 : 22),
+                        y: isDetected
+                            ? 6
+                            : (colorScheme == .dark ? 16 : 8)
                     )
             } else {
                 GlassEffectContainer(spacing: 16) {
@@ -140,12 +152,18 @@ struct NotchPanelView: View {
                         }
                         .shadow(
                             color: .black.opacity(
-                                colorScheme == .dark
+                                isDetected
+                                    ? (colorScheme == .dark ? 0.14 : 0.045)
+                                    : colorScheme == .dark
                                     ? (isHovering ? 0.24 : 0.17)
                                     : (isHovering ? 0.11 : 0.065)
                             ),
-                            radius: isHovering ? 30 : 22,
-                            y: isHovering ? 12 : 8
+                            radius: isDetected
+                                ? (isHovering ? 18 : 14)
+                                : (isHovering ? 30 : 22),
+                            y: isDetected
+                                ? (isHovering ? 8 : 5)
+                                : (isHovering ? 12 : 8)
                         )
                 }
             }
@@ -209,16 +227,28 @@ struct NotchPanelView: View {
             .offset(y: reduceMotion ? 0 : (1 - contentRevealProgress) * -8)
             .padding(
                 .horizontal,
-                isUltraCompact ? 11 : (meeting.showLiveCaptions ? 26 : 20)
+                isUltraCompact
+                    ? 11
+                    : (isDetected
+                        ? 14
+                        : (meeting.showLiveCaptions ? 26 : 20))
             )
             .padding(
                 .top,
                 geometry.topInset
-                    + (isUltraCompact ? 3 : (meeting.showLiveCaptions ? 10 : 11))
+                    + (isUltraCompact
+                        ? 3
+                        : (isDetected
+                            ? 7
+                            : (meeting.showLiveCaptions ? 10 : 11)))
             )
             .padding(
                 .bottom,
-                isUltraCompact ? 3 : (meeting.showLiveCaptions ? 18 : 14)
+                isUltraCompact
+                    ? 3
+                    : (isDetected
+                        ? 9
+                        : (meeting.showLiveCaptions ? 18 : 14))
             )
             .frame(width: bodySize.width, height: totalHeight, alignment: .top)
             .clipShape(shellShape)
@@ -300,32 +330,41 @@ struct NotchPanelView: View {
     }
 
     private func detectedContent(_ detection: DetectedMeeting) -> some View {
-        HStack(spacing: 15) {
-            NookPresence(state: .detected, size: 44)
+        HStack(spacing: 10) {
+            NookPresence(
+                state: .detected,
+                size: 30,
+                showsSurface: false
+            )
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("A conversation is starting in \(detection.appName)")
-                    .font(NookType.panelTitle)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(detection.suggestedTitle)
+                    .font(NookType.bodyEmphasized)
                     .lineLimit(1)
-                Text("\(detection.suggestedTitle) · Nothing has been recorded.")
-                    .font(NookType.caption)
+                Text("\(detection.appName) · Not recording")
+                    .font(NookType.micro)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
 
-            Spacer(minLength: 8)
+            Spacer(minLength: 4)
 
-            HStack(spacing: 8) {
-                Button("Not this one") {
+            HStack(spacing: 2) {
+                Button("Not now") {
                     meeting.dismissPrompt()
                 }
-                .buttonStyle(PanelActionButtonStyle())
+                .buttonStyle(DetectedPromptButtonStyle())
+                .keyboardShortcut(.cancelAction)
+                .accessibilityHint("Leaves this meeting unrecorded")
 
-                Button("Record") {
+                Button {
                     meeting.startDetectedMeeting()
+                } label: {
+                    Text("Record")
                 }
-                .buttonStyle(PanelActionButtonStyle(tint: NookPalette.accent))
+                .buttonStyle(DetectedPromptButtonStyle(isPrimary: true))
                 .keyboardShortcut(.defaultAction)
+                .accessibilityHint("Starts recording locally")
             }
         }
     }
@@ -746,6 +785,35 @@ private struct PanelActionButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
             )
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .animation(
+                .timingCurve(0.22, 1, 0.36, 1, duration: 0.12),
+                value: configuration.isPressed
+            )
+    }
+}
+
+private struct DetectedPromptButtonStyle: ButtonStyle {
+    var isPrimary = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(NookType.metadata)
+            .labelStyle(.titleAndIcon)
+            .foregroundStyle(
+                isPrimary
+                    ? AnyShapeStyle(NookPalette.accent)
+                    : AnyShapeStyle(.secondary)
+            )
+            .padding(.horizontal, 8)
+            .frame(minHeight: 32)
+            .background(
+                .primary.opacity(configuration.isPressed ? 0.07 : 0.001),
+                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+            )
+            .contentShape(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+            )
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(
                 .timingCurve(0.22, 1, 0.36, 1, duration: 0.12),
                 value: configuration.isPressed

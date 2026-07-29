@@ -62,6 +62,21 @@ struct StatusMenuView: View {
                 } label: {
                     Label("Open floating notes", systemImage: "macwindow.on.rectangle")
                 }
+            } else if case .detected(let detection) = meeting.phase {
+                Button {
+                    meeting.startDetectedMeeting()
+                } label: {
+                    Label(
+                        "Record “\(detection.suggestedTitle)”",
+                        systemImage: "waveform"
+                    )
+                }
+
+                Button {
+                    meeting.dismissPrompt()
+                } label: {
+                    Label("Not now", systemImage: "xmark")
+                }
             } else {
                 Button {
                     meeting.startManualMeeting()
