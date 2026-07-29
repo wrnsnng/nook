@@ -1,0 +1,345 @@
+import AppKit
+import Foundation
+
+struct MarkdownLoadIssue: Identifiable, Hashable, Sendable {
+    let fileURL: URL
+    let message: String
+
+    var id: URL { fileURL }
+}
+
+@MainActor
+final class MarkdownStore: ObservableObject {
+    @Published private(set) var notes: [MeetingNote] = []
+    @Published private(set) var loadIssues: [MarkdownLoadIssue] = []
+    @Published private(set) var isLoading = false
+    @Published var storageURL: URL
+    @Published var lastError: String?
+
+    private let fileManager: FileManager
+    private var reloadGeneration = 0
+
+    init(fileManager: FileManager = .default) {
+        self.fileManager = fileManager
+        let configured = UserDefaults.standard.string(forKey: "storageDirectory")
+        self.storageURL = configured.map(URL.init(fileURLWithPath:))
+            ?? fileManager.homeDirectoryForCurrentUser
+                .appendingPathComponent("Documents", isDirectory: true)
+                .appendingPathComponent("Nook", isDirectory: true)
+        ensureDirectory()
+        reload()
+    }
+
+    func reload() {
+        ensureDirectory()
+        reloadGeneration += 1
+        let generation = reloadGeneration
+        let directory = storageURL
+        isLoading = true
+
+        Task {
+            let result = await Task.detached(priority: .userInitiated) {
+                Self.loadNotes(in: directory)
+            }.value
+
+            guard generation == reloadGeneration, directory == storageURL else { return }
+            isLoading = false
+            switch result {
+            case .success(let payload):
+                notes = payload.notes
+                loadIssues = payload.issues
+                lastError = payload.issues.isEmpty
+                    ? nil
+                    : "\(payload.issues.count) Markdown file\(payload.issues.count == 1 ? "" : "s") couldn’t be loaded."
+            case .failure(let error):
+                lastError = error.localizedDescription
+                loadIssues = []
+            }
+        }
+    }
+
+    @discardableResult
+    func save(_ note: MeetingNote) throws -> MeetingNote {
+        ensureDirectory()
+        var saved = note
+        let destination = note.fileURL ?? availableDestination(for: note)
+        try MarkdownCodec.encode(note).write(to: destination, atomically: true, encoding: .utf8)
+        saved.fileURL = destination
+        upsert(saved)
+        lastError = nil
+        return saved
+    }
+
+    /// Updates personal notes from the freshest in-memory copy and verifies the
+    /// Markdown round-trip before the UI reports success.
+    @discardableResult
+    func updatePersonalNotes(
+        _ personalNotes: String,
+        for note: MeetingNote
+    ) throws -> MeetingNote {
+        var updated = notes.first(where: { $0.id == note.id }) ?? note
+        updated.personalNotes = personalNotes.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        let saved = try save(updated)
+
+        guard
+            let destination = saved.fileURL,
+            let markdown = try? String(
+                contentsOf: destination,
+                encoding: .utf8
+            ),
+            let persisted = MarkdownCodec.decode(
+                markdown,
+                fileURL: destination
+            ),
+            persisted.personalNotes == saved.personalNotes
+        else {
+            throw MarkdownStoreError.writeVerificationFailed
+        }
+        return saved
+    }
+
+    @discardableResult
+    func createBlankNote() throws -> MeetingNote {
+        let now = Date()
+        return try save(
+            MeetingNote(
+                title: "Untitled note",
+                startedAt: now,
+                endedAt: now,
+                sourceApp: "Personal",
+                summary: "",
+                personalNotes: ""
+            )
+        )
+    }
+
+    func rawMarkdown(for note: MeetingNote) -> String {
+        guard let url = note.fileURL else { return MarkdownCodec.encode(note) }
+        do {
+            return try String(contentsOf: url, encoding: .utf8)
+        } catch {
+            lastError = "Couldn’t read \(url.lastPathComponent): \(error.localizedDescription)"
+            return MarkdownCodec.encode(note)
+        }
+    }
+
+    func saveRawMarkdown(_ markdown: String, for note: MeetingNote) throws {
+        guard let url = note.fileURL else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        guard var decoded = MarkdownCodec.decode(markdown, fileURL: url) else {
+            throw MarkdownStoreError.invalidDocument
+        }
+        try markdown.write(to: url, atomically: true, encoding: .utf8)
+        decoded.fileURL = url
+        upsert(decoded)
+        loadIssues.removeAll { $0.fileURL == url }
+        lastError = loadIssues.isEmpty
+            ? nil
+            : "\(loadIssues.count) Markdown file\(loadIssues.count == 1 ? "" : "s") couldn’t be loaded."
+    }
+
+    func selectStorageDirectory() -> URL? {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = storageURL
+        panel.prompt = "Choose Folder"
+        guard panel.runModal() == .OK else { return nil }
+        return panel.url
+    }
+
+    func switchStorageDirectory(to url: URL, copyExistingMarkdown: Bool) throws {
+        let oldDirectory = storageURL.standardizedFileURL
+        let newDirectory = url.standardizedFileURL
+        guard oldDirectory != newDirectory else { return }
+
+        try fileManager.createDirectory(
+            at: newDirectory,
+            withIntermediateDirectories: true
+        )
+        if copyExistingMarkdown {
+            let sourceFiles = try markdownFiles(in: oldDirectory)
+            for source in sourceFiles {
+                let destination = availableCopyDestination(
+                    named: source.lastPathComponent,
+                    in: newDirectory
+                )
+                try fileManager.copyItem(at: source, to: destination)
+            }
+        }
+
+        storageURL = newDirectory
+        UserDefaults.standard.set(newDirectory.path, forKey: "storageDirectory")
+        reload()
+    }
+
+    var markdownFileCount: Int {
+        (try? markdownFiles(in: storageURL).count) ?? notes.count
+    }
+
+    func reveal(_ note: MeetingNote) {
+        guard let url = note.fileURL else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    func reveal(_ issue: MarkdownLoadIssue) {
+        NSWorkspace.shared.activateFileViewerSelecting([issue.fileURL])
+    }
+
+    func openStorageDirectory() {
+        NSWorkspace.shared.open(storageURL)
+    }
+
+    func recordingsDirectory() -> URL {
+        let url = storageURL.appendingPathComponent(".recordings", isDirectory: true)
+        do {
+            try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
+        } catch {
+            lastError = "Couldn’t prepare the recordings folder: \(error.localizedDescription)"
+        }
+        return url
+    }
+
+    private func ensureDirectory() {
+        do {
+            try fileManager.createDirectory(at: storageURL, withIntermediateDirectories: true)
+        } catch {
+            lastError = "Couldn’t open the notes folder: \(error.localizedDescription)"
+        }
+    }
+
+    private func upsert(_ note: MeetingNote) {
+        if let index = notes.firstIndex(where: { $0.id == note.id }) {
+            notes[index] = note
+        } else {
+            notes.append(note)
+        }
+        notes.sort { $0.startedAt > $1.startedAt }
+    }
+
+    private func filename(for note: MeetingNote) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd_HHmm"
+        let safeTitle = note.title
+            .lowercased()
+            .replacingOccurrences(of: "[^a-z0-9]+", with: "-", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        let compactTitle = String((safeTitle.isEmpty ? "meeting" : safeTitle).prefix(72))
+        return "\(formatter.string(from: note.startedAt))-\(compactTitle).md"
+    }
+
+    private func availableDestination(for note: MeetingNote) -> URL {
+        let preferred = storageURL.appendingPathComponent(filename(for: note))
+        guard fileManager.fileExists(atPath: preferred.path) else {
+            return preferred
+        }
+
+        if
+            let markdown = try? String(contentsOf: preferred, encoding: .utf8),
+            MarkdownCodec.decode(markdown)?.id == note.id
+        {
+            return preferred
+        }
+
+        let stem = preferred.deletingPathExtension().lastPathComponent
+        let shortID = note.id.uuidString.prefix(8).lowercased()
+        let unique = storageURL
+            .appendingPathComponent("\(stem)-\(shortID)")
+            .appendingPathExtension("md")
+        guard fileManager.fileExists(atPath: unique.path) else {
+            return unique
+        }
+
+        return storageURL
+            .appendingPathComponent("\(stem)-\(note.id.uuidString.lowercased())")
+            .appendingPathExtension("md")
+    }
+
+    private func markdownFiles(in directory: URL) throws -> [URL] {
+        try fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ).filter { $0.pathExtension.lowercased() == "md" }
+    }
+
+    private func availableCopyDestination(named filename: String, in directory: URL) -> URL {
+        let preferred = directory.appendingPathComponent(filename)
+        guard fileManager.fileExists(atPath: preferred.path) else { return preferred }
+        let stem = preferred.deletingPathExtension().lastPathComponent
+        let ext = preferred.pathExtension
+        var suffix = 2
+        while true {
+            let candidate = directory
+                .appendingPathComponent("\(stem) \(suffix)")
+                .appendingPathExtension(ext)
+            if !fileManager.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+            suffix += 1
+        }
+    }
+
+    private nonisolated static func loadNotes(
+        in directory: URL
+    ) -> Result<(notes: [MeetingNote], issues: [MarkdownLoadIssue]), Error> {
+        do {
+            let urls = try FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.contentModificationDateKey],
+                options: [.skipsHiddenFiles]
+            ).filter { $0.pathExtension.lowercased() == "md" }
+            var notes: [MeetingNote] = []
+            var issues: [MarkdownLoadIssue] = []
+
+            for url in urls {
+                do {
+                    let markdown = try String(contentsOf: url, encoding: .utf8)
+                    if let note = MarkdownCodec.decode(markdown, fileURL: url) {
+                        notes.append(note)
+                    } else {
+                        issues.append(
+                            MarkdownLoadIssue(
+                                fileURL: url,
+                                message: "The frontmatter is missing required meeting fields."
+                            )
+                        )
+                    }
+                } catch {
+                    issues.append(
+                        MarkdownLoadIssue(
+                            fileURL: url,
+                            message: error.localizedDescription
+                        )
+                    )
+                }
+            }
+            return .success(
+                (
+                    notes: notes.sorted { $0.startedAt > $1.startedAt },
+                    issues: issues.sorted { $0.fileURL.lastPathComponent < $1.fileURL.lastPathComponent }
+                )
+            )
+        } catch {
+            return .failure(error)
+        }
+    }
+}
+
+enum MarkdownStoreError: LocalizedError {
+    case invalidDocument
+    case writeVerificationFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidDocument:
+            "The Markdown frontmatter is missing or invalid. Your changes haven’t been written."
+        case .writeVerificationFailed:
+            "Nook couldn’t verify the saved note. Your Markdown file was left untouched."
+        }
+    }
+}

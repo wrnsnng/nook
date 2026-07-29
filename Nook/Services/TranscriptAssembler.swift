@@ -1,0 +1,104 @@
+import Foundation
+
+enum TranscriptAssembler {
+    static func coalesce(
+        _ segments: [TranscriptSegment],
+        maximumGap: TimeInterval = 1.8,
+        maximumWords: Int = 42
+    ) -> [TranscriptSegment] {
+        let ordered = segments
+            .enumerated()
+            .filter { !$0.element.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .sorted { lhs, rhs in
+                if lhs.element.startTime == rhs.element.startTime {
+                    return lhs.offset < rhs.offset
+                }
+                return lhs.element.startTime < rhs.element.startTime
+            }
+            .map(\.element)
+
+        return ordered.reduce(into: []) { result, next in
+            guard let current = result.last else {
+                result.append(next.cleaned)
+                return
+            }
+
+            let currentEnd = current.startTime + current.duration
+            let gap = max(0, next.startTime - currentEnd)
+            let currentWords = current.text.split(whereSeparator: \.isWhitespace).count
+            let nextWords = next.text.split(whereSeparator: \.isWhitespace).count
+            let hasNaturalEnding = current.text
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .last
+                .map { ".!?".contains($0) }
+                ?? false
+            let shouldMerge = current.source == next.source
+                && gap <= maximumGap
+                && currentWords + nextWords <= maximumWords
+                && (!hasNaturalEnding || currentWords < 5)
+
+            guard shouldMerge else {
+                result.append(next.cleaned)
+                return
+            }
+
+            let nextEnd = next.startTime + next.duration
+            let joinedText = [current.text, next.text]
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .joined(separator: " ")
+                .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            result[result.count - 1] = TranscriptSegment(
+                id: current.id,
+                startTime: current.startTime,
+                duration: max(current.duration, nextEnd - current.startTime),
+                text: joinedText,
+                source: current.source
+            )
+        }
+    }
+}
+
+enum NoteContentSanitizer {
+    static func meaningfulItems(_ values: [String]) -> [String] {
+        values.compactMap { rawValue in
+            let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalized = value
+                .lowercased()
+                .trimmingCharacters(in: CharacterSet(charactersIn: " ._-"))
+            let placeholderPhrases = [
+                "none",
+                "n/a",
+                "na",
+                "none captured",
+                "nothing captured",
+                "no decisions",
+                "no action items",
+                "no key points",
+                "not discussed",
+                "not specified",
+            ]
+            guard !value.isEmpty,
+                  !placeholderPhrases.contains(normalized),
+                  !normalized.hasPrefix("no decisions were"),
+                  !normalized.hasPrefix("no action items were")
+            else {
+                return nil
+            }
+            return value
+        }
+    }
+}
+
+private extension TranscriptSegment {
+    var cleaned: TranscriptSegment {
+        TranscriptSegment(
+            id: id,
+            startTime: startTime,
+            duration: duration,
+            text: text
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression),
+            source: source
+        )
+    }
+}
