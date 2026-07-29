@@ -4,6 +4,7 @@ import SwiftUI
 struct NookApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var appModel = AppModel.shared
+    @StateObject private var updater = NookUpdateController()
 
     var body: some Scene {
         MenuBarExtra {
@@ -11,6 +12,7 @@ struct NookApp: App {
                 .environmentObject(appModel.meeting)
                 .environmentObject(appModel.store)
                 .environmentObject(appModel.detector)
+                .environmentObject(updater)
         } label: {
             NookMenuBarLabel()
                 .environmentObject(appModel.meeting)
@@ -29,6 +31,8 @@ struct NookApp: App {
         .windowResizability(.contentMinSize)
         .windowToolbarStyle(.unified(showsTitle: false))
         .commands {
+            CheckForUpdatesCommand(updater: updater)
+
             CommandMenu("Meeting") {
                 if appModel.meeting.phase.isRecording {
                     Button(
@@ -90,6 +94,7 @@ struct NookApp: App {
                 .environmentObject(appModel.detector)
                 .environmentObject(appModel.meeting)
                 .environmentObject(appModel.appearance)
+                .environmentObject(updater)
                 .frame(width: 620, height: 540)
         }
     }

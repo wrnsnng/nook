@@ -4,6 +4,7 @@ import SwiftUI
 struct StatusMenuView: View {
     @EnvironmentObject private var meeting: MeetingCoordinator
     @EnvironmentObject private var store: MarkdownStore
+    @EnvironmentObject private var updater: NookUpdateController
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
@@ -104,6 +105,11 @@ struct StatusMenuView: View {
                 NSApp.activate(ignoringOtherApps: true)
             }
             .keyboardShortcut(",")
+
+            Button("Check for Updates…") {
+                updater.checkForUpdates()
+            }
+            .disabled(!updater.canCheckForUpdates)
 
             Button("Quit Nook") {
                 NSApp.terminate(nil)

@@ -4,6 +4,7 @@ import SwiftUI
 enum SettingsPane: Hashable {
     case listening
     case privacy
+    case updates
     case about
 }
 
@@ -12,6 +13,7 @@ struct SettingsView: View {
     @EnvironmentObject private var detector: MeetingDetector
     @EnvironmentObject private var meeting: MeetingCoordinator
     @EnvironmentObject private var appearance: NookAppearanceController
+    @EnvironmentObject private var updater: NookUpdateController
     @State private var pendingStorageURL: URL?
     @State private var storageMessage: String?
     @State private var selectedPane: SettingsPane
@@ -33,6 +35,15 @@ struct SettingsView: View {
                     Label("Privacy", systemImage: "lock.shield")
                 }
                 .tag(SettingsPane.privacy)
+
+            updatesPane
+                .tabItem {
+                    Label(
+                        "Updates",
+                        systemImage: "arrow.triangle.2.circlepath.circle"
+                    )
+                }
+                .tag(SettingsPane.updates)
 
             aboutPane
                 .tabItem {
@@ -217,11 +228,98 @@ struct SettingsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    private var updatesPane: some View {
+        Form {
+            Section {
+                LabeledContent("Installed version") {
+                    Text("\(appVersion) (\(appBuild))")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Look for a newer Nook")
+                        Text("Checks the signed Common Tools Co. update feed.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    Button("Check Now") {
+                        updater.checkForUpdates()
+                    }
+                    .disabled(!updater.canCheckForUpdates)
+                }
+            } header: {
+                Label(
+                    "Software update",
+                    systemImage: "arrow.triangle.2.circlepath"
+                )
+            }
+
+            Section {
+                Toggle(
+                    "Automatically check for updates",
+                    isOn: Binding(
+                        get: {
+                            updater.automaticallyChecksForUpdates
+                        },
+                        set: {
+                            updater.setAutomaticallyChecksForUpdates($0)
+                        }
+                    )
+                )
+
+                Toggle(
+                    "Download updates automatically",
+                    isOn: Binding(
+                        get: {
+                            updater.automaticallyDownloadsUpdates
+                        },
+                        set: {
+                            updater.setAutomaticallyDownloadsUpdates($0)
+                        }
+                    )
+                )
+                .disabled(!updater.automaticallyChecksForUpdates)
+            } header: {
+                Label("Automatic updates", systemImage: "clock.arrow.circlepath")
+            } footer: {
+                Text("Sparkle checks the secure feed periodically. Every download is verified with an EdDSA signature and Apple Developer ID before Nook offers to install it.")
+            }
+
+            Section {
+                PrivacyFeatureRow(
+                    symbol: "checkmark.seal.fill",
+                    title: "Verified before installation",
+                    detail: "Nook rejects an update if its feed, archive signature, or Developer ID does not match."
+                )
+                PrivacyFeatureRow(
+                    symbol: "arrow.clockwise.app",
+                    title: "A standard Mac experience",
+                    detail: "Updates install through Sparkle’s native dialog and reopen Nook when ready."
+                )
+            } header: {
+                Label("Trust & control", systemImage: "lock.shield")
+            }
+        }
+        .formStyle(.grouped)
+    }
+
     private var appVersion: String {
         let version = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleShortVersionString"
         ) as? String
         return version ?? "1.0"
+    }
+
+    private var appBuild: String {
+        let build = Bundle.main.object(
+            forInfoDictionaryKey: "CFBundleVersion"
+        ) as? String
+        return build ?? "1"
     }
 
     private func applyStorageChange(copyExistingMarkdown: Bool) {

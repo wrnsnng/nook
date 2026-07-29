@@ -20,6 +20,12 @@ MeetingDetector ──detected/ended──▶ MeetingCoordinator ◀── notch
                          MarkdownStore
                                │
                          ~/Documents/Nook/*.md
+
+NookUpdateController ──▶ signed Sparkle appcast
+                              │
+                    EdDSA + Developer ID verification
+                              │
+                       atomic app replacement
 ```
 
 ## Components
@@ -36,6 +42,24 @@ MeetingDetector ──detected/ended──▶ MeetingCoordinator ◀── notch
 - `MeetingCoordinator`: owns the recording state machine and temporary-file lifecycle.
 - `NotchPanelCoordinator`: measures the display’s camera-safe geometry and animates a borderless SwiftUI panel directly out of the physical notch area.
 - `NookSnapshot`: a development-only renderer used to verify real SwiftUI layouts offscreen across appearances and window sizes.
+- `NookUpdateController`: owns Sparkle’s standard updater, manual update checks, and the user’s automatic-check/download preferences.
+
+## Update trust chain
+
+The source repository remains private. A separate public releases repository hosts the stable appcast and notarized archives so installed copies of Nook never need a GitHub credential.
+
+```text
+Developer ID signed Nook.app
+  → Apple notarization + stapled ticket
+  → Nook-version.zip
+  → Sparkle EdDSA signature
+  → signed appcast.xml
+  → public GitHub release assets over HTTPS
+  → Sparkle verifies feed + archive + Developer ID
+  → atomic install and relaunch
+```
+
+`project.yml`, `NookUpdateFeed`, and the release script share the same URL convention. Tests fail if the embedded feed or public key drifts from the source constants.
 
 ## Failure behavior
 

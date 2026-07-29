@@ -23,6 +23,7 @@ Nook is a native, local-first macOS meeting notebook that lives in the menu bar 
 - Provides a date-grouped native library, editable meeting notes and titles, a detachable live-notes window, speaker-aware transcripts, Finder reveal, and raw Markdown editing.
 - Supports Auto, Light, and Dark appearance choices, VoiceOver-friendly controls, Reduce Motion, Reduce Transparency, and Increased Contrast.
 - Adds Shortcuts actions for starting a recording and opening the library or latest meeting.
+- Checks for signed, notarized updates through Sparkle and lets people opt into automatic checks and downloads.
 - Uses the display's real menu-bar and camera safe areas for layout and never paints a simulated notch.
 
 ## Requirements
@@ -59,7 +60,7 @@ If screen-audio permission is changed, quit and relaunch Nook before trying agai
 
 ## Testing a distributed build
 
-Use `build/distribution/Nook-1.3-notarized.zip`, extract it, and move `Nook.app`
+Use `build/distribution/Nook-1.4-notarized.zip`, extract it, and move `Nook.app`
 to `/Applications` before opening it. Do not keep an older copy of Nook in
 Downloads or another Applications folder because Launch Services may open the
 wrong build.
@@ -137,3 +138,35 @@ xcodebuild -project Nook.xcodeproj -scheme Nook \
 ```
 
 The `NookSnapshot` development target renders the real SwiftUI hierarchy offscreen for light, dark, compact, live, and notch visual checks.
+
+## Automatic updates
+
+Nook uses [Sparkle 2](https://sparkle-project.org/) for native over-the-air updates. People can check manually from the Nook menu or choose automatic checks and downloads in **Settings → Updates**.
+
+The update chain is deliberately separate from the private source repository:
+
+- Source: private `wrnsnng/nook` repository.
+- Binaries and appcast: public `wrnsnng/nook-releases` repository.
+- Update archives: Apple Developer ID signed, notarized, stapled, and EdDSA signed.
+- Appcast: signed and verified before Nook trusts its contents.
+- Private Sparkle key: remains in the local macOS Keychain and is never committed.
+
+Nook 1.4 is the first OTA-capable build, so existing 1.3 installations need one final manual replacement. Releases after 1.4 can arrive through Sparkle.
+
+Prepare a release locally:
+
+```sh
+./Scripts/release-update.sh --notes path/to/release-notes.md
+```
+
+After the public release repository exists, publish the archive and stable feed:
+
+```sh
+./Scripts/release-update.sh \
+  --notes path/to/release-notes.md \
+  --publish
+```
+
+The release script refuses to publish into a repository that is not public. It uses the existing `NookNotary` keychain profile by default and never reads Apple credentials from the repository.
+
+macOS may ask you to allow Sparkle’s release tool to use the signing key; approve that protected Keychain prompt to finish the appcast signature.

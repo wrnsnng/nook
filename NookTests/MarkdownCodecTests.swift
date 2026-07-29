@@ -4,6 +4,32 @@ import Testing
 
 struct MarkdownCodecTests {
     @Test
+    func updateFeedUsesThePublicReleaseRepository() {
+        #expect(
+            NookUpdateFeed.appcastURLString
+                == "https://github.com/wrnsnng/nook-releases/releases/download/updates/appcast.xml"
+        )
+        #expect(
+            NookUpdateFeed.archiveURLString(for: "1.4")
+                == "https://github.com/wrnsnng/nook-releases/releases/download/v1.4/Nook-1.4.zip"
+        )
+    }
+
+    @Test
+    func updateSecurityConfigurationCannotDriftFromTheFeed() throws {
+        let projectURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("project.yml")
+        let project = try String(contentsOf: projectURL, encoding: .utf8)
+
+        #expect(project.contains(NookUpdateFeed.appcastURLString))
+        #expect(project.contains(NookUpdateFeed.publicEdKey))
+        #expect(project.contains("SURequireSignedFeed: true"))
+        #expect(project.contains("SUVerifyUpdateBeforeExtraction: true"))
+    }
+
+    @Test
     func roundTripsMeetingNote() throws {
         let start = Date(timeIntervalSince1970: 1_700_000_000)
         let note = MeetingNote(

@@ -64,6 +64,7 @@ struct SnapshotRenderer {
             initialSelection: snapshotColorScheme == .light ? .light : .dark,
             persistsSelection: false
         )
+        let updateController = NookUpdateController(startingUpdater: false)
         let transcriptState = LiveTranscriptState(
             segments: [
                 TranscriptSegment(
@@ -118,6 +119,7 @@ struct SnapshotRenderer {
                     .environmentObject(detector)
                     .environmentObject(meeting)
                     .environmentObject(appearanceController)
+                    .environmentObject(updateController)
                     .frame(width: canvasSize.width, height: canvasSize.height)
                     .background(Color(nsColor: .windowBackgroundColor))
                     .environment(\.colorScheme, snapshotColorScheme)
