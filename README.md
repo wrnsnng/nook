@@ -6,6 +6,13 @@ Nook is a native, local-first macOS meeting notebook that lives in the menu bar 
 
 ![Nook icon](Nook/Resources/Brand/NookIconSource-Cobalt.png)
 
+## Project documentation
+
+- [Product and UX contract](docs/PRODUCT.md)
+- [Technical architecture](docs/TECHNICAL.md)
+- [Build, signing, notarization, and OTA releases](docs/OPERATIONS.md)
+- [Current handoff and next work](docs/HANDOFF.md)
+
 ## What it does
 
 - Captures both system audio and your microphone, independent of whether the call is in Teams, Zoom, FaceTime, Webex, Google Meet, or another app.
@@ -60,10 +67,11 @@ If screen-audio permission is changed, quit and relaunch Nook before trying agai
 
 ## Testing a distributed build
 
-Use `build/distribution/Nook-1.4-notarized.zip`, extract it, and move `Nook.app`
-to `/Applications` before opening it. Do not keep an older copy of Nook in
-Downloads or another Applications folder because Launch Services may open the
-wrong build.
+Download the latest archive from the public
+[Nook releases](https://github.com/wrnsnng/nook-releases/releases), extract it,
+and move `Nook.app` to `/Applications` before opening it. Do not keep an older
+copy of Nook in Downloads or another Applications folder because Launch
+Services may open the wrong build.
 
 When replacing a build that previously failed to request audio access, clear its
 stale privacy decisions once before launching the notarized app:
