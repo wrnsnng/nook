@@ -50,12 +50,34 @@ if [[ -n "$RELEASE_NOTES_PATH" && ! -f "$RELEASE_NOTES_PATH" ]]; then
   exit 66
 fi
 
-if ! command -v xcodegen >/dev/null 2>&1; then
-  echo "xcodegen is required." >&2
-  exit 69
+if [[ -n "${NOOK_PREBUILT_APP:-}" ]]; then
+  if [[ ! -d "$NOOK_PREBUILT_APP" ]]; then
+    echo "NOOK_PREBUILT_APP does not point to an app bundle: $NOOK_PREBUILT_APP" >&2
+    exit 66
+  fi
+  mkdir -p "$BUILD_DIR"
+  if [[ -e "$APP_PATH" ]]; then
+    /bin/rm -rf "$APP_PATH"
+  fi
+  /usr/bin/ditto "$NOOK_PREBUILT_APP" "$APP_PATH"
+  ./Scripts/sign-app.sh "$APP_PATH"
+else
+  if ! command -v xcodegen >/dev/null 2>&1; then
+    echo "xcodegen is required." >&2
+    exit 69
+  fi
+  ./Scripts/build-app.sh
 fi
 
-./Scripts/build-app.sh
+RUNTIME_VERSION=$(
+  /usr/bin/codesign -dv --verbose=4 "$APP_PATH" 2>&1 \
+    | /usr/bin/sed -n 's/^Runtime Version=//p'
+)
+if [[ "$RUNTIME_VERSION" == 27.* ]]; then
+  echo "Refusing to release an app built with the macOS 27 beta SDK." >&2
+  echo "Build on stable Xcode 26 and provide it with NOOK_PREBUILT_APP." >&2
+  exit 78
+fi
 
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist")
 BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Contents/Info.plist")

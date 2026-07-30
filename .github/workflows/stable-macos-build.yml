@@ -1,0 +1,96 @@
+name: Stable macOS build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/release-nook-1-6
+    paths:
+      - .github/workflows/stable-macos-build.yml
+      - Nook/**
+      - NookTests/**
+      - Scripts/**
+      - project.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stable-macos-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Select stable Xcode 26
+        shell: bash
+        run: |
+          set -euo pipefail
+          stable_xcode="$(
+            find /Applications -maxdepth 1 -type d -name 'Xcode_26*.app' \
+              | grep -Ev '(beta|Beta|RC|rc)' \
+              | sort \
+              | tail -n 1
+          )"
+          test -n "$stable_xcode"
+          sudo xcode-select --switch "$stable_xcode/Contents/Developer"
+          xcodebuild -version
+          if xcodebuild -version | grep -Eiq '(beta|rc|Xcode 27)'; then
+            echo "Refusing to create a distribution artifact with a beta or Xcode 27 toolchain." >&2
+            exit 1
+          fi
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        run: xcodegen generate
+
+      - name: Test
+        run: |
+          xcodebuild test -quiet \
+            -project Nook.xcodeproj \
+            -scheme Nook \
+            -destination 'platform=macOS' \
+            -derivedDataPath .build/StableDerivedData \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Build universal release app
+        run: |
+          xcodebuild build -quiet \
+            -project Nook.xcodeproj \
+            -scheme Nook \
+            -configuration Release \
+            -derivedDataPath .build/StableDerivedData \
+            ARCHS='arm64 x86_64' \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Verify stable artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          app='.build/StableDerivedData/Build/Products/Release/Nook.app'
+          executable="$app/Contents/MacOS/Nook"
+          test -d "$app"
+          lipo -archs "$executable" | grep -q arm64
+          lipo -archs "$executable" | grep -q x86_64
+          if vtool -show-build "$executable" | grep -q 'sdk 27'; then
+            echo "Refusing to publish an app linked against the macOS 27 beta SDK." >&2
+            exit 1
+          fi
+          /usr/bin/ditto -c -k --keepParent "$app" Nook-stable-unsigned.zip
+
+      - name: Upload unsigned stable-toolchain app
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nook-stable-unsigned
+          path: Nook-stable-unsigned.zip
+          if-no-files-found: error
+          retention-days: 1
