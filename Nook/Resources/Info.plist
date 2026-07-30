@@ -38,6 +38,8 @@
 	<string>Nook uses on-device speech recognition to turn meeting audio into local notes.</string>
 	<key>SUFeedURL</key>
 	<string>https://github.com/wrnsnng/nook-releases/releases/download/updates/appcast.xml</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
 	<key>SUPublicEDKey</key>
 	<string>apOw6+icVsAh8Emfd1cwAkndoeAV71+anDE/w6rkZM8=</string>
 	<key>SURequireSignedFeed</key>

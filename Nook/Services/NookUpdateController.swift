@@ -34,15 +34,22 @@ final class NookUpdateController: ObservableObject {
     @Published private(set) var canCheckForUpdates = false
     @Published private(set) var automaticallyChecksForUpdates = false
     @Published private(set) var automaticallyDownloadsUpdates = false
+    @Published private(set) var availableVersion: String?
 
+    private let userDriverDelegate: NookUpdateUserDriverDelegate
     private let controller: SPUStandardUpdaterController
 
     init(startingUpdater: Bool = true) {
+        let userDriverDelegate = NookUpdateUserDriverDelegate()
+        self.userDriverDelegate = userDriverDelegate
         controller = SPUStandardUpdaterController(
             startingUpdater: startingUpdater,
             updaterDelegate: nil,
-            userDriverDelegate: nil
+            userDriverDelegate: userDriverDelegate
         )
+        userDriverDelegate.onAvailableVersionChanged = { [weak self] version in
+            self?.availableVersion = version
+        }
 
         let updater = controller.updater
         updater.publisher(for: \.canCheckForUpdates)
@@ -66,6 +73,42 @@ final class NookUpdateController: ObservableObject {
 
     func setAutomaticallyDownloadsUpdates(_ enabled: Bool) {
         controller.updater.automaticallyDownloadsUpdates = enabled
+    }
+}
+
+/// Scheduled updates should feel like part of Nook rather than a dialog that
+/// materializes behind somebody else's meeting. Manual checks still use
+/// Sparkle's complete signed update flow; background discoveries become a
+/// quiet menu-bar affordance until the user is ready.
+@MainActor
+private final class NookUpdateUserDriverDelegate:
+    NSObject,
+    @preconcurrency SPUStandardUserDriverDelegate
+{
+    var onAvailableVersionChanged: ((String?) -> Void)?
+
+    var supportsGentleScheduledUpdateReminders: Bool { true }
+
+    func standardUserDriverShouldHandleShowingScheduledUpdate(
+        _ update: SUAppcastItem,
+        andInImmediateFocus immediateFocus: Bool
+    ) -> Bool {
+        false
+    }
+
+    func standardUserDriverWillHandleShowingUpdate(
+        _ handleShowingUpdate: Bool,
+        forUpdate update: SUAppcastItem,
+        state: SPUUserUpdateState
+    ) {
+        guard !handleShowingUpdate, !state.userInitiated else { return }
+        onAvailableVersionChanged?(update.displayVersionString)
+    }
+
+    func standardUserDriverDidReceiveUserAttention(
+        forUpdate update: SUAppcastItem
+    ) {
+        onAvailableVersionChanged?(nil)
     }
 }
 

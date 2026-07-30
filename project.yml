@@ -44,6 +44,7 @@ targets:
         NSMicrophoneUsageDescription: "Nook records your microphone so your side of a meeting can be transcribed locally."
         NSScreenCaptureUsageDescription: "Nook captures a minimal screen stream to record meeting system audio locally."
         NSSpeechRecognitionUsageDescription: "Nook uses on-device speech recognition to turn meeting audio into local notes."
+        SUEnableAutomaticChecks: true
         SUFeedURL: "https://github.com/wrnsnng/nook-releases/releases/download/updates/appcast.xml"
         SUPublicEDKey: "apOw6+icVsAh8Emfd1cwAkndoeAV71+anDE/w6rkZM8="
         SURequireSignedFeed: true

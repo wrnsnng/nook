@@ -16,6 +16,7 @@ struct NookApp: App {
         } label: {
             NookMenuBarLabel()
                 .environmentObject(appModel.meeting)
+                .environmentObject(updater)
                 .background(WindowRouterBridge())
         }
 
@@ -102,17 +103,38 @@ struct NookApp: App {
 
 private struct NookMenuBarLabel: View {
     @EnvironmentObject private var meeting: MeetingCoordinator
+    @EnvironmentObject private var updater: NookUpdateController
 
     var body: some View {
         Label(
             "Nook",
             systemImage: meeting.isPaused
                 ? "pause.circle.fill"
-                : meeting.phase.menuBarSymbol
+                : menuBarSymbol
         )
         .accessibilityLabel(
-            meeting.isPaused ? "Nook, recording paused" : "Nook"
+            accessibilityLabel
         )
+    }
+
+    private var menuBarSymbol: String {
+        if meeting.phase.isRecording {
+            return meeting.phase.menuBarSymbol
+        }
+        if updater.availableVersion != nil {
+            return "arrow.down.circle.fill"
+        }
+        return meeting.phase.menuBarSymbol
+    }
+
+    private var accessibilityLabel: String {
+        if meeting.isPaused {
+            return "Nook, recording paused"
+        }
+        if let version = updater.availableVersion {
+            return "Nook, version \(version) is ready"
+        }
+        return "Nook"
     }
 }
 

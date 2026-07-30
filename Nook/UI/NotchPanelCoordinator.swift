@@ -17,27 +17,27 @@ enum NotchPanelMetrics {
     ) -> CGSize {
         switch phase {
         case .idle:
-            return CGSize(width: 388, height: 78)
+            return CGSize(width: 336, height: 54)
         case .detected:
-            return CGSize(width: 420, height: 64)
+            return CGSize(width: 360, height: 48)
         case .recording:
             guard showsCaptions else {
-                return CGSize(width: 286, height: 30)
+                return CGSize(width: 304, height: 34)
             }
             switch panelMode {
             case .transcript:
-                return CGSize(width: 720, height: 272)
+                return CGSize(width: 680, height: 252)
             case .summary:
-                return CGSize(width: 720, height: 282)
+                return CGSize(width: 680, height: 258)
             case .notes:
-                return CGSize(width: 720, height: 292)
+                return CGSize(width: 680, height: 272)
             }
         case .processing:
-            return CGSize(width: 456, height: 92)
+            return CGSize(width: 424, height: 72)
         case .completed:
-            return CGSize(width: 484, height: 98)
+            return CGSize(width: 440, height: 76)
         case .failed:
-            return CGSize(width: 640, height: 80)
+            return CGSize(width: 584, height: 76)
         }
     }
 }
@@ -114,7 +114,7 @@ final class NotchPanelCoordinator {
             await Task.yield()
             guard let self, self.panel.isVisible else { return }
             withAnimation(
-                .timingCurve(0.16, 0.78, 0.22, 1, duration: 0.46)
+                .timingCurve(0.16, 1, 0.30, 1, duration: 0.36)
             ) {
                 self.geometry.revealProgress = 1
             }
@@ -129,11 +129,11 @@ final class NotchPanelCoordinator {
             return
         }
 
-        withAnimation(.easeIn(duration: 0.2)) {
+        withAnimation(.easeIn(duration: 0.16)) {
             geometry.revealProgress = 0
         }
         hideTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(220))
+            try? await Task.sleep(for: .milliseconds(180))
             guard !Task.isCancelled, let self else { return }
             self.panel.orderOut(nil)
             self.geometry.revealProgress = 1
@@ -212,10 +212,10 @@ final class NotchPanelCoordinator {
                 try? await Task.sleep(for: .milliseconds(180))
                 guard !Task.isCancelled, let self else { return }
                 if self.shouldAnimate {
-                    withAnimation(.easeIn(duration: 0.2)) {
+                    withAnimation(.easeIn(duration: 0.16)) {
                         self.geometry.revealProgress = 0
                     }
-                    try? await Task.sleep(for: .milliseconds(220))
+                    try? await Task.sleep(for: .milliseconds(180))
                 }
                 guard !Task.isCancelled else { return }
                 self.panel.orderOut(nil)
@@ -274,11 +274,11 @@ final class NotchPanelCoordinator {
         }
 
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.38
+            context.duration = 0.32
             context.timingFunction = CAMediaTimingFunction(
-                controlPoints: 0.22,
-                0.82,
-                0.22,
+                controlPoints: 0.16,
+                1,
+                0.30,
                 1
             )
             panel.animator().setFrame(frame, display: true)
@@ -351,7 +351,7 @@ final class NotchPanelCoordinator {
         )
         geometry.maximumPanelWidth = max(
             440,
-            min(720, screen.frame.width - 48)
+            min(680, screen.frame.width - 48)
         )
     }
 

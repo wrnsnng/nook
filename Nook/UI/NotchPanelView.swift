@@ -5,10 +5,8 @@ struct NotchPanelView: View {
     @EnvironmentObject private var meeting: MeetingCoordinator
     @EnvironmentObject private var geometry: NotchPanelGeometry
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.colorScheme) private var colorScheme
     @State private var isHovering = false
     @FocusState private var notesEditorFocused: Bool
-    @Namespace private var glassNamespace
     private let rendersForSnapshot: Bool
 
     init(rendersForSnapshot: Bool = false) {
@@ -35,10 +33,6 @@ struct NotchPanelView: View {
         NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
     }
 
-    private var reduceTransparency: Bool {
-        NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
-    }
-
     private var isUltraCompact: Bool {
         meeting.phase.isRecording && !meeting.showLiveCaptions
     }
@@ -48,9 +42,9 @@ struct NotchPanelView: View {
     }
 
     private var shellBottomRadius: CGFloat {
-        if isUltraCompact { return 15 }
-        if isDetected { return 22 }
-        return meeting.phase.isRecording && meeting.showLiveCaptions ? 38 : 30
+        if isUltraCompact { return 17 }
+        if isDetected { return 20 }
+        return meeting.phase.isRecording && meeting.showLiveCaptions ? 32 : 26
     }
 
     private var shellShape: TopAnchoredPanelShape {
@@ -69,105 +63,23 @@ struct NotchPanelView: View {
     }
 
     var body: some View {
-        Group {
-            if rendersForSnapshot || reduceTransparency {
-                shellContent
-                    .background(
-                        opaqueShellGradient,
-                        in: shellShape
+        shellContent
+            .background(edgeShellGradient, in: shellShape)
+            .overlay {
+                shellOutlineShape
+                    .stroke(
+                        Color.white.opacity(increaseContrast ? 0.24 : 0.075),
+                        lineWidth: increaseContrast ? 1.1 : 0.55
                     )
-                    .overlay {
-                        shellOutlineShape
-                            .stroke(
-                                .primary.opacity(
-                                    increaseContrast
-                                        ? 0.30
-                                        : (colorScheme == .dark ? 0.13 : 0.055)
-                                ),
-                                lineWidth: increaseContrast ? 1.2 : 0.8
-                            )
-                    }
-                    .overlay {
-                        shellHighlight
-                    }
-                    .shadow(
-                        color: .black.opacity(
-                            isDetected
-                                ? (colorScheme == .dark ? 0.20 : 0.045)
-                                : (colorScheme == .dark ? 0.30 : 0.065)
-                        ),
-                        radius: isDetected
-                            ? 16
-                            : (colorScheme == .dark ? 32 : 22),
-                        y: isDetected
-                            ? 6
-                            : (colorScheme == .dark ? 16 : 8)
-                    )
-            } else {
-                GlassEffectContainer(spacing: 16) {
-                    shellContent
-                        .background(
-                            LinearGradient(
-                                colors: colorScheme == .dark
-                                    ? [
-                                        Color.black.opacity(0.12),
-                                        Color.black.opacity(0.12),
-                                    ]
-                                    : [
-                                        Color.white.opacity(0.56),
-                                        Color.white.opacity(0.24),
-                                        Color.white.opacity(0.11),
-                                    ],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            ),
-                            in: shellShape
-                        )
-                        .glassEffect(
-                            .regular.tint(
-                                colorScheme == .dark
-                                    ? Color.black.opacity(
-                                            isHovering ? 0.20 : 0.24
-                                    )
-                                    : Color.white.opacity(
-                                        isHovering ? 0.14 : 0.18
-                                    )
-                            ),
-                            in: shellShape
-                        )
-                        .glassEffectID("top-panel-shell", in: glassNamespace)
-                        .overlay {
-                            shellOutlineShape
-                                .stroke(
-                                    .primary.opacity(
-                                        increaseContrast
-                                            ? 0.28
-                                            : (colorScheme == .dark ? 0.085 : 0.055)
-                                    ),
-                                    lineWidth: increaseContrast ? 1.2 : 0.65
-                                )
-                        }
-                        .overlay {
-                            shellHighlight
-                        }
-                        .shadow(
-                            color: .black.opacity(
-                                isDetected
-                                    ? (colorScheme == .dark ? 0.14 : 0.045)
-                                    : colorScheme == .dark
-                                    ? (isHovering ? 0.24 : 0.17)
-                                    : (isHovering ? 0.11 : 0.065)
-                            ),
-                            radius: isDetected
-                                ? (isHovering ? 18 : 14)
-                                : (isHovering ? 30 : 22),
-                            y: isDetected
-                                ? (isHovering ? 8 : 5)
-                                : (isHovering ? 12 : 8)
-                        )
-                }
             }
-        }
+            .overlay {
+                shellHighlight
+            }
+            .shadow(
+                color: .black.opacity(isHovering ? 0.34 : 0.24),
+                radius: isHovering ? 18 : 12,
+                y: isHovering ? 8 : 5
+            )
         .frame(
             width: bodySize.width,
             height: totalHeight,
@@ -191,31 +103,23 @@ struct NotchPanelView: View {
             shellAnimation,
             value: meeting.panelMode
         )
+        // The physical camera housing is the material. Keeping this surface
+        // edge-black in both app appearances makes it read as part of the
+        // display bezel instead of another themed window.
+        .environment(\.colorScheme, .dark)
+        .tint(NookPalette.accentHighlight)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Nook meeting panel")
         .accessibilityIdentifier("nook.notchPanel")
     }
 
-    private var opaqueShellGradient: LinearGradient {
-        let colors: [Color]
-        if reduceTransparency, !rendersForSnapshot {
-            let background = Color(nsColor: .windowBackgroundColor)
-            colors = [background, background]
-        } else if colorScheme == .dark {
-            colors = [
-                Color.black.opacity(0.80),
-                Color.black.opacity(0.80),
-            ]
-        } else {
-            colors = [
-                Color.white.opacity(0.98),
-                Color.white.opacity(0.92),
-                Color.white.opacity(0.86),
-            ]
-        }
-
+    private var edgeShellGradient: LinearGradient {
         return LinearGradient(
-            colors: colors,
+            colors: [
+                Color(red: 0.002, green: 0.003, blue: 0.004),
+                Color(red: 0.012, green: 0.014, blue: 0.018),
+                Color(red: 0.020, green: 0.023, blue: 0.029),
+            ],
             startPoint: .top,
             endPoint: .bottom
         )
@@ -224,31 +128,31 @@ struct NotchPanelView: View {
     private var shellContent: some View {
         phaseContent
             .opacity(contentRevealProgress)
-            .offset(y: reduceMotion ? 0 : (1 - contentRevealProgress) * -8)
+            .offset(y: reduceMotion ? 0 : (1 - contentRevealProgress) * -5)
             .padding(
                 .horizontal,
                 isUltraCompact
-                    ? 11
+                    ? 12
                     : (isDetected
-                        ? 14
-                        : (meeting.showLiveCaptions ? 26 : 20))
+                        ? 13
+                        : (meeting.showLiveCaptions ? 22 : 18))
             )
             .padding(
                 .top,
                 geometry.topInset
                     + (isUltraCompact
-                        ? 3
+                        ? 5
                         : (isDetected
-                            ? 7
-                            : (meeting.showLiveCaptions ? 10 : 11)))
+                            ? 5
+                            : (meeting.showLiveCaptions ? 9 : 9)))
             )
             .padding(
                 .bottom,
                 isUltraCompact
-                    ? 3
+                    ? 5
                     : (isDetected
-                        ? 9
-                        : (meeting.showLiveCaptions ? 18 : 14))
+                        ? 7
+                        : (meeting.showLiveCaptions ? 14 : 11))
             )
             .frame(width: bodySize.width, height: totalHeight, alignment: .top)
             .clipShape(shellShape)
@@ -259,17 +163,15 @@ struct NotchPanelView: View {
             .stroke(
                 LinearGradient(
                     colors: [
-                        .white.opacity(isHovering ? 0.16 : 0.10),
                         .clear,
-                        NookPalette.accent.opacity(0.08),
+                        .white.opacity(isHovering ? 0.11 : 0.065),
                         .clear,
                     ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
+                    startPoint: .leading,
+                    endPoint: .trailing
                 ),
-                lineWidth: 0.75
+                lineWidth: 0.55
             )
-            .blendMode(.screen)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }
@@ -277,7 +179,7 @@ struct NotchPanelView: View {
     private var shellAnimation: Animation? {
         reduceMotion
             ? nil
-            : .timingCurve(0.16, 0.78, 0.22, 1, duration: 0.38)
+            : .timingCurve(0.16, 1, 0.30, 1, duration: 0.32)
     }
 
     private var contentRevealProgress: CGFloat {
@@ -312,36 +214,48 @@ struct NotchPanelView: View {
     }
 
     private var idleContent: some View {
-        HStack(spacing: 13) {
-            NookPresence(state: .resting, size: 38)
+        HStack(spacing: 10) {
+            NookPresence(
+                state: .resting,
+                size: 23,
+                showsSurface: false
+            )
             VStack(alignment: .leading, spacing: 2) {
-                Text("Nook is ready")
+                Text("Nook is listening")
                     .font(NookType.bodyEmphasized)
-                Text("Listening for meetings · Nothing leaves this Mac")
-                    .font(NookType.caption)
+                Text("Ready when a conversation begins")
+                    .font(NookType.micro)
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Button("Record") {
+            Button {
                 meeting.startManualMeeting()
+            } label: {
+                Image(systemName: "waveform.badge.mic")
             }
-            .buttonStyle(PanelActionButtonStyle(tint: NookPalette.accent))
+            .buttonStyle(
+                EdgeSymbolButtonStyle(
+                    tint: NookPalette.accentHighlight
+                )
+            )
+            .help("Start recording")
+            .accessibilityLabel("Start recording")
         }
     }
 
     private func detectedContent(_ detection: DetectedMeeting) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             NookPresence(
                 state: .detected,
-                size: 30,
+                size: 21,
                 showsSurface: false
             )
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(detection.suggestedTitle)
-                    .font(NookType.bodyEmphasized)
+                    .font(NookType.metadata)
                     .lineLimit(1)
-                Text("\(detection.appName) · Not recording")
+                Text(detection.appName)
                     .font(NookType.micro)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -349,18 +263,22 @@ struct NotchPanelView: View {
 
             Spacer(minLength: 4)
 
-            HStack(spacing: 2) {
-                Button("Not now") {
+            HStack(spacing: 3) {
+                Button {
                     meeting.dismissPrompt()
+                } label: {
+                    Image(systemName: "xmark")
                 }
-                .buttonStyle(DetectedPromptButtonStyle())
+                .buttonStyle(EdgeSymbolButtonStyle())
                 .keyboardShortcut(.cancelAction)
+                .help("Not now")
+                .accessibilityLabel("Not now")
                 .accessibilityHint("Leaves this meeting unrecorded")
 
                 Button {
                     meeting.startDetectedMeeting()
                 } label: {
-                    Text("Record")
+                    Label("Record", systemImage: "waveform")
                 }
                 .buttonStyle(DetectedPromptButtonStyle(isPrimary: true))
                 .keyboardShortcut(.defaultAction)
@@ -372,8 +290,8 @@ struct NotchPanelView: View {
     @ViewBuilder
     private func recordingContent(title: String) -> some View {
         if meeting.showLiveCaptions {
-            VStack(spacing: 10) {
-                HStack(spacing: 10) {
+            VStack(spacing: 7) {
+                HStack(spacing: 9) {
                     LiveStatusIndicator(
                         isPaused: meeting.isPaused,
                         level: meeting.audioLevel
@@ -383,7 +301,7 @@ struct NotchPanelView: View {
                         .font(NookType.panelTitle)
                         .lineLimit(1)
 
-                    Spacer(minLength: 14)
+                    Spacer(minLength: 10)
 
                     Text(elapsedLabel)
                         .font(NookType.code)
@@ -450,8 +368,8 @@ struct NotchPanelView: View {
                 } label: {
                     Capsule()
                         .fill(.primary.opacity(0.28))
-                        .frame(width: 34, height: 3)
-                        .frame(maxWidth: .infinity, minHeight: 10)
+                        .frame(width: 32, height: 2.5)
+                        .frame(maxWidth: .infinity, minHeight: 8)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -526,7 +444,7 @@ struct NotchPanelView: View {
     }
 
     private var transcriptWorkspace: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 5) {
             AudioThread(
                 level: meeting.isPaused ? 0 : meeting.audioLevel,
                 isActive: !meeting.isPaused
@@ -544,22 +462,20 @@ struct NotchPanelView: View {
     @ViewBuilder
     private var recordingControls: some View {
         if rendersForSnapshot {
-            Label("Pause", systemImage: "pause.fill")
-                .font(NookType.metadata)
-                .padding(.horizontal, 9)
-                .frame(height: 28)
+            Image(systemName: "pause.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .frame(width: 28, height: 28)
                 .background(
-                    .primary.opacity(0.055),
+                    .white.opacity(0.045),
                     in: RoundedRectangle(cornerRadius: 7, style: .continuous)
                 )
 
-            Label("Finish", systemImage: "stop.fill")
-                .font(NookType.metadata)
-                .foregroundStyle(.white)
-                .padding(.horizontal, 9)
-                .frame(height: 28)
+            Image(systemName: "stop.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(NookPalette.danger)
+                .frame(width: 28, height: 28)
                 .background(
-                    NookPalette.danger,
+                    .white.opacity(0.045),
                     in: RoundedRectangle(cornerRadius: 7, style: .continuous)
                 )
         } else {
@@ -602,14 +518,14 @@ struct NotchPanelView: View {
     }
 
     private func processingContent(_ step: MeetingPhase.ProcessingStep) -> some View {
-        HStack(spacing: 15) {
-            NookPresence(state: .thinking, size: 43)
+        HStack(spacing: 12) {
+            NookPresence(state: .thinking, size: 34)
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text("Tucking this conversation away")
-                    .font(NookType.panelTitle)
+                    .font(NookType.bodyEmphasized)
                 Text(processingDetail(for: step))
-                    .font(NookType.caption)
+                    .font(NookType.micro)
                     .foregroundStyle(.secondary)
             }
 
@@ -620,14 +536,14 @@ struct NotchPanelView: View {
     }
 
     private func completedContent(_ title: String) -> some View {
-        HStack(spacing: 14) {
-            NookPresence(state: .saved, size: 44)
+        HStack(spacing: 12) {
+            NookPresence(state: .saved, size: 34)
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text("Tucked away")
-                    .font(NookType.panelTitle)
+                    .font(NookType.bodyEmphasized)
                 Text("\(title) · Saved as Markdown")
-                    .font(NookType.caption)
+                    .font(NookType.micro)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -644,14 +560,14 @@ struct NotchPanelView: View {
     }
 
     private func failedContent(_ message: String) -> some View {
-        HStack(spacing: 14) {
-            NookPresence(state: .attention, size: 44)
+        HStack(spacing: 12) {
+            NookPresence(state: .attention, size: 34)
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text("Nook needs a hand")
-                    .font(NookType.panelTitle)
+                    .font(NookType.bodyEmphasized)
                 Text(panelFailureMessage(message))
-                    .font(NookType.caption)
+                    .font(NookType.micro)
                     .foregroundStyle(.secondary)
                     .lineLimit(3)
             }
@@ -750,39 +666,26 @@ struct NotchPanelView: View {
 
 private struct PanelActionButtonStyle: ButtonStyle {
     var tint: Color?
-    @Environment(\.colorScheme) private var colorScheme
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(NookType.control)
+            .font(NookType.metadata)
             .foregroundStyle(
-                tint == nil
-                    ? AnyShapeStyle(.primary)
-                    : AnyShapeStyle(
-                        colorScheme == .dark
-                            ? Color.black.opacity(0.84)
-                            : Color.white.opacity(0.96)
-                    )
+                tint.map { AnyShapeStyle($0) }
+                    ?? AnyShapeStyle(.primary)
             )
-            .padding(.horizontal, tint == nil ? 10 : 13)
+            .padding(.horizontal, 8)
             .frame(minHeight: 30)
             .background {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .fill(
-                        tint.map {
-                            AnyShapeStyle(
-                                $0.opacity(configuration.isPressed ? 0.80 : 1)
-                            )
-                        }
-                            ?? AnyShapeStyle(
-                                .primary.opacity(
-                                    configuration.isPressed ? 0.08 : 0.001
-                                )
-                            )
+                        .white.opacity(
+                            configuration.isPressed ? 0.10 : 0.001
+                        )
                     )
             }
             .contentShape(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
             )
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
             .animation(
@@ -801,13 +704,13 @@ private struct DetectedPromptButtonStyle: ButtonStyle {
             .labelStyle(.titleAndIcon)
             .foregroundStyle(
                 isPrimary
-                    ? AnyShapeStyle(NookPalette.accent)
+                    ? AnyShapeStyle(NookPalette.accentHighlight)
                     : AnyShapeStyle(.secondary)
             )
-            .padding(.horizontal, 8)
-            .frame(minHeight: 32)
+            .padding(.horizontal, 7)
+            .frame(minHeight: 28)
             .background(
-                .primary.opacity(configuration.isPressed ? 0.07 : 0.001),
+                .white.opacity(configuration.isPressed ? 0.10 : 0.001),
                 in: RoundedRectangle(cornerRadius: 7, style: .continuous)
             )
             .contentShape(
@@ -827,29 +730,44 @@ private struct PanelTransportButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(NookType.metadata)
-            .labelStyle(.titleAndIcon)
+            .font(.system(size: 11, weight: .semibold))
+            .labelStyle(.iconOnly)
             .foregroundStyle(
                 isDestructive
-                    ? AnyShapeStyle(Color.white)
+                    ? AnyShapeStyle(NookPalette.danger)
                     : AnyShapeStyle(tint ?? .primary)
             )
-            .padding(.horizontal, 9)
-            .frame(height: 28)
+            .frame(width: 28, height: 28)
             .background(
-                tint?.opacity(configuration.isPressed ? 0.78 : 1)
-                    ?? Color.primary.opacity(
-                        configuration.isPressed ? 0.13 : 0.055
-                    ),
+                .white.opacity(configuration.isPressed ? 0.12 : 0.045),
                 in: RoundedRectangle(cornerRadius: 7, style: .continuous)
             )
-            .overlay {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .stroke(.primary.opacity(0.10), lineWidth: 0.6)
-            }
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(
                 .timingCurve(0.22, 1, 0.36, 1, duration: 0.14),
+                value: configuration.isPressed
+            )
+    }
+}
+
+private struct EdgeSymbolButtonStyle: ButtonStyle {
+    var tint: Color?
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(tint ?? Color.secondary)
+            .frame(width: 27, height: 27)
+            .background(
+                .white.opacity(configuration.isPressed ? 0.11 : 0.001),
+                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+            )
+            .contentShape(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+            )
+            .scaleEffect(configuration.isPressed ? 0.93 : 1)
+            .animation(
+                .timingCurve(0.22, 1, 0.36, 1, duration: 0.12),
                 value: configuration.isPressed
             )
     }
@@ -1090,7 +1008,7 @@ private struct MeetingPanelModeBar: View {
                             : AnyShapeStyle(.secondary)
                     )
                     .frame(maxWidth: .infinity)
-                    .frame(height: 28)
+                    .frame(height: 26)
                     .contentShape(Rectangle())
                     .overlay(alignment: .bottom) {
                         Rectangle()
@@ -1203,7 +1121,7 @@ private struct LiveSummaryPanel: View {
             .foregroundStyle(.secondary)
             .accessibilityElement(children: .combine)
         }
-        .frame(maxWidth: .infinity, minHeight: 142, maxHeight: 154)
+        .frame(maxWidth: .infinity, minHeight: 126, maxHeight: 138)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Summary so far")
     }
@@ -1266,7 +1184,7 @@ private struct LiveNotesPanel: View {
                     .focused(isFocused)
                     .accessibilityLabel("Personal meeting notes")
             }
-            .frame(minHeight: 152)
+            .frame(minHeight: 132)
             .background(
                 NookPalette.paper,
                 in: RoundedRectangle(
@@ -1317,7 +1235,7 @@ private struct DetachedNotesPanel: View {
             Button("Bring Forward", action: bringForward)
                 .buttonStyle(NookButtonStyle(tint: NookPalette.accent))
         }
-        .frame(maxWidth: .infinity, minHeight: 142)
+        .frame(maxWidth: .infinity, minHeight: 126)
         .padding(.horizontal, 10)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("My Notes is open in a floating window")
@@ -1332,7 +1250,7 @@ private struct NotchCaptionStream: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        VStack(alignment: .center, spacing: 7) {
+        VStack(alignment: .center, spacing: 6) {
             if lines.isEmpty {
                 HStack(spacing: 9) {
                     Image(systemName: "ear")
@@ -1343,7 +1261,7 @@ private struct NotchCaptionStream: View {
                         .font(NookType.transcriptEmphasized)
                         .foregroundStyle(.secondary)
                 }
-                .frame(maxWidth: .infinity, minHeight: 116)
+                .frame(maxWidth: .infinity, minHeight: 100)
                 .multilineTextAlignment(.center)
                 .transition(.opacity)
                 .accessibilityElement(children: .combine)
@@ -1367,8 +1285,13 @@ private struct NotchCaptionStream: View {
                 }
             }
         }
-        .frame(maxWidth: .infinity, minHeight: 126, alignment: .bottom)
-        .padding(.bottom, 8)
+        .frame(
+            maxWidth: .infinity,
+            minHeight: 104,
+            maxHeight: 124,
+            alignment: .bottom
+        )
+        .padding(.bottom, 4)
         .clipped()
         .animation(
             reduceMotion
@@ -1391,9 +1314,9 @@ private struct NotchCaptionStream: View {
         let distanceFromNewest = lines.count - 1 - index
         switch distanceFromNewest {
         case 0: return 1
-        case 1: return 0.84
-        case 2: return 0.70
-        default: return 0.58
+        case 1: return 0.80
+        case 2: return 0.62
+        default: return 0.46
         }
     }
 }
@@ -1407,9 +1330,10 @@ private struct NotchCaptionRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Circle()
-                .fill(line.source.nookTint)
-                .frame(width: isNewest ? 5 : 4, height: isNewest ? 5 : 4)
+            Image(systemName: line.source.symbol)
+                .font(.system(size: isNewest ? 8 : 7, weight: .semibold))
+                .foregroundStyle(line.source.nookTint)
+                .frame(width: 10)
                 .opacity(isNewest ? 1 : 0.72)
                 .accessibilityHidden(true)
 

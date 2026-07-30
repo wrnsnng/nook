@@ -25,6 +25,7 @@ struct MarkdownCodecTests {
 
         #expect(project.contains(NookUpdateFeed.appcastURLString))
         #expect(project.contains(NookUpdateFeed.publicEdKey))
+        #expect(project.contains("SUEnableAutomaticChecks: true"))
         #expect(project.contains("SURequireSignedFeed: true"))
         #expect(project.contains("SUVerifyUpdateBeforeExtraction: true"))
     }
@@ -137,8 +138,8 @@ struct MarkdownCodecTests {
             panelMode: .transcript
         )
 
-        #expect(size.width == 286)
-        #expect(size.height == 30)
+        #expect(size.width == 304)
+        #expect(size.height == 34)
     }
 
     @Test
@@ -154,8 +155,8 @@ struct MarkdownCodecTests {
             panelMode: .transcript
         )
 
-        #expect(size.width == 420)
-        #expect(size.height == 64)
+        #expect(size.width == 360)
+        #expect(size.height == 48)
     }
 
     @Test

@@ -88,6 +88,19 @@ struct StatusMenuView: View {
 
             Divider()
 
+            if let version = updater.availableVersion {
+                Button {
+                    updater.checkForUpdates()
+                } label: {
+                    Label(
+                        "Nook \(version) is ready…",
+                        systemImage: "arrow.down.circle.fill"
+                    )
+                }
+
+                Divider()
+            }
+
             Button {
                 openLibrary()
             } label: {
