@@ -9,9 +9,6 @@ struct NookApp: App {
     var body: some Scene {
         MenuBarExtra {
             StatusMenuView()
-                .environmentObject(appModel.meeting)
-                .environmentObject(appModel.store)
-                .environmentObject(appModel.detector)
                 .environmentObject(updater)
         } label: {
             NookMenuBarLabel()
@@ -106,11 +103,30 @@ private struct NookMenuBarLabel: View {
     @EnvironmentObject private var updater: NookUpdateController
 
     var body: some View {
-        Label(
-            "Nook",
-            systemImage: meeting.isPaused
-                ? "pause.circle.fill"
-                : menuBarSymbol
+        Group {
+            if meeting.phase.isRecording {
+                HStack(spacing: 5) {
+                    Image(
+                        systemName: meeting.isPaused
+                            ? "pause.fill"
+                            : "record.circle.fill"
+                    )
+                    .frame(width: 13)
+                    Text(elapsedLabel)
+                        .font(.system(.caption, design: .monospaced))
+                        .monospacedDigit()
+                        .frame(width: 38, alignment: .leading)
+                }
+            } else {
+                Image(systemName: menuBarSymbol)
+            }
+        }
+        .foregroundStyle(
+            meeting.phase.isRecording
+                ? (meeting.isPaused
+                    ? NookPalette.warning
+                    : NookPalette.danger)
+                : .primary
         )
         .accessibilityLabel(
             accessibilityLabel
@@ -129,12 +145,32 @@ private struct NookMenuBarLabel: View {
 
     private var accessibilityLabel: String {
         if meeting.isPaused {
-            return "Nook, recording paused"
+            return "Nook, recording paused, \(elapsedSpokenLabel)"
+        }
+        if meeting.phase.isRecording {
+            return "Nook, recording, \(elapsedSpokenLabel)"
         }
         if let version = updater.availableVersion {
             return "Nook, version \(version) is ready"
         }
         return "Nook"
+    }
+
+    private var elapsedLabel: String {
+        let total = Int(meeting.elapsed)
+        if total >= 3_600 {
+            return String(
+                format: "%02d:%02d",
+                total / 3_600,
+                (total / 60) % 60
+            )
+        }
+        return String(format: "%02d:%02d", total / 60, total % 60)
+    }
+
+    private var elapsedSpokenLabel: String {
+        let total = Int(meeting.elapsed)
+        return "\(total / 60) minutes, \(total % 60) seconds"
     }
 }
 

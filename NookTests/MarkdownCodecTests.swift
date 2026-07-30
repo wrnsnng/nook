@@ -31,6 +31,22 @@ struct MarkdownCodecTests {
     }
 
     @Test
+    func applicationBundleShipsOnlyTheCobaltBrandIcon() {
+        #expect(
+            Bundle.main.url(
+                forResource: "NookIconSource-Cobalt",
+                withExtension: "png"
+            ) != nil
+        )
+        #expect(
+            Bundle.main.url(
+                forResource: "NookIconSource",
+                withExtension: "png"
+            ) == nil
+        )
+    }
+
+    @Test
     func roundTripsMeetingNote() throws {
         let start = Date(timeIntervalSince1970: 1_700_000_000)
         let note = MeetingNote(
@@ -138,8 +154,8 @@ struct MarkdownCodecTests {
             panelMode: .transcript
         )
 
-        #expect(size.width == 304)
-        #expect(size.height == 34)
+        #expect(size.width == 316)
+        #expect(size.height == 38)
     }
 
     @Test
@@ -170,6 +186,77 @@ struct MarkdownCodecTests {
         )
 
         #expect(title == "The onboarding should explain privacy at the moment")
+    }
+
+    @Test
+    func generatedMeetingTitleReplacesTheTimestampFallback() {
+        let title = MeetingTitleGenerator.resolvedTitle(
+            proposedTitle: "Meeting — Thu 2:14 PM",
+            summary: "The team agreed to simplify Nook’s top panel and make recording easier to spot.",
+            keyPoints: ["Simplify the top panel recording controls"],
+            transcript: [],
+            fallbackTitle: "Meeting — Thu 2:14 PM"
+        )
+
+        #expect(title == "Simplify the top panel recording controls")
+    }
+
+    @Test
+    func generatedMeetingTitlePreservesASpecificSubject() {
+        let title = MeetingTitleGenerator.resolvedTitle(
+            proposedTitle: "Nook top panel design review",
+            summary: "The team reviewed the recording workspace.",
+            keyPoints: [],
+            transcript: [],
+            fallbackTitle: "Meeting — Thu 2:14 PM"
+        )
+
+        #expect(title == "Nook top panel design review")
+    }
+
+    @Test
+    func generatedMeetingTitleCanNaturallyEndInMeeting() {
+        let title = MeetingTitleGenerator.resolvedTitle(
+            proposedTitle: "Quarterly board meeting",
+            summary: "",
+            keyPoints: [],
+            transcript: [],
+            fallbackTitle: "Meeting — Thu 2:14 PM"
+        )
+
+        #expect(title == "Quarterly board meeting")
+    }
+
+    @Test
+    func generatedMeetingTitleStripsSummaryLeadIns() {
+        let title = MeetingTitleGenerator.resolvedTitle(
+            proposedTitle: "Meeting",
+            summary: "The discussion focused on accessibility fixes for the notes editor.",
+            keyPoints: [],
+            transcript: [],
+            fallbackTitle: "Meeting — Thu 2:14 PM"
+        )
+
+        #expect(title == "Accessibility fixes for the notes editor")
+    }
+
+    @Test
+    func generatedMeetingTitleUsesFallbackOnlyWithoutUsefulContent() {
+        let fallback = "Meeting — Thu 2:14 PM"
+        let title = MeetingTitleGenerator.resolvedTitle(
+            proposedTitle: fallback,
+            summary: "",
+            keyPoints: [],
+            transcript: [],
+            fallbackTitle: fallback
+        )
+
+        #expect(title == fallback)
+    }
+
+    @Test
+    func meetingWorkspaceUsesThePlainSummaryLabel() {
+        #expect(MeetingPanelMode.summary.label == "Summary")
     }
 
     @Test
@@ -291,6 +378,36 @@ struct MarkdownCodecTests {
 
         coordinator.setLiveNotesDetached(false)
         #expect(!coordinator.liveNotesDetached)
+    }
+
+    @Test
+    @MainActor
+    func recordingTopPanelMovesBetweenExpandedCompactAndHiddenStates() {
+        let coordinator = MeetingCoordinator(
+            store: MarkdownStore(),
+            detector: MeetingDetector()
+        )
+        coordinator.setPreviewState(
+            phase: .recording(title: "Design review", startedAt: .now),
+            elapsed: 42,
+            liveTranscript: .empty,
+            audioLevel: 0.2
+        )
+
+        coordinator.expandTopPanel()
+        #expect(coordinator.showLiveCaptions)
+        #expect(!coordinator.topPanelHidden)
+
+        coordinator.collapseTopPanel()
+        #expect(!coordinator.showLiveCaptions)
+        #expect(!coordinator.topPanelHidden)
+
+        coordinator.hideTopPanel()
+        #expect(coordinator.topPanelHidden)
+
+        coordinator.restoreTopPanel()
+        #expect(!coordinator.topPanelHidden)
+        #expect(!coordinator.showLiveCaptions)
     }
 
     @Test

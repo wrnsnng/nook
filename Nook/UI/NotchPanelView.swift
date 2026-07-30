@@ -37,6 +37,10 @@ struct NotchPanelView: View {
         meeting.phase.isRecording && !meeting.showLiveCaptions
     }
 
+    private var isExpandedRecording: Bool {
+        meeting.phase.isRecording && meeting.showLiveCaptions
+    }
+
     private var isDetected: Bool {
         if case .detected = meeting.phase { true } else { false }
     }
@@ -125,10 +129,18 @@ struct NotchPanelView: View {
         )
     }
 
+    @ViewBuilder
     private var shellContent: some View {
-        phaseContent
-            .opacity(contentRevealProgress)
-            .offset(y: reduceMotion ? 0 : (1 - contentRevealProgress) * -5)
+        if isExpandedRecording {
+            revealedPhaseContent
+                .frame(
+                    width: bodySize.width,
+                    height: totalHeight,
+                    alignment: .top
+                )
+                .clipShape(shellShape)
+        } else {
+            revealedPhaseContent
             .padding(
                 .horizontal,
                 isUltraCompact
@@ -156,6 +168,13 @@ struct NotchPanelView: View {
             )
             .frame(width: bodySize.width, height: totalHeight, alignment: .top)
             .clipShape(shellShape)
+        }
+    }
+
+    private var revealedPhaseContent: some View {
+        phaseContent
+            .opacity(contentRevealProgress)
+            .offset(y: reduceMotion ? 0 : (1 - contentRevealProgress) * -5)
     }
 
     private var shellHighlight: some View {
@@ -290,29 +309,19 @@ struct NotchPanelView: View {
     @ViewBuilder
     private func recordingContent(title: String) -> some View {
         if meeting.showLiveCaptions {
+            expandedRecordingContent(title: title)
+        } else {
+            compactRecordingContent(title: title)
+        }
+    }
+
+    private func expandedRecordingContent(title: String) -> some View {
+        VStack(spacing: 0) {
+            expandedRecordingChrome(title: title)
+                .frame(height: geometry.topInset)
+                .padding(.horizontal, 18)
+
             VStack(spacing: 7) {
-                HStack(spacing: 9) {
-                    LiveStatusIndicator(
-                        isPaused: meeting.isPaused,
-                        level: meeting.audioLevel
-                    )
-
-                    Text(title)
-                        .font(NookType.panelTitle)
-                        .lineLimit(1)
-
-                    Spacer(minLength: 10)
-
-                    Text(elapsedLabel)
-                        .font(NookType.code)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                        .contentTransition(.numericText())
-                        .accessibilityLabel(elapsedSpokenLabel)
-
-                    recordingControls
-                }
-
                 MeetingPanelModeBar(
                     selection: meeting.panelMode,
                     notesDetached: meeting.liveNotesDetached
@@ -362,29 +371,60 @@ struct NotchPanelView: View {
                         ? .opacity
                         : .opacity.combined(with: .offset(y: 4))
                 )
+            }
+            .padding(.horizontal, 22)
+            .padding(.top, 7)
+            .padding(.bottom, 12)
+            .frame(height: bodySize.height, alignment: .top)
+        }
+    }
+
+    private func expandedRecordingChrome(title: String) -> some View {
+        HStack(spacing: 0) {
+            HStack(spacing: 8) {
+                LiveStatusIndicator(
+                    isPaused: meeting.isPaused,
+                    level: meeting.audioLevel
+                )
+
+                Text(title)
+                    .font(NookType.metadata)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Color.clear
+                .frame(width: geometry.cameraHousingWidth)
+                .accessibilityHidden(true)
+
+            HStack(spacing: 4) {
+                Text(elapsedLabel)
+                    .font(NookType.code)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
+                    .accessibilityLabel(elapsedSpokenLabel)
+
+                recordingControls
 
                 Button {
-                    meeting.showLiveCaptions = false
+                    meeting.collapseTopPanel()
                 } label: {
-                    Capsule()
-                        .fill(.primary.opacity(0.28))
-                        .frame(width: 32, height: 2.5)
-                        .frame(maxWidth: .infinity, minHeight: 8)
-                        .contentShape(Rectangle())
+                    Image(systemName: "chevron.up")
                 }
-                .buttonStyle(.plain)
-                .help("Collapse meeting workspace")
-                .accessibilityLabel("Collapse meeting workspace")
+                .buttonStyle(PanelTransportButtonStyle())
+                .help("Collapse top panel")
+                .accessibilityLabel("Collapse top panel")
             }
-        } else {
-            compactRecordingContent(title: title)
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
     }
 
     private func compactRecordingContent(title: String) -> some View {
         HStack(spacing: 8) {
             Button {
-                meeting.showLiveCaptions = true
+                meeting.expandTopPanel()
             } label: {
                 HStack(spacing: 8) {
                     RecordingWaveform(
@@ -406,6 +446,10 @@ struct NotchPanelView: View {
                         .monospacedDigit()
                         .contentTransition(.numericText())
                         .frame(minWidth: 42, alignment: .leading)
+
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 7, weight: .bold))
+                        .foregroundStyle(.secondary)
                 }
                 .contentShape(Rectangle())
             }
@@ -436,6 +480,24 @@ struct NotchPanelView: View {
                 )
                 .disabled(meeting.pauseTransitionInFlight)
             }
+        }
+        .overlay(alignment: .bottom) {
+            Button {
+                meeting.hideTopPanel()
+            } label: {
+                VStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.up")
+                        .font(.system(size: 6, weight: .bold))
+                        .foregroundStyle(.secondary.opacity(0.66))
+                        .padding(.bottom, 2)
+                }
+                .frame(width: 52, height: 24)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Hide top panel")
+            .accessibilityLabel("Hide top panel")
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(
@@ -530,8 +592,17 @@ struct NotchPanelView: View {
             }
 
             Spacer()
-            ProgressView()
-                .controlSize(.small)
+            if step != .discarding, meeting.canCancelProcessing {
+                Button("Cancel") {
+                    meeting.cancelProcessing()
+                }
+                .buttonStyle(PanelActionButtonStyle())
+                .help("Cancel processing and discard this recording")
+                .accessibilityHint("Permanently discards this recording")
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+            }
         }
     }
 
@@ -646,6 +717,7 @@ struct NotchPanelView: View {
         case .transcribing: "ear"
         case .summarizing: "sparkles"
         case .saving: "doc.badge.plus"
+        case .discarding: "trash"
         }
     }
 
@@ -656,6 +728,7 @@ struct NotchPanelView: View {
         case .transcribing: "A careful second listen, entirely on-device"
         case .summarizing: "Finding decisions, themes, and next steps"
         case .saving: "Writing a plain Markdown file"
+        case .discarding: "Removing the accidental recording"
         }
     }
 
@@ -1048,7 +1121,7 @@ private struct LiveSummaryPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Label("The gist so far", systemImage: "text.alignleft")
+                Label("Meeting summary", systemImage: "text.alignleft")
                     .font(NookType.metadata)
                     .foregroundStyle(.primary)
 
@@ -1069,7 +1142,7 @@ private struct LiveSummaryPanel: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
                 .help("Update summary")
-                .accessibilityLabel("Update summary so far")
+                .accessibilityLabel("Update meeting summary")
             }
 
             if let insights {
@@ -1123,7 +1196,7 @@ private struct LiveSummaryPanel: View {
         }
         .frame(maxWidth: .infinity, minHeight: 126, maxHeight: 138)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Summary so far")
+        .accessibilityLabel("Meeting summary")
     }
 
     private var updatedLabel: String {
@@ -1164,26 +1237,21 @@ private struct LiveNotesPanel: View {
                 .accessibilityLabel("Open notes in a floating window")
             }
 
-            ZStack(alignment: .topLeading) {
-                if notes.isEmpty {
-                    Text("Type a thought, a question, or something to remember…")
-                        .font(NookType.body)
-                        .foregroundStyle(.secondary)
-                        .opacity(0.82)
-                        .padding(.horizontal, 11)
-                        .padding(.vertical, 10)
-                        .allowsHitTesting(false)
-                }
-
-                TextEditor(text: $notes)
-                    .font(NookType.body)
-                    .lineSpacing(3)
-                    .scrollContentBackground(.hidden)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 5)
-                    .focused(isFocused)
-                    .accessibilityLabel("Personal meeting notes")
-            }
+            NookNotesEditor(
+                text: $notes,
+                placeholder: "Type a thought, a question, or something to remember…",
+                isFocused: Binding(
+                    get: { isFocused.wrappedValue },
+                    set: { isFocused.wrappedValue = $0 }
+                ),
+                contentInsets: EdgeInsets(
+                    top: 10,
+                    leading: 11,
+                    bottom: 10,
+                    trailing: 11
+                ),
+                lineSpacing: 3
+            )
             .frame(minHeight: 132)
             .background(
                 NookPalette.paper,

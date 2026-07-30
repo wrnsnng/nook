@@ -3,6 +3,7 @@ import AppKit
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        installApplicationIcon()
         NSApp.setActivationPolicy(.accessory)
 
         #if DEBUG
@@ -65,6 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     ? "Ask Ana to test the meeting prompt.\nRevisit the transition timing before Friday."
                     : nil
             )
+            AppModel.shared.meeting.expandTopPanel()
             AppModel.shared.panel.show()
         }
 
@@ -136,6 +138,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         #endif
+    }
+
+    /// Launch Services may preserve artwork from an older build for a stable
+    /// bundle identifier. Setting the packaged cobalt master explicitly keeps
+    /// the Dock and app switcher in sync immediately after an OTA update.
+    private func installApplicationIcon() {
+        guard
+            let url = Bundle.main.url(
+                forResource: "NookIconSource-Cobalt",
+                withExtension: "png"
+            ),
+            let image = NSImage(contentsOf: url)
+        else {
+            return
+        }
+        NSApp.applicationIconImage = image
     }
 
     func applicationWillTerminate(_ notification: Notification) {

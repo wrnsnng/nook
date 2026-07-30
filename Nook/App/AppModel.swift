@@ -55,6 +55,9 @@ final class AppModel: ObservableObject {
         meeting.onPanelInteractionRequested = { [weak panel] in
             panel?.makeInteractive()
         }
+        meeting.onPanelDismissRequested = { [weak panel] in
+            panel?.hide()
+        }
         meeting.onMeetingNotificationRequested = { [weak notifications] detection in
             notifications?.present(detection)
         }

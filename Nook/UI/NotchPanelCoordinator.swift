@@ -7,6 +7,7 @@ final class NotchPanelGeometry: ObservableObject {
     @Published var topInset: CGFloat = NSStatusBar.system.thickness
     @Published var revealProgress: CGFloat = 1
     @Published var maximumPanelWidth: CGFloat = 720
+    @Published var cameraHousingWidth: CGFloat = 0
 }
 
 enum NotchPanelMetrics {
@@ -22,15 +23,15 @@ enum NotchPanelMetrics {
             return CGSize(width: 360, height: 48)
         case .recording:
             guard showsCaptions else {
-                return CGSize(width: 304, height: 34)
+                return CGSize(width: 316, height: 38)
             }
             switch panelMode {
             case .transcript:
-                return CGSize(width: 680, height: 252)
+                return CGSize(width: 680, height: 190)
             case .summary:
-                return CGSize(width: 680, height: 258)
+                return CGSize(width: 680, height: 190)
             case .notes:
-                return CGSize(width: 680, height: 272)
+                return CGSize(width: 680, height: 204)
             }
         case .processing:
             return CGSize(width: 424, height: 72)
@@ -98,6 +99,10 @@ final class NotchPanelCoordinator {
 
     func show() {
         hideTask?.cancel()
+        if meeting.phase.isRecording, meeting.topPanelHidden {
+            panel.orderOut(nil)
+            return
+        }
         let wasVisible = panel.isVisible
         if !wasVisible, shouldAnimate {
             geometry.revealProgress = 0
@@ -160,16 +165,18 @@ final class NotchPanelCoordinator {
     }
 
     private func startObserving() {
-        Publishers.CombineLatest3(
+        Publishers.CombineLatest4(
             meeting.$phase.removeDuplicates(),
             meeting.$showLiveCaptions.removeDuplicates(),
-            meeting.$panelMode.removeDuplicates()
+            meeting.$panelMode.removeDuplicates(),
+            meeting.$topPanelHidden.removeDuplicates()
         )
-        .sink { [weak self] phase, captions, panelMode in
+        .sink { [weak self] phase, captions, panelMode, isHidden in
             self?.phaseDidChange(
                 phase,
                 showsCaptions: captions,
-                panelMode: panelMode
+                panelMode: panelMode,
+                isHidden: isHidden
             )
         }
         .store(in: &cancellables)
@@ -188,8 +195,14 @@ final class NotchPanelCoordinator {
     private func phaseDidChange(
         _ phase: MeetingPhase,
         showsCaptions: Bool,
-        panelMode: MeetingPanelMode
+        panelMode: MeetingPanelMode,
+        isHidden: Bool
     ) {
+        if phase.isRecording, isHidden {
+            hide()
+            return
+        }
+
         updateLayout(
             animated: panel.isVisible,
             phase: phase,
@@ -356,6 +369,18 @@ final class NotchPanelCoordinator {
             440,
             min(680, screen.frame.width - 48)
         )
+        if let leftArea = screen.auxiliaryTopLeftArea,
+           let rightArea = screen.auxiliaryTopRightArea {
+            geometry.cameraHousingWidth = max(
+                0,
+                min(
+                    rightArea.minX - leftArea.maxX,
+                    geometry.maximumPanelWidth - 320
+                )
+            )
+        } else {
+            geometry.cameraHousingWidth = 0
+        }
     }
 
     private func pixelAligned(_ value: CGFloat, scale: CGFloat) -> CGFloat {

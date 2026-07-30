@@ -46,11 +46,11 @@
 		8649F00502AF64153F77952E /* NookPermission.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A877376CD0320074D3AE2B8 /* NookPermission.swift */; };
 		8D65B14D1E3F0D8DB95C455D /* SnapshotRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9724F70AFC1F4B7149AC8E67 /* SnapshotRenderer.swift */; };
 		8EA62FBE67B79A580517A9A7 /* NookPermission.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A877376CD0320074D3AE2B8 /* NookPermission.swift */; };
-		8EB928536B80E4989DA5C18D /* NookIconSource.png in Resources */ = {isa = PBXBuildFile; fileRef = 05BF38BAD9331428D0B46D28 /* NookIconSource.png */; };
 		9901438495EE438AAF2BFC0D /* MeetingNotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82F5D4466C034B90191F6217 /* MeetingNotificationService.swift */; };
 		9EF0C1E27492EEA9136CDB21 /* FloatingNotesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D5C59EC69ED9C02DCECCCA7 /* FloatingNotesView.swift */; };
 		A4A0E1DA0DDA1431733498E3 /* NookApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E12DEFF243E7B4B84A7A135 /* NookApp.swift */; };
 		A7825C444D696A2890C5B3BF /* NookAppIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A382566BB5A6E90AEF09EC0 /* NookAppIntents.swift */; };
+		A9E39DDD390C956A99971EF9 /* NookNotesEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = E29043FB627EE55136C66892 /* NookNotesEditor.swift */; };
 		AC0B668F3E59CB3A86210E47 /* NookDesign.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEA407B4708D8AD7F0B06502 /* NookDesign.swift */; };
 		B01B73D6C92F79AC5556F004 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 909D2C9060AAA9A88209979F /* SettingsView.swift */; };
 		B23F0F1F6C00C9746F57E285 /* NookPresence.swift in Sources */ = {isa = PBXBuildFile; fileRef = C710DCF39272E4901FF787C9 /* NookPresence.swift */; };
@@ -71,6 +71,7 @@
 		E3873161E0BB564FC8D0B61B /* MeetingDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1162CB8F3088E4EA4EDAEC43 /* MeetingDetector.swift */; };
 		E4BA42603B4DC3A198E386D7 /* FloatingNotesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D5C59EC69ED9C02DCECCCA7 /* FloatingNotesView.swift */; };
 		E77396AB28F08D6571DC9CC9 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A6655959382556C4DA62D72 /* AppModel.swift */; };
+		E7E699D2D6083507D634A792 /* NookNotesEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = E29043FB627EE55136C66892 /* NookNotesEditor.swift */; };
 		EC74DF63D37AAF8B3FE41484 /* NotchPanelCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7D40B68EE579A68D1A8722E /* NotchPanelCoordinator.swift */; };
 		ED23D30CAF5E5D1402989F90 /* WelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96D519F4CE62062C2D665436 /* WelcomeView.swift */; };
 		EEA41488D1BA82412026D9B1 /* TranscriptSegment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79E8477180498A6A643E7DE9 /* TranscriptSegment.swift */; };
@@ -96,7 +97,6 @@
 /* Begin PBXFileReference section */
 		0216CD1F9BF8CBA79B99EF44 /* LibrarySearchController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibrarySearchController.swift; sourceTree = "<group>"; };
 		04DB60A1C42F72E177BB9160 /* MeetingCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingCoordinator.swift; sourceTree = "<group>"; };
-		05BF38BAD9331428D0B46D28 /* NookIconSource.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = NookIconSource.png; sourceTree = "<group>"; };
 		0A6655959382556C4DA62D72 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		1162CB8F3088E4EA4EDAEC43 /* MeetingDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingDetector.swift; sourceTree = "<group>"; };
 		170212C508F45D65AB1B9513 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -137,6 +137,7 @@
 		D190DD1E42E7B8A2C319B54D /* AudioExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioExtractor.swift; sourceTree = "<group>"; };
 		D588A6E65FB7C05B912F3220 /* SpeechAssets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechAssets.swift; sourceTree = "<group>"; };
 		DEA407B4708D8AD7F0B06502 /* NookDesign.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookDesign.swift; sourceTree = "<group>"; };
+		E29043FB627EE55136C66892 /* NookNotesEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookNotesEditor.swift; sourceTree = "<group>"; };
 		E85BB1FB8EF66CBEB4C24DE7 /* MeetingNote.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingNote.swift; sourceTree = "<group>"; };
 		E86940D119C68C89BEF3B597 /* NookSnapshot */ = {isa = PBXFileReference; includeInIndex = 0; path = NookSnapshot; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -229,7 +230,6 @@
 			isa = PBXGroup;
 			children = (
 				2B35E9D093EB220A65D04B90 /* NookIconSource-Cobalt.png */,
-				05BF38BAD9331428D0B46D28 /* NookIconSource.png */,
 			);
 			path = Brand;
 			sourceTree = "<group>";
@@ -271,6 +271,7 @@
 				2A4476D46DFC63E2744F2D18 /* LiveMeetingView.swift */,
 				549867DEC08F499BC4C786C9 /* MeetingDetailView.swift */,
 				DEA407B4708D8AD7F0B06502 /* NookDesign.swift */,
+				E29043FB627EE55136C66892 /* NookNotesEditor.swift */,
 				C710DCF39272E4901FF787C9 /* NookPresence.swift */,
 				851C3C409ACA6E327A1C5D68 /* NookWindowBridge.swift */,
 				A7D40B68EE579A68D1A8722E /* NotchPanelCoordinator.swift */,
@@ -403,7 +404,6 @@
 			files = (
 				2BB3602A4B19FC4C05F0C451 /* Assets.xcassets in Resources */,
 				40BFD6BCAB1A1E74EC952472 /* NookIconSource-Cobalt.png in Resources */,
-				8EB928536B80E4989DA5C18D /* NookIconSource.png in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -434,6 +434,7 @@
 				A4A0E1DA0DDA1431733498E3 /* NookApp.swift in Sources */,
 				A7825C444D696A2890C5B3BF /* NookAppIntents.swift in Sources */,
 				AC0B668F3E59CB3A86210E47 /* NookDesign.swift in Sources */,
+				E7E699D2D6083507D634A792 /* NookNotesEditor.swift in Sources */,
 				8649F00502AF64153F77952E /* NookPermission.swift in Sources */,
 				FCB8D6CEEC082C7B55C99110 /* NookPresence.swift in Sources */,
 				315744AB436DD64BB694F908 /* NookUpdateController.swift in Sources */,
@@ -473,6 +474,7 @@
 				9901438495EE438AAF2BFC0D /* MeetingNotificationService.swift in Sources */,
 				60BECAC3A23D0BA1CFA5CE68 /* NookAppIntents.swift in Sources */,
 				1059013167E7B7AFAABCE5BB /* NookDesign.swift in Sources */,
+				A9E39DDD390C956A99971EF9 /* NookNotesEditor.swift in Sources */,
 				8EA62FBE67B79A580517A9A7 /* NookPermission.swift in Sources */,
 				B23F0F1F6C00C9746F57E285 /* NookPresence.swift in Sources */,
 				B6F52256AB772155E126E08F /* NookUpdateController.swift in Sources */,
@@ -563,7 +565,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -576,7 +578,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.6;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -655,7 +657,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -674,7 +676,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.6;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
