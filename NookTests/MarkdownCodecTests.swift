@@ -5,6 +5,218 @@ import Testing
 struct MarkdownCodecTests {
     @Test
     @MainActor
+    func majorMeetingProvidersDetectAndEndWithoutAWindowTitleChange() throws {
+        let fixtures: [(owner: String, title: String, appName: String)] = [
+            (
+                "Microsoft Teams",
+                "Meeting with Marc Obieglo | Microsoft Teams",
+                "Teams"
+            ),
+            ("zoom.us", "Weekly product sync", "Zoom"),
+            ("Google Chrome", "Meet - abc-defg-hij", "Google Meet"),
+            ("Safari", "Meet — abc-defg-hij", "Google Meet"),
+            ("Microsoft Edge", "Google Meet", "Google Meet"),
+            ("Firefox", "Meet – abc-defg-hij", "Google Meet"),
+            ("Webex", "Marco's Personal Room", "Webex"),
+            ("FaceTime", "Marc Obieglo", "FaceTime")
+        ]
+
+        for fixture in fixtures {
+            let detection = try #require(
+                MeetingDetector.detectionForTesting(
+                    owner: fixture.owner,
+                    title: fixture.title,
+                    audioActivity: .active
+                )
+            )
+            #expect(detection.appName == fixture.appName)
+
+            let detector = MeetingDetector()
+            var endCount = 0
+            detector.onMeetingEnded = { endCount += 1 }
+            detector.acceptForTesting(
+                detection,
+                audioActivity: .active
+            )
+            detector.acceptForTesting(
+                detection,
+                audioActivity: .active
+            )
+            #expect(detector.currentDetection == detection)
+
+            for _ in 0..<5 {
+                detector.acceptForTesting(
+                    detection,
+                    audioActivity: .inactive
+                )
+            }
+
+            #expect(detector.currentDetection == nil)
+            #expect(endCount == 1)
+
+            detector.acceptForTesting(
+                detection,
+                audioActivity: .inactive
+            )
+            detector.acceptForTesting(
+                detection,
+                audioActivity: .inactive
+            )
+            #expect(detector.currentDetection == nil)
+        }
+    }
+
+    @Test
+    @MainActor
+    func nativeMeetingAppsNeedAudioWhenTheirTitleIsAmbiguous() {
+        let ambiguousWindows = [
+            ("zoom.us", "Weekly product sync"),
+            ("Webex", "Marco's Personal Room"),
+            ("FaceTime", "Marc Obieglo")
+        ]
+
+        for window in ambiguousWindows {
+            #expect(
+                MeetingDetector.detectionForTesting(
+                    owner: window.0,
+                    title: window.1,
+                    audioActivity: .inactive
+                ) == nil
+            )
+            #expect(
+                MeetingDetector.detectionForTesting(
+                    owner: window.0,
+                    title: window.1,
+                    audioActivity: .active
+                ) != nil
+            )
+        }
+
+        #expect(
+            MeetingDetector.detectionForTesting(
+                owner: "FaceTime",
+                title: "FaceTime",
+                audioActivity: .inactive
+            ) == nil
+        )
+        #expect(
+            MeetingDetector.detectionForTesting(
+                owner: "Google Chrome",
+                title: "YouTube",
+                audioActivity: .active
+            ) == nil
+        )
+        #expect(
+            MeetingDetector.detectionForTesting(
+                owner: "Safari",
+                title: "Google Meet",
+                audioActivity: .inactive
+            ) == nil
+        )
+    }
+
+    @Test
+    @MainActor
+    func staleStrongMeetingWindowExpiresEvenWithoutObservedAudio() throws {
+        let detection = try #require(
+            MeetingDetector.detectionForTesting(
+                owner: "Microsoft Teams",
+                title: "Meeting with Marc Obieglo | Microsoft Teams",
+                audioActivity: .inactive
+            )
+        )
+        let detector = MeetingDetector()
+
+        detector.acceptForTesting(
+            detection,
+            audioActivity: .inactive
+        )
+        detector.acceptForTesting(
+            detection,
+            audioActivity: .inactive
+        )
+        #expect(detector.currentDetection == detection)
+
+        for _ in 0..<5 {
+            detector.acceptForTesting(
+                detection,
+                audioActivity: .inactive
+            )
+        }
+        #expect(detector.currentDetection == nil)
+
+        detector.acceptForTesting(
+            detection,
+            audioActivity: .inactive
+        )
+        detector.acceptForTesting(
+            detection,
+            audioActivity: .inactive
+        )
+        #expect(detector.currentDetection == nil)
+    }
+
+    @Test
+    @MainActor
+    func providerAudioProfilesCoverNativeAppsAndMajorBrowsers() {
+        let fixtures: [
+            (
+                owner: String,
+                title: String,
+                processIdentity: String
+            )
+        ] = [
+            (
+                "Microsoft Teams",
+                "Teams meeting",
+                "Microsoft Teams ModuleHost com.microsoft.teams2.modulehost"
+            ),
+            ("zoom.us", "Zoom Meeting", "zoom.us us.zoom.xos"),
+            (
+                "Google Chrome",
+                "Meet - abc-defg-hij",
+                "Google Chrome Helper com.google.Chrome.helper"
+            ),
+            (
+                "Safari",
+                "Google Meet",
+                "com.apple.WebKit.WebContent"
+            ),
+            (
+                "Microsoft Edge",
+                "Google Meet",
+                "Microsoft Edge Helper com.microsoft.edgemac.helper"
+            ),
+            (
+                "Firefox",
+                "Google Meet",
+                "FirefoxCP org.mozilla.firefox"
+            ),
+            (
+                "Webex",
+                "Webex Meeting",
+                "Webex com.cisco.webex2"
+            ),
+            (
+                "FaceTime",
+                "FaceTime call",
+                "FaceTime com.apple.FaceTime"
+            )
+        ]
+
+        for fixture in fixtures {
+            #expect(
+                MeetingDetector.audioIdentityMatchesForTesting(
+                    owner: fixture.owner,
+                    title: fixture.title,
+                    processIdentity: fixture.processIdentity
+                )
+            )
+        }
+    }
+
+    @Test
+    @MainActor
     func detectedMeetingEndsWhenTeamsAudioStopsButItsWindowRemains() {
         let detector = MeetingDetector()
         let meeting = DetectedMeeting(

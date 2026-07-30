@@ -83,12 +83,18 @@ evidence before decisions and actions are saved.
 
 Polls visible application/window signals every four seconds.
 
+- Provider profiles cover Teams, Zoom, Google Meet, Webex, FaceTime, Slack
+  Huddles, Around, and Whereby. Native apps with ambiguous window titles must
+  also have active audio; browsers always require meeting-specific title or
+  domain evidence.
+- Audio process matching includes a bounded parent-process walk so Safari
+  WebKit and native helper processes resolve back to the meeting app.
 - Two consecutive positive scans produce a detection.
 - Five consecutive window misses end the signal.
 - Core Audio process activity is a secondary end signal for apps such as Teams
   that can leave a meeting-titled window onscreen after the call has ended.
-  Five consecutive inactive scans are required, and only after active meeting
-  audio was observed.
+  Five consecutive inactive scans are required; the stale provider window then
+  remains suppressed until its audio becomes active again.
 - App/window patterns are intentionally conservative.
 
 There is no universal meeting-state API on macOS. Detection can therefore miss
