@@ -390,24 +390,26 @@ private protocol LiveAnalyzerInputConverting: AnyObject {
     func flush() throws -> [AnalyzerInput]
 }
 
-@available(macOS 27.0, *)
-private final class NativeLiveAnalyzerInputConverter:
-    LiveAnalyzerInputConverting
-{
-    private let converter: AnalyzerInputConverter
+#if compiler(>=6.4)
+    @available(macOS 27.0, *)
+    private final class NativeLiveAnalyzerInputConverter:
+        LiveAnalyzerInputConverting
+    {
+        private let converter: AnalyzerInputConverter
 
-    init(analyzerFormat: AVAudioFormat) {
-        converter = AnalyzerInputConverter(analyzerFormat: analyzerFormat)
-    }
+        init(analyzerFormat: AVAudioFormat) {
+            converter = AnalyzerInputConverter(analyzerFormat: analyzerFormat)
+        }
 
-    func convert(_ buffer: AVAudioPCMBuffer) throws -> [AnalyzerInput] {
-        try converter.convert(buffer, at: nil)
-    }
+        func convert(_ buffer: AVAudioPCMBuffer) throws -> [AnalyzerInput] {
+            try converter.convert(buffer, at: nil)
+        }
 
-    func flush() throws -> [AnalyzerInput] {
-        try converter.flush()
+        func flush() throws -> [AnalyzerInput] {
+            try converter.flush()
+        }
     }
-}
+#endif
 
 /// macOS 26 does not expose `AnalyzerInputConverter`. Exact-format buffers can
 /// still be passed through safely; other formats fall back to the saved-audio
@@ -436,11 +438,13 @@ private final class CompatibleLiveAnalyzerInputConverter:
 private func makeLiveInputConverter(
     analyzerFormat: AVAudioFormat
 ) -> any LiveAnalyzerInputConverting {
-    if #available(macOS 27.0, *) {
-        return NativeLiveAnalyzerInputConverter(
-            analyzerFormat: analyzerFormat
-        )
-    }
+    #if compiler(>=6.4)
+        if #available(macOS 27.0, *) {
+            return NativeLiveAnalyzerInputConverter(
+                analyzerFormat: analyzerFormat
+            )
+        }
+    #endif
     return CompatibleLiveAnalyzerInputConverter(
         analyzerFormat: analyzerFormat
     )
