@@ -159,6 +159,19 @@ struct MarkdownCodecTests {
     }
 
     @Test
+    func hiddenRecordingKeepsARecoverableCameraEdgeIndicator() {
+        let size = NotchPanelMetrics.bodySize(
+            for: .recording(title: "Design review", startedAt: .now),
+            showsCaptions: false,
+            panelMode: .transcript,
+            isHidden: true
+        )
+
+        #expect(size.width == 86)
+        #expect(size.height == 0)
+    }
+
+    @Test
     func detectedMeetingPromptStaysGlanceablyCompact() {
         let size = NotchPanelMetrics.bodySize(
             for: .detected(
@@ -408,6 +421,48 @@ struct MarkdownCodecTests {
         coordinator.restoreTopPanel()
         #expect(!coordinator.topPanelHidden)
         #expect(!coordinator.showLiveCaptions)
+    }
+
+    @Test
+    @MainActor
+    func statusMenuTracksRecordingCommandsWithoutFollowingTheClock() {
+        let store = MarkdownStore()
+        let coordinator = MeetingCoordinator(
+            store: store,
+            detector: MeetingDetector()
+        )
+        let state = StatusMenuState(
+            meeting: coordinator,
+            store: store
+        )
+
+        #expect(state.phase == .idle)
+
+        coordinator.setPreviewState(
+            phase: .recording(title: "Design review", startedAt: .now),
+            elapsed: 42,
+            liveTranscript: .empty,
+            audioLevel: 0.2
+        )
+
+        #expect(state.phase == .recording)
+        #expect(!state.isPaused)
+
+        coordinator.setPreviewState(
+            phase: .recording(title: "Design review", startedAt: .now),
+            elapsed: 84,
+            liveTranscript: .empty,
+            audioLevel: 0,
+            isPaused: true
+        )
+        coordinator.hideTopPanel()
+
+        #expect(state.phase == .recording)
+        #expect(state.isPaused)
+        #expect(state.topPanelHidden)
+
+        coordinator.restoreTopPanel()
+        #expect(!state.topPanelHidden)
     }
 
     @Test

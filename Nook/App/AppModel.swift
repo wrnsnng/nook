@@ -56,7 +56,9 @@ final class AppModel: ObservableObject {
             panel?.makeInteractive()
         }
         meeting.onPanelDismissRequested = { [weak panel] in
-            panel?.hide()
+            // "Fully hidden" keeps a tiny recording timer attached to the
+            // camera housing so the meeting can always be recovered.
+            panel?.show()
         }
         meeting.onMeetingNotificationRequested = { [weak notifications] detection in
             notifications?.present(detection)

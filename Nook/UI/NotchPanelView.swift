@@ -17,7 +17,8 @@ struct NotchPanelView: View {
         let preferred = NotchPanelMetrics.bodySize(
             for: meeting.phase,
             showsCaptions: meeting.showLiveCaptions,
-            panelMode: meeting.panelMode
+            panelMode: meeting.panelMode,
+            isHidden: meeting.topPanelHidden
         )
         return CGSize(
             width: min(preferred.width, geometry.maximumPanelWidth),
@@ -34,11 +35,19 @@ struct NotchPanelView: View {
     }
 
     private var isUltraCompact: Bool {
-        meeting.phase.isRecording && !meeting.showLiveCaptions
+        meeting.phase.isRecording
+            && !meeting.showLiveCaptions
+            && !meeting.topPanelHidden
     }
 
     private var isExpandedRecording: Bool {
-        meeting.phase.isRecording && meeting.showLiveCaptions
+        meeting.phase.isRecording
+            && meeting.showLiveCaptions
+            && !meeting.topPanelHidden
+    }
+
+    private var isHiddenRecording: Bool {
+        meeting.phase.isRecording && meeting.topPanelHidden
     }
 
     private var isDetected: Bool {
@@ -67,6 +76,49 @@ struct NotchPanelView: View {
     }
 
     var body: some View {
+        Group {
+            if isHiddenRecording {
+                hiddenRecordingIndicator
+            } else {
+                standardPanel
+            }
+        }
+        .frame(
+            width: bodySize.width,
+            height: totalHeight,
+            alignment: .top
+        )
+        .animation(
+            shellAnimation,
+            value: meeting.phase
+        )
+        .animation(
+            shellAnimation,
+            value: meeting.showLiveCaptions
+        )
+        .animation(
+            shellAnimation,
+            value: meeting.panelMode
+        )
+        .animation(
+            shellAnimation,
+            value: meeting.topPanelHidden
+        )
+        // The physical camera housing is the material. Keeping this surface
+        // edge-black in both app appearances makes it read as part of the
+        // display bezel instead of another themed window.
+        .environment(\.colorScheme, .dark)
+        .tint(NookPalette.accentHighlight)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(
+            isHiddenRecording
+                ? "Nook recording indicator"
+                : "Nook meeting panel"
+        )
+        .accessibilityIdentifier("nook.notchPanel")
+    }
+
+    private var standardPanel: some View {
         shellContent
             .background(edgeShellGradient, in: shellShape)
             .overlay {
@@ -84,37 +136,79 @@ struct NotchPanelView: View {
                 radius: isHovering ? 18 : 12,
                 y: isHovering ? 8 : 5
             )
+            .contentShape(shellShape)
+            .onHover(perform: updateHoverState)
+    }
+
+    private var hiddenRecordingIndicator: some View {
+        hiddenRestoreButton(
+            attachedToCamera: geometry.cameraHousingWidth > 1
+        )
         .frame(
             width: bodySize.width,
             height: totalHeight,
             alignment: .top
         )
-        .contentShape(shellShape)
-        .onHover { hovering in
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
-                isHovering = hovering
+    }
+
+    private func hiddenRestoreButton(attachedToCamera: Bool) -> some View {
+        Button {
+            meeting.restoreTopPanel()
+        } label: {
+            HStack(spacing: 6) {
+                Text(elapsedLabel)
+                    .font(NookType.code)
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
+
+                Circle()
+                    .fill(
+                        meeting.isPaused
+                            ? NookPalette.warning
+                            : NookPalette.danger
+                    )
+                    .frame(width: 6, height: 6)
+                    .shadow(
+                        color: (
+                            meeting.isPaused
+                                ? NookPalette.warning
+                                : NookPalette.danger
+                        ).opacity(0.45),
+                        radius: 3
+                    )
             }
+            .foregroundStyle(.white.opacity(isHovering ? 1 : 0.86))
+            .frame(width: 86, height: geometry.topInset)
+            .background {
+                UnevenRoundedRectangle(
+                    topLeadingRadius: attachedToCamera ? 0 : 8,
+                    bottomLeadingRadius: attachedToCamera ? 0 : 8,
+                    bottomTrailingRadius: 8,
+                    topTrailingRadius: attachedToCamera ? 0 : 8,
+                    style: .continuous
+                )
+                .fill(Color.black.opacity(isHovering ? 1 : 0.97))
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(.white.opacity(isHovering ? 0.10 : 0.045))
+                        .frame(height: 0.5)
+                }
+            }
+            .contentShape(Rectangle())
         }
-        .animation(
-            shellAnimation,
-            value: meeting.phase
+        .buttonStyle(HiddenRecordingIndicatorStyle())
+        .help("Show meeting panel")
+        .accessibilityLabel(
+            "\(meeting.isPaused ? "Recording paused" : "Recording"), \(elapsedSpokenLabel). Show meeting panel"
         )
-        .animation(
-            shellAnimation,
-            value: meeting.showLiveCaptions
-        )
-        .animation(
-            shellAnimation,
-            value: meeting.panelMode
-        )
-        // The physical camera housing is the material. Keeping this surface
-        // edge-black in both app appearances makes it read as part of the
-        // display bezel instead of another themed window.
-        .environment(\.colorScheme, .dark)
-        .tint(NookPalette.accentHighlight)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Nook meeting panel")
-        .accessibilityIdentifier("nook.notchPanel")
+        .accessibilityHint("Restores the compact recording controls")
+        .onHover(perform: updateHoverState)
+    }
+
+    private func updateHoverState(_ hovering: Bool) {
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+            isHovering = hovering
+        }
     }
 
     private var edgeShellGradient: LinearGradient {
@@ -463,6 +557,12 @@ struct NotchPanelView: View {
 
             HStack(spacing: 2) {
                 CompactMeetingControl(
+                    symbol: "chevron.up",
+                    label: "Hide top panel",
+                    action: meeting.hideTopPanel
+                )
+
+                CompactMeetingControl(
                     symbol: meeting.isPaused ? "play.fill" : "pause.fill",
                     label: meeting.isPaused
                         ? "Resume recording"
@@ -480,24 +580,6 @@ struct NotchPanelView: View {
                 )
                 .disabled(meeting.pauseTransitionInFlight)
             }
-        }
-        .overlay(alignment: .bottom) {
-            Button {
-                meeting.hideTopPanel()
-            } label: {
-                VStack(spacing: 0) {
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.up")
-                        .font(.system(size: 6, weight: .bold))
-                        .foregroundStyle(.secondary.opacity(0.66))
-                        .padding(.bottom, 2)
-                }
-                .frame(width: 52, height: 24)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("Hide top panel")
-            .accessibilityLabel("Hide top panel")
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(
@@ -846,6 +928,18 @@ private struct EdgeSymbolButtonStyle: ButtonStyle {
     }
 }
 
+private struct HiddenRecordingIndicatorStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.82 : 1)
+            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            .animation(
+                .timingCurve(0.22, 1, 0.36, 1, duration: 0.12),
+                value: configuration.isPressed
+            )
+    }
+}
+
 private struct CompactMeetingControl: View {
     let symbol: String
     let label: String
@@ -881,7 +975,7 @@ private struct CompactMeetingControlStyle: ButtonStyle {
         configuration.label
             .font(.system(size: 10, weight: .semibold))
             .foregroundStyle(tint ?? Color.white.opacity(0.92))
-            .frame(width: 22, height: 22)
+            .frame(width: 26, height: 24)
             .background(
                 .primary.opacity(configuration.isPressed ? 0.13 : 0.001),
                 in: RoundedRectangle(cornerRadius: 5, style: .continuous)

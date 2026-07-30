@@ -1,10 +1,11 @@
 import AppKit
+import Combine
 import SwiftUI
 
 struct StatusMenuView: View {
     @EnvironmentObject private var updater: NookUpdateController
     @Environment(\.openSettings) private var openSettings
-    @State private var snapshot = StatusMenuSnapshot()
+    @StateObject private var state = StatusMenuState()
 
     var body: some View {
         Group {
@@ -42,9 +43,9 @@ struct StatusMenuView: View {
                 Label("Open notes folder", systemImage: "folder")
             }
 
-            if !snapshot.recentNotes.isEmpty {
+            if !state.recentNotes.isEmpty {
                 Menu("Recent meetings") {
-                    ForEach(snapshot.recentNotes) { note in
+                    ForEach(state.recentNotes) { note in
                         Button(note.title) {
                             AppModel.shared.store.reveal(note)
                         }
@@ -70,17 +71,11 @@ struct StatusMenuView: View {
             }
             .keyboardShortcut("q")
         }
-        // MenuBarExtra hosts native NSMenu items. Taking one immutable snapshot
-        // when the menu opens prevents the one-second recording clock from
-        // rebuilding and moving those items underneath the pointer.
-        .onAppear {
-            snapshot = StatusMenuSnapshot.capture()
-        }
     }
 
     @ViewBuilder
     private var meetingCommands: some View {
-        switch snapshot.phase {
+        switch state.phase {
         case .recording:
             recordingCommands
         case .processing(let step):
@@ -93,7 +88,7 @@ struct StatusMenuView: View {
                         systemImage: "trash"
                     )
                 }
-                .disabled(!snapshot.canCancelProcessing)
+                .disabled(!state.canCancelProcessing)
             }
         case .detected(let detection):
             Button {
@@ -138,14 +133,14 @@ struct StatusMenuView: View {
                 AppModel.shared.meeting.togglePause()
             } label: {
                 Label(
-                    snapshot.isPaused ? "Resume recording" : "Pause recording",
-                    systemImage: snapshot.isPaused
+                    state.isPaused ? "Resume recording" : "Pause recording",
+                    systemImage: state.isPaused
                         ? "play.circle"
                         : "pause.circle"
                 )
             }
             .keyboardShortcut("p", modifiers: [.command, .shift])
-            .disabled(snapshot.pauseTransitionInFlight)
+            .disabled(state.pauseTransitionInFlight)
 
             Button {
                 AppModel.shared.meeting.stopRecording()
@@ -153,11 +148,11 @@ struct StatusMenuView: View {
                 Label("Finish meeting", systemImage: "stop.circle.fill")
             }
             .keyboardShortcut(".", modifiers: [.command, .shift])
-            .disabled(snapshot.pauseTransitionInFlight)
+            .disabled(state.pauseTransitionInFlight)
 
             Divider()
 
-            if snapshot.topPanelHidden {
+            if state.topPanelHidden {
                 Button {
                     AppModel.shared.meeting.restoreTopPanel()
                 } label: {
@@ -165,17 +160,17 @@ struct StatusMenuView: View {
                 }
             } else {
                 Button {
-                    if snapshot.showsWorkspace {
+                    if state.showsWorkspace {
                         AppModel.shared.meeting.collapseTopPanel()
                     } else {
                         AppModel.shared.meeting.expandTopPanel()
                     }
                 } label: {
                     Label(
-                        snapshot.showsWorkspace
+                        state.showsWorkspace
                             ? "Collapse top panel"
                             : "Expand top panel",
-                        systemImage: snapshot.showsWorkspace
+                        systemImage: state.showsWorkspace
                             ? "rectangle.compress.vertical"
                             : "rectangle.expand.vertical"
                     )
@@ -187,7 +182,7 @@ struct StatusMenuView: View {
                     Label("Hide top panel", systemImage: "rectangle.slash")
                 }
 
-                if snapshot.showsWorkspace {
+                if state.showsWorkspace {
                     Menu("Workspace view") {
                         ForEach(MeetingPanelMode.allCases) { mode in
                             Button {
@@ -195,7 +190,7 @@ struct StatusMenuView: View {
                             } label: {
                                 Label(
                                     mode.label,
-                                    systemImage: snapshot.panelMode == mode
+                                    systemImage: state.panelMode == mode
                                         ? "checkmark"
                                         : mode.symbol
                                 )
@@ -218,16 +213,16 @@ struct StatusMenuView: View {
 
     @ViewBuilder
     private var statusHeader: some View {
-        switch snapshot.phase {
+        switch state.phase {
         case .recording:
             Label(
-                "\(snapshot.isPaused ? "Recording paused" : "Recording") · \(snapshot.elapsedLabel)",
-                systemImage: snapshot.isPaused
+                state.isPaused ? "Recording paused" : "Recording",
+                systemImage: state.isPaused
                     ? "pause.circle.fill"
                     : "record.circle.fill"
             )
             .foregroundStyle(
-                snapshot.isPaused ? NookPalette.warning : NookPalette.danger
+                state.isPaused ? NookPalette.warning : NookPalette.danger
             )
             .disabled(true)
         case .processing(let step):
@@ -260,42 +255,108 @@ struct StatusMenuView: View {
     }
 }
 
-private struct StatusMenuSnapshot {
-    var phase: MeetingPhase = .idle
-    var elapsed: TimeInterval = 0
-    var isPaused = false
-    var pauseTransitionInFlight = false
-    var showsWorkspace = true
-    var topPanelHidden = false
-    var panelMode: MeetingPanelMode = .transcript
-    var canCancelProcessing = false
-    var recentNotes: [MeetingNote] = []
+enum StatusMenuPhase: Equatable {
+    case idle
+    case detected(DetectedMeeting)
+    case recording
+    case processing(MeetingPhase.ProcessingStep)
+    case completed
+    case failed
 
-    var elapsedLabel: String {
-        let total = Int(elapsed)
-        if total >= 3_600 {
-            return String(
-                format: "%02d:%02d",
-                total / 3_600,
-                (total / 60) % 60
-            )
+    init(_ phase: MeetingPhase) {
+        switch phase {
+        case .idle:
+            self = .idle
+        case .detected(let detection):
+            self = .detected(detection)
+        case .recording:
+            self = .recording
+        case .processing(let step):
+            self = .processing(step)
+        case .completed:
+            self = .completed
+        case .failed:
+            self = .failed
         }
-        return String(format: "%02d:%02d", total / 60, total % 60)
     }
+}
 
-    @MainActor
-    static func capture() -> Self {
-        let model = AppModel.shared
-        return Self(
-            phase: model.meeting.phase,
-            elapsed: model.meeting.elapsed,
-            isPaused: model.meeting.isPaused,
-            pauseTransitionInFlight: model.meeting.pauseTransitionInFlight,
-            showsWorkspace: model.meeting.showLiveCaptions,
-            topPanelHidden: model.meeting.topPanelHidden,
-            panelMode: model.meeting.panelMode,
-            canCancelProcessing: model.meeting.canCancelProcessing,
-            recentNotes: Array(model.store.notes.prefix(5))
-        )
+/// A deliberately low-frequency model for the native status menu.
+///
+/// The recording clock lives in the menu-bar label. Subscribing the menu
+/// itself to that clock causes AppKit to rebuild and move menu items while the
+/// pointer is over them, so this model observes only state that changes the
+/// available commands.
+@MainActor
+final class StatusMenuState: ObservableObject {
+    @Published private(set) var phase: StatusMenuPhase
+    @Published private(set) var isPaused: Bool
+    @Published private(set) var pauseTransitionInFlight: Bool
+    @Published private(set) var showsWorkspace: Bool
+    @Published private(set) var topPanelHidden: Bool
+    @Published private(set) var panelMode: MeetingPanelMode
+    @Published private(set) var canCancelProcessing: Bool
+    @Published private(set) var recentNotes: [MeetingNote]
+
+    private var cancellables: Set<AnyCancellable> = []
+
+    init(
+        meeting: MeetingCoordinator = AppModel.shared.meeting,
+        store: MarkdownStore = AppModel.shared.store
+    ) {
+        phase = StatusMenuPhase(meeting.phase)
+        isPaused = meeting.isPaused
+        pauseTransitionInFlight = meeting.pauseTransitionInFlight
+        showsWorkspace = meeting.showLiveCaptions
+        topPanelHidden = meeting.topPanelHidden
+        panelMode = meeting.panelMode
+        canCancelProcessing = meeting.canCancelProcessing
+        recentNotes = Array(store.notes.prefix(5))
+
+        meeting.$phase
+            .map(StatusMenuPhase.init)
+            .removeDuplicates()
+            .sink { [weak self, weak meeting] phase in
+                self?.phase = phase
+                Task { @MainActor [weak self, weak meeting] in
+                    // @Published emits in willSet. Yield once before reading
+                    // the coordinator's derived processing capability.
+                    await Task.yield()
+                    self?.canCancelProcessing =
+                        meeting?.canCancelProcessing ?? false
+                }
+            }
+            .store(in: &cancellables)
+
+        meeting.$isPaused
+            .removeDuplicates()
+            .sink { [weak self] in self?.isPaused = $0 }
+            .store(in: &cancellables)
+
+        meeting.$pauseTransitionInFlight
+            .removeDuplicates()
+            .sink { [weak self] in self?.pauseTransitionInFlight = $0 }
+            .store(in: &cancellables)
+
+        meeting.$showLiveCaptions
+            .removeDuplicates()
+            .sink { [weak self] in self?.showsWorkspace = $0 }
+            .store(in: &cancellables)
+
+        meeting.$topPanelHidden
+            .removeDuplicates()
+            .sink { [weak self] in self?.topPanelHidden = $0 }
+            .store(in: &cancellables)
+
+        meeting.$panelMode
+            .removeDuplicates()
+            .sink { [weak self] in self?.panelMode = $0 }
+            .store(in: &cancellables)
+
+        store.$notes
+            .map { Array($0.prefix(5)) }
+            .removeDuplicates()
+            .sink { [weak self] in self?.recentNotes = $0 }
+            .store(in: &cancellables)
     }
 }

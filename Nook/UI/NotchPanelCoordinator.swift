@@ -14,8 +14,13 @@ enum NotchPanelMetrics {
     static func bodySize(
         for phase: MeetingPhase,
         showsCaptions: Bool,
-        panelMode: MeetingPanelMode
+        panelMode: MeetingPanelMode,
+        isHidden: Bool = false
     ) -> CGSize {
+        if phase.isRecording, isHidden {
+            return CGSize(width: 86, height: 0)
+        }
+
         switch phase {
         case .idle:
             return CGSize(width: 336, height: 54)
@@ -99,10 +104,6 @@ final class NotchPanelCoordinator {
 
     func show() {
         hideTask?.cancel()
-        if meeting.phase.isRecording, meeting.topPanelHidden {
-            panel.orderOut(nil)
-            return
-        }
         let wasVisible = panel.isVisible
         if !wasVisible, shouldAnimate {
             geometry.revealProgress = 0
@@ -198,16 +199,12 @@ final class NotchPanelCoordinator {
         panelMode: MeetingPanelMode,
         isHidden: Bool
     ) {
-        if phase.isRecording, isHidden {
-            hide()
-            return
-        }
-
         updateLayout(
             animated: panel.isVisible,
             phase: phase,
             showsCaptions: showsCaptions,
-            panelMode: panelMode
+            panelMode: panelMode,
+            isHidden: isHidden
         )
 
         if case .detected = phase, panel.isVisible {
@@ -244,15 +241,19 @@ final class NotchPanelCoordinator {
         animated: Bool,
         phase: MeetingPhase? = nil,
         showsCaptions: Bool? = nil,
-        panelMode: MeetingPanelMode? = nil
+        panelMode: MeetingPanelMode? = nil,
+        isHidden: Bool? = nil
     ) {
         guard let screen = targetScreen else { return }
         updateGeometry(for: screen)
 
+        let resolvedPhase = phase ?? meeting.phase
+        let resolvedHidden = isHidden ?? meeting.topPanelHidden
         let bodySize = NotchPanelMetrics.bodySize(
-            for: phase ?? meeting.phase,
+            for: resolvedPhase,
             showsCaptions: showsCaptions ?? meeting.showLiveCaptions,
-            panelMode: panelMode ?? meeting.panelMode
+            panelMode: panelMode ?? meeting.panelMode,
+            isHidden: resolvedHidden
         )
         let scale = max(1, screen.backingScaleFactor)
         let resolvedWidth = pixelAligned(
@@ -268,7 +269,12 @@ final class NotchPanelCoordinator {
         )
         let frame = NSRect(
             x: pixelAligned(
-                screen.frame.midX - size.width / 2,
+                hiddenIndicatorOriginX(
+                    for: screen,
+                    size: size,
+                    phase: resolvedPhase,
+                    isHidden: resolvedHidden
+                ),
                 scale: scale
             ),
             y: pixelAligned(
@@ -308,6 +314,22 @@ final class NotchPanelCoordinator {
                 self.panel.setFrame(frame, display: true)
             }
         }
+    }
+
+    private func hiddenIndicatorOriginX(
+        for screen: NSScreen,
+        size: NSSize,
+        phase: MeetingPhase,
+        isHidden: Bool
+    ) -> CGFloat {
+        guard
+            phase.isRecording,
+            isHidden,
+            geometry.cameraHousingWidth > 1
+        else {
+            return screen.frame.midX - size.width / 2
+        }
+        return screen.frame.midX + geometry.cameraHousingWidth / 2
     }
 
     private var targetScreen: NSScreen? {
