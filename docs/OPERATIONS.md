@@ -85,12 +85,20 @@ The script:
 6. Packages the notarized app for Sparkle.
 7. Generates signed deltas from retained releases.
 8. Generates and signs `appcast.xml`.
-9. Publishes the complete feed snapshot under the new version tag.
-10. Replaces the stable `updates/appcast.xml` asset.
+9. Publishes only the current versioned archive and stable `Nook.zip` alias
+   under the new version tag.
+10. Publishes the complete historical feed snapshot and signed appcast under
+    the stable `updates` tag.
 
-The complete feed snapshot is intentionally uploaded with each release because
-`generate_appcast` rewrites retained enclosure URLs to the current download
-prefix.
+Human-facing version releases contain only:
+
+- `Nook-<version>.zip`, the versioned notarized archive.
+- `Nook.zip`, a stable alias for
+  `https://github.com/wrnsnng/nook-releases/releases/latest/download/Nook.zip`.
+
+Historical archives, deltas, and the signed appcast live on the dedicated
+`updates` release. This keeps the latest release unambiguous without breaking
+Sparkle update paths.
 
 ## Release verification
 

@@ -62,6 +62,7 @@ BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Contents/
 UPDATE_ARCHIVE="$FEED_DIR/Nook-$VERSION.zip"
 SUBMISSION_ARCHIVE="$DIST_DIR/Nook-$VERSION-notary-submit.zip"
 FINAL_ARCHIVE="$DIST_DIR/Nook-$VERSION-notarized.zip"
+STABLE_ARCHIVE="$DIST_DIR/Nook.zip"
 
 mkdir -p "$FEED_DIR" "$DIST_DIR"
 
@@ -83,6 +84,8 @@ xcrun stapler validate "$APP_PATH"
 
 /usr/bin/ditto -c -k --keepParent "$APP_PATH" "$UPDATE_ARCHIVE"
 /usr/bin/ditto "$UPDATE_ARCHIVE" "$FINAL_ARCHIVE"
+/bin/rm -f "$STABLE_ARCHIVE"
+/usr/bin/ditto "$UPDATE_ARCHIVE" "$STABLE_ARCHIVE"
 
 SPARKLE_TOOL_ROOT="${NOOK_SPARKLE_TOOL_ROOT:-$PROJECT_DIR/DerivedData/SourcePackages/artifacts/sparkle/Sparkle/bin}"
 GENERATE_APPCAST="$SPARKLE_TOOL_ROOT/generate_appcast"
@@ -104,7 +107,7 @@ if [[ -n "$RELEASE_NOTES_PATH" ]]; then
   /usr/bin/ditto "$RELEASE_NOTES_PATH" "$FEED_DIR/Nook-$VERSION.md"
 fi
 
-DOWNLOAD_PREFIX="https://github.com/$RELEASE_REPOSITORY/releases/download/v$VERSION/"
+DOWNLOAD_PREFIX="https://github.com/$RELEASE_REPOSITORY/releases/download/updates/"
 "$GENERATE_APPCAST" \
   --account "$SPARKLE_KEY_ACCOUNT" \
   --download-url-prefix "$DOWNLOAD_PREFIX" \
@@ -147,20 +150,24 @@ if [[ "$VISIBILITY" != "PUBLIC" ]]; then
   exit 69
 fi
 
-RELEASE_ASSETS=(
+VERSION_RELEASE_ASSETS=(
+  "$UPDATE_ARCHIVE"
+  "$STABLE_ARCHIVE"
+)
+FEED_RELEASE_ASSETS=(
   "$FEED_DIR"/*.zip(N)
   "$FEED_DIR"/*.delta(N)
+  "$FEED_DIR/appcast.xml"
 )
-if (( ${#RELEASE_ASSETS[@]} == 0 )); then
+if (( ${#FEED_RELEASE_ASSETS[@]} == 0 )); then
   echo "No Sparkle update archives or deltas were generated." >&2
   exit 66
 fi
 
-# generate_appcast rewrites every enclosure to the current download prefix,
-# including retained versions and generated deltas. Publish the complete feed
-# snapshot so every URL in the signed appcast resolves from the release tag.
+# Keep the human-facing release deliberately simple: the versioned archive and
+# a stable Nook.zip alias used by /releases/latest/download/Nook.zip.
 if gh release view "v$VERSION" --repo "$RELEASE_REPOSITORY" >/dev/null 2>&1; then
-  gh release upload "v$VERSION" "${RELEASE_ASSETS[@]}" \
+  gh release upload "v$VERSION" "${VERSION_RELEASE_ASSETS[@]}" \
     --repo "$RELEASE_REPOSITORY" \
     --clobber
 else
@@ -170,18 +177,21 @@ else
   else
     NOTES_ARGUMENTS=(--notes "Nook $VERSION")
   fi
-  gh release create "v$VERSION" "${RELEASE_ASSETS[@]}" \
+  gh release create "v$VERSION" "${VERSION_RELEASE_ASSETS[@]}" \
     --repo "$RELEASE_REPOSITORY" \
     --title "Nook $VERSION" \
     "${NOTES_ARGUMENTS[@]}"
 fi
 
+# Historical archives and deltas live on the dedicated OTA release. The signed
+# appcast uses this stable tag, so publishing a new version never exposes old
+# installers on the latest human-facing release.
 if gh release view updates --repo "$RELEASE_REPOSITORY" >/dev/null 2>&1; then
-  gh release upload updates "$FEED_DIR/appcast.xml" \
+  gh release upload updates "${FEED_RELEASE_ASSETS[@]}" \
     --repo "$RELEASE_REPOSITORY" \
     --clobber
 else
-  gh release create updates "$FEED_DIR/appcast.xml" \
+  gh release create updates "${FEED_RELEASE_ASSETS[@]}" \
     --repo "$RELEASE_REPOSITORY" \
     --title "Nook automatic updates" \
     --notes "Stable Sparkle update feed for Nook."

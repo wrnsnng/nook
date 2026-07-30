@@ -67,9 +67,9 @@ If screen-audio permission is changed, quit and relaunch Nook before trying agai
 
 ## Testing a distributed build
 
-Download the latest archive from the public
-[Nook releases](https://github.com/wrnsnng/nook-releases/releases), extract it,
-and move `Nook.app` to `/Applications` before opening it. Do not keep an older
+Download the
+[latest Nook archive](https://github.com/wrnsnng/nook-releases/releases/latest/download/Nook.zip),
+extract it, and move `Nook.app` to `/Applications` before opening it. Do not keep an older
 copy of Nook in Downloads or another Applications folder because Launch
 Services may open the wrong build.
 
