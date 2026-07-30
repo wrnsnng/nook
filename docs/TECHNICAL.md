@@ -84,7 +84,11 @@ evidence before decisions and actions are saved.
 Polls visible application/window signals every four seconds.
 
 - Two consecutive positive scans produce a detection.
-- Five consecutive misses end the signal.
+- Five consecutive window misses end the signal.
+- Core Audio process activity is a secondary end signal for apps such as Teams
+  that can leave a meeting-titled window onscreen after the call has ended.
+  Five consecutive inactive scans are required, and only after active meeting
+  audio was observed.
 - App/window patterns are intentionally conservative.
 
 There is no universal meeting-state API on macOS. Detection can therefore miss

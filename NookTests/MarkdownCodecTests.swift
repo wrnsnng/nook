@@ -4,6 +4,73 @@ import Testing
 
 struct MarkdownCodecTests {
     @Test
+    @MainActor
+    func detectedMeetingEndsWhenTeamsAudioStopsButItsWindowRemains() {
+        let detector = MeetingDetector()
+        let meeting = DetectedMeeting(
+            appName: "Teams",
+            windowTitle: "Meeting with Marc Obieglo | Microsoft Teams"
+        )
+        var startedMeeting: DetectedMeeting?
+        var endCount = 0
+        detector.onMeetingStarted = { startedMeeting = $0 }
+        detector.onMeetingEnded = { endCount += 1 }
+
+        detector.acceptForTesting(meeting, audioActivity: .active)
+        detector.acceptForTesting(meeting, audioActivity: .active)
+
+        #expect(detector.currentDetection == meeting)
+        #expect(startedMeeting == meeting)
+
+        for _ in 0..<4 {
+            detector.acceptForTesting(meeting, audioActivity: .inactive)
+        }
+        #expect(detector.currentDetection == meeting)
+        #expect(endCount == 0)
+
+        detector.acceptForTesting(meeting, audioActivity: .inactive)
+
+        #expect(detector.currentDetection == nil)
+        #expect(endCount == 1)
+    }
+
+    @Test
+    @MainActor
+    func anIgnoredMeetingCanBeDetectedAgainAfterItsAudioEnds() {
+        let detector = MeetingDetector()
+        let coordinator = MeetingCoordinator(
+            store: MarkdownStore(),
+            detector: detector
+        )
+        let meeting = DetectedMeeting(
+            appName: "Teams",
+            windowTitle: "Design review | Microsoft Teams"
+        )
+
+        detector.acceptForTesting(meeting, audioActivity: .active)
+        detector.acceptForTesting(meeting, audioActivity: .active)
+        #expect(coordinator.phase == .detected(meeting))
+
+        coordinator.dismissPrompt()
+        #expect(coordinator.phase == .idle)
+
+        for _ in 0..<5 {
+            detector.acceptForTesting(meeting, audioActivity: .inactive)
+        }
+        #expect(detector.currentDetection == nil)
+        #expect(coordinator.phase == .idle)
+
+        detector.acceptForTesting(meeting, audioActivity: .inactive)
+        detector.acceptForTesting(meeting, audioActivity: .inactive)
+        #expect(detector.currentDetection == nil)
+        #expect(coordinator.phase == .idle)
+
+        detector.acceptForTesting(meeting, audioActivity: .active)
+        detector.acceptForTesting(meeting, audioActivity: .active)
+        #expect(coordinator.phase == .detected(meeting))
+    }
+
+    @Test
     func updateFeedUsesThePublicReleaseRepository() {
         #expect(
             NookUpdateFeed.appcastURLString

@@ -106,7 +106,9 @@ There is no shared public API through which every meeting app reports call state
 Detection is deliberately conservative:
 
 - Two positive scans are required before the prompt appears.
-- Five missed scans are required before Nook considers the meeting ended.
+- Five missed window scans are required before Nook considers the meeting ended.
+- If an app leaves its meeting window open, five inactive app-audio scans also
+  end the detection after Nook has observed that meeting's audio running.
 - Manual recording is always available from the menu bar with `⇧⌘R`.
 
 Window names can change when meeting apps update. Add or adjust patterns in `MeetingDetector.swift` when necessary.
