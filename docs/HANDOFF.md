@@ -4,16 +4,17 @@ Last updated: 30 July 2026
 
 ## Current state
 
-Nook 1.6.1 (build 9) is the current public release.
+Nook 1.6.2 (build 10) is the current public release.
 
 - Apple notarization accepted and ticket stapled.
 - Gatekeeper accepts the distributed app.
-- Stable Sparkle feed advertises 1.6.1 (9).
-- Full archive and build-8-to-9 delta are public.
+- Stable Sparkle feed advertises 1.6.2 (10).
+- Full archive and build-9-to-10 delta are public.
+- Release builds come from stable Xcode 26 and the macOS 26.5 SDK.
 - 36 automated tests pass.
 - Current source work is on `agent/release-nook-1-6`.
 - Draft PR: `https://github.com/wrnsnng/nook/pull/1`
-- Release: `https://github.com/wrnsnng/nook-releases/releases/tag/v1.6.1`
+- Release: `https://github.com/wrnsnng/nook-releases/releases/tag/v1.6.2`
 
 ## What is working
 
@@ -45,8 +46,8 @@ Nook 1.6.1 (build 9) is the current public release.
    deterministic fallback remains necessary.
 5. **Screen permission requires relaunch.** Preserve the pending meeting start
    through that relaunch.
-6. **Signing identity is part of permission behavior.** Do not distribute
-   ad-hoc builds for permission testing.
+6. **Signing identity and toolchain are part of distribution behavior.** Do
+   not distribute ad-hoc builds or builds produced with beta Xcode.
 7. **The top panel is display-specific.** Always test a notched MacBook and a
    non-notched external display.
 8. **macOS 26 is the current minimum.** Supporting older systems would require
@@ -92,9 +93,11 @@ Nook 1.6.1 (build 9) is the current public release.
 
 ### Update flow
 
-- [ ] A notarized 1.6 build detects 1.6.1.
-- [ ] Delta update succeeds from build 8 to build 9.
-- [ ] App relaunches as 1.6.1 (9).
+- [ ] A notarized 1.6.1 build detects 1.6.2.
+- [ ] Delta update succeeds from build 9 to build 10.
+- [ ] App relaunches as 1.6.2 (10).
+- [ ] Fresh download opens normally on macOS 26.5.1 without a Gatekeeper
+      override.
 - [ ] Existing Microphone, Speech, and Screen Capture grants remain valid.
 - [ ] Dock icon remains cobalt after update.
 

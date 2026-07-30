@@ -131,14 +131,14 @@ Compare the local archive SHA-256 with the GitHub release asset digest.
 
 As of 30 July 2026:
 
-- Version: **1.6.1**
-- Build: **9**
+- Version: **1.6.2**
+- Build: **10**
 - Release:
-  `https://github.com/wrnsnng/nook-releases/releases/tag/v1.6.1`
+  `https://github.com/wrnsnng/nook-releases/releases/tag/v1.6.2`
 - Notarization submission:
-  `d814fc6d-87b3-410a-8420-74e3c4b742e4`
-- Status: accepted, stapled, Gatekeeper accepted
-- Sparkle delta from build 8: published
+  `ce244aad-0ac4-4c5b-bef6-a3b7ca938305`
+- Status: stable Xcode 26 build; accepted, stapled, Gatekeeper accepted
+- Sparkle delta from build 9: published
 - Test suite: 36 passing tests
 
 ## Privacy-permission QA
