@@ -68,9 +68,12 @@ final class NotchPanelCoordinator {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
-        panel.level = .statusBar
         panel.hidesOnDeactivate = false
         panel.isFloatingPanel = true
+        // `isFloatingPanel` resets an NSPanel to the ordinary floating level.
+        // Apply the status-bar level afterwards so the edge surface remains
+        // above the menu bar instead of being composited behind it.
+        panel.level = .statusBar
         panel.becomesKeyOnlyIfNeeded = true
         panel.acceptsMouseMovedEvents = true
         panel.collectionBehavior = [
@@ -362,4 +365,15 @@ final class NotchPanelCoordinator {
 
 private final class NookTopPanel: NSPanel {
     override var canBecomeKey: Bool { true }
+
+    override func constrainFrameRect(
+        _ frameRect: NSRect,
+        to screen: NSScreen?
+    ) -> NSRect {
+        // AppKit normally keeps windows below the menu bar, even when their
+        // requested frame is anchored to NSScreen.frame.maxY. Nook is an
+        // intentional screen-edge surface, so preserve the coordinator's
+        // absolute display coordinates instead of snapping to visibleFrame.
+        frameRect
+    }
 }
