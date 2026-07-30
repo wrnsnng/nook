@@ -147,8 +147,20 @@ if [[ "$VISIBILITY" != "PUBLIC" ]]; then
   exit 69
 fi
 
+RELEASE_ASSETS=(
+  "$FEED_DIR"/*.zip(N)
+  "$FEED_DIR"/*.delta(N)
+)
+if (( ${#RELEASE_ASSETS[@]} == 0 )); then
+  echo "No Sparkle update archives or deltas were generated." >&2
+  exit 66
+fi
+
+# generate_appcast rewrites every enclosure to the current download prefix,
+# including retained versions and generated deltas. Publish the complete feed
+# snapshot so every URL in the signed appcast resolves from the release tag.
 if gh release view "v$VERSION" --repo "$RELEASE_REPOSITORY" >/dev/null 2>&1; then
-  gh release upload "v$VERSION" "$UPDATE_ARCHIVE" \
+  gh release upload "v$VERSION" "${RELEASE_ASSETS[@]}" \
     --repo "$RELEASE_REPOSITORY" \
     --clobber
 else
@@ -158,7 +170,7 @@ else
   else
     NOTES_ARGUMENTS=(--notes "Nook $VERSION")
   fi
-  gh release create "v$VERSION" "$UPDATE_ARCHIVE" \
+  gh release create "v$VERSION" "${RELEASE_ASSETS[@]}" \
     --repo "$RELEASE_REPOSITORY" \
     --title "Nook $VERSION" \
     "${NOTES_ARGUMENTS[@]}"
