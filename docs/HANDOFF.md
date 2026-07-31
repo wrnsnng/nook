@@ -1,20 +1,20 @@
 # Nook project handoff
 
-Last updated: 30 July 2026
+Last updated: 31 July 2026
 
 ## Current state
 
-Nook 1.6.2 (build 10) is the current public release.
+Nook 1.6.3 (build 11) is the current public release.
 
 - Apple notarization accepted and ticket stapled.
 - Gatekeeper accepts the distributed app.
-- Stable Sparkle feed advertises 1.6.2 (10).
-- Full archive and build-9-to-10 delta are public.
+- Stable Sparkle feed advertises 1.6.3 (11).
+- Full archive and build-10-to-11 delta are public.
 - Release builds come from stable Xcode 26 and the macOS 26.5 SDK.
-- 36 automated tests pass.
+- 42 automated tests pass.
 - Current source work is on `agent/release-nook-1-6`.
 - Draft PR: `https://github.com/wrnsnng/nook/pull/1`
-- Release: `https://github.com/wrnsnng/nook-releases/releases/tag/v1.6.2`
+- Release: `https://github.com/wrnsnng/nook-releases/releases/tag/v1.6.3`
 
 ## What is working
 
@@ -33,6 +33,8 @@ Nook 1.6.2 (build 10) is the current public release.
 - Light, dark, and automatic appearance.
 - Developer ID signing, notarization, Sparkle archives, deltas, and stable feed.
 - Current cobalt icon in the app, About view, Dock, and app switcher.
+- Provider-aware meeting detection and end recognition for Teams, Zoom,
+  Google Meet, Webex, FaceTime, Slack Huddles, Around, and Whereby.
 
 ## Important constraints
 
@@ -93,9 +95,9 @@ Nook 1.6.2 (build 10) is the current public release.
 
 ### Update flow
 
-- [ ] A notarized 1.6.1 build detects 1.6.2.
-- [ ] Delta update succeeds from build 9 to build 10.
-- [ ] App relaunches as 1.6.2 (10).
+- [ ] A notarized 1.6.2 build detects 1.6.3.
+- [ ] Delta update succeeds from build 10 to build 11.
+- [ ] App relaunches as 1.6.3 (11).
 - [ ] Fresh download opens normally on macOS 26.5.1 without a Gatekeeper
       override.
 - [ ] Existing Microphone, Speech, and Screen Capture grants remain valid.
