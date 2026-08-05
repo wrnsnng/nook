@@ -8,9 +8,15 @@ actor TranscriptionService {
         try await SpeechAssets.requestAuthorization()
         let supportedLocale = try await SpeechAssets.supportedLocale(for: localeIdentifier)
 
+        // Deliberately the same preset the live path uses. This pass only reads
+        // `text`, `range`, and `isFinal`, so the alternatives preset added no
+        // information — but its assets are frequently not installed and cannot
+        // be requested (`assetInstallationRequest` returns nil), which made the
+        // saved-audio recovery path fail with "the on-device speech model is
+        // not available" exactly when it was needed most.
         let transcriber = SpeechTranscriber(
             locale: supportedLocale,
-            preset: .timeIndexedTranscriptionWithAlternatives
+            preset: .timeIndexedProgressiveTranscription
         )
         try await SpeechAssets.installIfNeeded(for: [transcriber], locale: supportedLocale)
 

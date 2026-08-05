@@ -44,6 +44,7 @@
 		7F2F9591EA3404AB6C4A9320 /* MarkdownCodecTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A701190651FDA38F39E3ACF3 /* MarkdownCodecTests.swift */; };
 		7F71BEC9B7026094FC19F0CF /* SummaryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2579421D921587B2DB226192 /* SummaryService.swift */; };
 		8649F00502AF64153F77952E /* NookPermission.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A877376CD0320074D3AE2B8 /* NookPermission.swift */; };
+		8C146B75382DB7970B460916 /* LiveAnalyzerInputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0DA313E3B4EB1C1104D8D92 /* LiveAnalyzerInputTests.swift */; };
 		8D65B14D1E3F0D8DB95C455D /* SnapshotRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9724F70AFC1F4B7149AC8E67 /* SnapshotRenderer.swift */; };
 		8EA62FBE67B79A580517A9A7 /* NookPermission.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A877376CD0320074D3AE2B8 /* NookPermission.swift */; };
 		9901438495EE438AAF2BFC0D /* MeetingNotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82F5D4466C034B90191F6217 /* MeetingNotificationService.swift */; };
@@ -140,6 +141,7 @@
 		E29043FB627EE55136C66892 /* NookNotesEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookNotesEditor.swift; sourceTree = "<group>"; };
 		E85BB1FB8EF66CBEB4C24DE7 /* MeetingNote.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingNote.swift; sourceTree = "<group>"; };
 		E86940D119C68C89BEF3B597 /* NookSnapshot */ = {isa = PBXFileReference; includeInIndex = 0; path = NookSnapshot; sourceTree = BUILT_PRODUCTS_DIR; };
+		F0DA313E3B4EB1C1104D8D92 /* LiveAnalyzerInputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveAnalyzerInputTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -257,6 +259,7 @@
 		CD11A452EFA30F66DD8F2FF9 /* NookTests */ = {
 			isa = PBXGroup;
 			children = (
+				F0DA313E3B4EB1C1104D8D92 /* LiveAnalyzerInputTests.swift */,
 				A701190651FDA38F39E3ACF3 /* MarkdownCodecTests.swift */,
 				7CE7A4727C693BB0BDAED00D /* ShowcaseSnapshotTests.swift */,
 			);
@@ -497,6 +500,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				8C146B75382DB7970B460916 /* LiveAnalyzerInputTests.swift in Sources */,
 				7F2F9591EA3404AB6C4A9320 /* MarkdownCodecTests.swift in Sources */,
 				C78A280ADF06F6B2BDBE927D /* ShowcaseSnapshotTests.swift in Sources */,
 			);
