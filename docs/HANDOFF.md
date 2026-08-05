@@ -1,20 +1,39 @@
 # Nook project handoff
 
-Last updated: 31 July 2026
+Last updated: 5 August 2026
 
 ## Current state
 
-Nook 1.6.3 (build 11) is the current public release.
+Nook 1.6.4 (build 12) is the current public release.
 
 - Apple notarization accepted and ticket stapled.
 - Gatekeeper accepts the distributed app.
-- Stable Sparkle feed advertises 1.6.3 (11).
-- Full archive and build-10-to-11 delta are public.
+- Stable Sparkle feed advertises 1.6.4 (12).
+- Full archive and build-11-to-12 delta are public.
 - Release builds come from stable Xcode 26 and the macOS 26.5 SDK.
-- 42 automated tests pass.
+- 49 automated tests pass.
 - Current source work is on `agent/release-nook-1-6`.
 - Draft PR: `https://github.com/wrnsnng/nook/pull/1`
-- Release: `https://github.com/wrnsnng/nook-releases/releases/tag/v1.6.3`
+- Release: `https://github.com/wrnsnng/nook-releases/releases/tag/v1.6.4`
+
+### 1.6.4 fixed a silent toolchain regression
+
+1.6.2 and 1.6.3 shipped without working live transcription, and finishing a
+meeting hung permanently on "Securing the audio on this Mac".
+
+- `AnalyzerInputConverter` exists only in the macOS 27 SDK, so a
+  `#if compiler(>=6.4)` fence removed it from every stable-toolchain release
+  while local Xcode 27 builds kept it. Capture audio is now resampled with
+  `AVAudioConverter`, which behaves identically on both toolchains.
+- Finalizing a Speech analyzer that never received input never returns, which
+  wedged processing before audio extraction and defeated cancellation.
+  Finalization now short-circuits on empty input and otherwise has a deadline.
+- The saved-audio fallback used a preset whose assets cannot be installed, so
+  the intended recovery path failed with `assetsUnavailable`.
+
+Treat any behavior that depends on which Xcode built the app as a release
+blocker; CI cannot catch it, because CI builds with the stable toolchain and
+nothing exercised the converted audio path until `LiveAnalyzerInputTests`.
 
 ## What is working
 
@@ -95,9 +114,9 @@ Nook 1.6.3 (build 11) is the current public release.
 
 ### Update flow
 
-- [ ] A notarized 1.6.2 build detects 1.6.3.
-- [ ] Delta update succeeds from build 10 to build 11.
-- [ ] App relaunches as 1.6.3 (11).
+- [ ] A notarized 1.6.3 build detects 1.6.4.
+- [ ] Delta update succeeds from build 11 to build 12.
+- [ ] App relaunches as 1.6.4 (12).
 - [ ] Fresh download opens normally on macOS 26.5.1 without a Gatekeeper
       override.
 - [ ] Existing Microphone, Speech, and Screen Capture grants remain valid.
@@ -114,16 +133,19 @@ Nook 1.6.3 (build 11) is the current public release.
 
 ## Recommended next work
 
-1. Run the full checklist on a clean notched MacBook using the OTA update path.
-2. Merge PR #1 after that hardware pass.
-3. Capture failures and product follow-ups as Linear issues in the Nook project.
-4. Improve meeting detection patterns only from observed false positives or
+1. Record a real meeting on 1.6.4 and confirm live captions appear and the
+   meeting saves. Unit tests cover the audio conversion, but nothing automated
+   exercises capture, permissions, and the recognizer end to end.
+2. Run the full checklist on a clean notched MacBook using the OTA update path.
+3. Merge PR #1 after that hardware pass.
+4. Capture failures and product follow-ups as Linear issues in the Nook project.
+5. Improve meeting detection patterns only from observed false positives or
    misses; avoid speculative app matching.
-5. Add an in-app diagnostics/export screen for permission state and recent
+6. Add an in-app diagnostics/export screen for permission state and recent
    capture errors before broader distribution.
-6. Add release-channel support only if beta and stable audiences need to
+7. Add release-channel support only if beta and stable audiences need to
    diverge.
-7. Consider opt-in speaker naming only with a robust local implementation.
+8. Consider opt-in speaker naming only with a robust local implementation.
 
 ## Where to resume
 

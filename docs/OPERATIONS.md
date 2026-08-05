@@ -129,17 +129,51 @@ Compare the local archive SHA-256 with the GitHub release asset digest.
 
 ## Current release
 
-As of 31 July 2026:
+As of 5 August 2026:
 
-- Version: **1.6.3**
-- Build: **11**
+- Version: **1.6.4**
+- Build: **12**
 - Release:
-  `https://github.com/wrnsnng/nook-releases/releases/tag/v1.6.3`
+  `https://github.com/wrnsnng/nook-releases/releases/tag/v1.6.4`
 - Notarization submission:
-  `1c35d6e3-f5d5-4b1c-8b6a-40b34f3171af`
-- Status: stable Xcode 26 build; accepted, stapled, Gatekeeper accepted
-- Sparkle delta from build 10: published
-- Test suite: 42 passing tests
+  `888970ec-e072-4f96-bec4-2993a8e1daf5`
+- Status: stable macOS 26.5 SDK build; accepted, stapled, Gatekeeper accepted
+- Sparkle delta from build 11: published
+- Test suite: 49 passing tests
+
+## Building a release without local stable Xcode
+
+`release-update.sh` refuses any app whose runtime version is 27.x, so a machine
+that only has Xcode 27 installed cannot produce a releasable build directly.
+
+Push the release commit to `agent/release-nook-1-6`, let the
+`Stable macOS build` workflow produce the universal `Nook-stable-unsigned`
+artifact on a `macos-26` runner, then sign, notarize, and publish it locally:
+
+```sh
+gh run download <run-id> --repo wrnsnng/nook --name Nook-stable-unsigned --dir /tmp/stable
+ditto -x -k /tmp/stable/Nook-stable-unsigned.zip /tmp/stable
+
+NOOK_PREBUILT_APP=/tmp/stable/Nook.app ./Scripts/release-update.sh \
+  --notes Releases/Nook-<version>.md \
+  --publish
+```
+
+Confirm the artifact before signing it:
+
+```sh
+vtool -show-build /tmp/stable/Nook.app/Contents/MacOS/Nook   # sdk must not be 27
+lipo -archs /tmp/stable/Nook.app/Contents/MacOS/Nook          # arm64 and x86_64
+```
+
+Verify the shipped binary still contains toolchain-sensitive code paths. Nook
+1.6.2 and 1.6.3 lost live transcription because a `#if compiler(>=6.4)` fence
+compiled the audio converter out of every stable-toolchain build while local
+Xcode 27 builds kept it:
+
+```sh
+nm -a /tmp/stable/Nook.app/Contents/MacOS/Nook | grep -c Resampling
+```
 
 ## Privacy-permission QA
 
