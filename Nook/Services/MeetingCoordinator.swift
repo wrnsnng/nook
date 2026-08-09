@@ -15,6 +15,7 @@ enum MeetingPhase: Equatable, Sendable {
         case transcribing = "Listening back locally"
         case summarizing = "Distilling the conversation"
         case saving = "Tucking away your notes"
+        case discarding = "Discarding the recording"
     }
 
     var menuBarSymbol: String {
@@ -22,7 +23,7 @@ enum MeetingPhase: Equatable, Sendable {
         case .recording:
             "record.circle.fill"
         case .processing:
-            "waveform.badge.magnifyingglass"
+            "ellipsis.circle"
         case .detected:
             "sparkle.magnifyingglass"
         case .failed:
@@ -47,7 +48,7 @@ enum MeetingPanelMode: String, CaseIterable, Identifiable, Sendable {
     var label: String {
         switch self {
         case .transcript: "Transcript"
-        case .summary: "So far"
+        case .summary: "Summary"
         case .notes: "My notes"
         }
     }
@@ -59,6 +60,12 @@ enum MeetingPanelMode: String, CaseIterable, Identifiable, Sendable {
         case .notes: "square.and.pencil"
         }
     }
+}
+
+enum MeetingTerminationState: Equatable, Sendable {
+    case inactive
+    case recording
+    case processing
 }
 
 @MainActor
@@ -76,6 +83,7 @@ final class MeetingCoordinator: ObservableObject {
     @Published private(set) var pauseTransitionInFlight = false
     @Published private(set) var liveCaptionNotice: String?
     @Published private(set) var requiredPermission: NookPermission?
+    @Published private(set) var topPanelHidden = false
     @Published var localeIdentifier: String {
         didSet { UserDefaults.standard.set(localeIdentifier, forKey: "transcriptionLocale") }
     }
@@ -93,6 +101,7 @@ final class MeetingCoordinator: ObservableObject {
     var onPanelInteractionRequested: (() -> Void)?
     var onMeetingNotificationRequested: ((DetectedMeeting) -> Void)?
     var onRecordingStopped: (() -> Void)?
+    var onPanelDismissRequested: (() -> Void)?
 
     private let store: MarkdownStore
     private let detector: MeetingDetector
@@ -104,8 +113,10 @@ final class MeetingCoordinator: ObservableObject {
     private var elapsedTask: Task<Void, Never>?
     private var meterTask: Task<Void, Never>?
     private var processingTask: Task<Void, Never>?
+    private var recordingStartTask: Task<Void, Never>?
     private var liveStartupTask: Task<Void, Never>?
     private var liveSummaryTask: Task<Void, Never>?
+    private var pauseTask: Task<Void, Never>?
     private var dismissedDetection: DetectedMeeting?
     private var targetAudioLevel = 0.0
     private var liveTranscriptIsComplete = false
@@ -114,6 +125,7 @@ final class MeetingCoordinator: ObservableObject {
     private var pendingStartRequest: PendingStartRequest?
     private var accumulatedElapsed: TimeInterval = 0
     private var activeElapsedStartedAt: Date?
+    private var processingCancellationRequested = false
 
     init(store: MarkdownStore, detector: MeetingDetector) {
         self.store = store
@@ -164,11 +176,79 @@ final class MeetingCoordinator: ObservableObject {
         elapsedTask?.cancel()
         meterTask?.cancel()
         onRecordingStopped?()
+        topPanelHidden = false
+        processingCancellationRequested = false
         phase = .processing(.preparing)
         onPresentationRequested?()
         processingTask = Task { [weak self] in
             await self?.finishRecording()
         }
+    }
+
+    var terminationState: MeetingTerminationState {
+        if phase.isRecording {
+            return .recording
+        }
+        if case .processing = phase {
+            return .processing
+        }
+        return activeDraft == nil ? .inactive : .processing
+    }
+
+    /// Finishes an active recording before application termination. A start
+    /// that is still waiting on permissions is cancelled and discarded; a real
+    /// recording is allowed to finish its local note pipeline.
+    func prepareForApplicationTermination() async -> Bool {
+        if let pauseTask {
+            await pauseTask.value
+        }
+
+        if let startTask = recordingStartTask {
+            processingCancellationRequested = true
+            startTask.cancel()
+            await startTask.value
+        }
+
+        if phase.isRecording {
+            stopRecording()
+        }
+        if let processingTask {
+            await processingTask.value
+        }
+
+        guard activeDraft == nil,
+              recordingStartTask == nil,
+              processingTask == nil
+        else {
+            return false
+        }
+        if case .failed = phase {
+            return false
+        }
+        return true
+    }
+
+    var canCancelProcessing: Bool {
+        guard case .processing(let step) = phase,
+              step != .discarding,
+              activeDraft != nil
+        else {
+            return false
+        }
+        // The active draft is created before processing becomes visible, so
+        // this remains stable even during the brief hand-off between capture
+        // and the asynchronous processing task.
+        return true
+    }
+
+    func cancelProcessing() {
+        guard canCancelProcessing else { return }
+        processingCancellationRequested = true
+        topPanelHidden = false
+        phase = .processing(.discarding)
+        onPresentationRequested?()
+        recordingStartTask?.cancel()
+        processingTask?.cancel()
     }
 
     func togglePause() {
@@ -191,8 +271,12 @@ final class MeetingCoordinator: ObservableObject {
         audioLevel = 0
         targetAudioLevel = 0
 
-        Task { [weak self] in
+        pauseTask = Task { [weak self] in
             guard let self else { return }
+            defer {
+                pauseTransitionInFlight = false
+                pauseTask = nil
+            }
             do {
                 try await capture.pause()
                 liveCaptionNotice = "Paused — Nook is not saving or transcribing audio."
@@ -202,7 +286,6 @@ final class MeetingCoordinator: ObservableObject {
                 startElapsedClock()
                 liveCaptionNotice = "Nook couldn’t pause this recording. Capture is still active."
             }
-            pauseTransitionInFlight = false
         }
     }
 
@@ -211,8 +294,12 @@ final class MeetingCoordinator: ObservableObject {
             return
         }
         pauseTransitionInFlight = true
-        Task { [weak self] in
+        pauseTask = Task { [weak self] in
             guard let self else { return }
+            defer {
+                pauseTransitionInFlight = false
+                pauseTask = nil
+            }
             do {
                 try capture.resume()
                 isPaused = false
@@ -222,7 +309,6 @@ final class MeetingCoordinator: ObservableObject {
             } catch {
                 liveCaptionNotice = "Nook couldn’t resume yet. Your completed audio remains safe."
             }
-            pauseTransitionInFlight = false
         }
     }
 
@@ -242,12 +328,38 @@ final class MeetingCoordinator: ObservableObject {
 
     func selectPanelMode(_ mode: MeetingPanelMode) {
         panelMode = mode
-        showLiveCaptions = true
+        expandTopPanel()
         if mode == .summary {
             refreshLiveSummary()
         } else if mode == .notes {
             onPanelInteractionRequested?()
         }
+    }
+
+    func expandTopPanel() {
+        guard phase.isRecording else { return }
+        topPanelHidden = false
+        showLiveCaptions = true
+        onPresentationRequested?()
+    }
+
+    func collapseTopPanel() {
+        guard phase.isRecording else { return }
+        topPanelHidden = false
+        showLiveCaptions = false
+        onPresentationRequested?()
+    }
+
+    func hideTopPanel() {
+        guard phase.isRecording else { return }
+        topPanelHidden = true
+        onPanelDismissRequested?()
+    }
+
+    func restoreTopPanel() {
+        guard phase.isRecording else { return }
+        topPanelHidden = false
+        onPresentationRequested?()
     }
 
     func setLiveNotesDetached(_ detached: Bool) {
@@ -365,6 +477,8 @@ final class MeetingCoordinator: ObservableObject {
         liveTranscriptIsComplete = false
         isPaused = false
         pauseTransitionInFlight = false
+        topPanelHidden = false
+        processingCancellationRequested = false
         accumulatedElapsed = 0
         activeElapsedStartedAt = nil
         audioLevel = 0
@@ -372,7 +486,7 @@ final class MeetingCoordinator: ObservableObject {
         phase = .processing(.preparing)
         onPresentationRequested?()
 
-        Task { [weak self] in
+        recordingStartTask = Task { [weak self] in
             guard let self else { return }
             let updateLevel: @MainActor (
                 Double,
@@ -384,12 +498,16 @@ final class MeetingCoordinator: ObservableObject {
 
             do {
                 try await capture.requestPermissions()
+                try Task.checkCancellation()
                 try await SpeechAssets.requestAuthorization()
+                try Task.checkCancellation()
                 try await capture.start(
                     to: url,
                     permissionsAreReady: true,
                     onAudioLevel: updateLevel
                 )
+                try Task.checkCancellation()
+                recordingStartTask = nil
                 pendingStartRequest = nil
                 requiredPermission = nil
                 phase = .recording(title: title, startedAt: draft.startedAt)
@@ -398,12 +516,26 @@ final class MeetingCoordinator: ObservableObject {
                 startAudioMeter()
                 startLiveCaptions()
             } catch {
+                if Task.isCancelled || processingCancellationRequested {
+                    await discardCancelledMeeting(
+                        draft: draft,
+                        additionalURLs: []
+                    )
+                    return
+                }
+                recordingStartTask = nil
                 activeDraft = nil
+                let cleanupFailures = RecordingArtifactCleanup.removeArtifacts(
+                    for: draft
+                )
                 requiredPermission = Self.permissionRequired(for: error)
                 if requiredPermission == nil {
                     pendingStartRequest = nil
                 }
-                phase = .failed(error.localizedDescription)
+                phase = .failed(
+                    error.localizedDescription
+                        + Self.cleanupNotice(for: cleanupFailures)
+                )
                 onPresentationRequested?()
             }
         }
@@ -458,19 +590,22 @@ final class MeetingCoordinator: ObservableObject {
         let personalNotes = liveNotes.trimmingCharacters(
             in: .whitespacesAndNewlines
         )
+        var recordingURLs: [URL] = []
         do {
             liveStartupTask?.cancel()
             liveStartupTask = nil
             liveSummaryTask?.cancel()
             liveSummaryTask = nil
             liveSummaryIsRefreshing = false
-            let recordingURLs = try await capture.stop()
+            recordingURLs = try await capture.stop()
             let liveSegments = await liveTranscriber.stop()
+            try Task.checkCancellation()
             phase = .processing(.preparing)
             try await AudioExtractor.extractAudio(
                 from: recordingURLs,
                 to: audioURL
             )
+            try Task.checkCancellation()
 
             phase = .processing(.refining)
             let rawTranscript: [TranscriptSegment]
@@ -484,6 +619,7 @@ final class MeetingCoordinator: ObservableObject {
                     localeIdentifier: localeIdentifier
                 )
             }
+            try Task.checkCancellation()
             let transcript = TranscriptAssembler.coalesce(rawTranscript)
 
             phase = .processing(.summarizing)
@@ -491,6 +627,7 @@ final class MeetingCoordinator: ObservableObject {
                 transcript: transcript,
                 fallbackTitle: draft.title
             )
+            try Task.checkCancellation()
 
             phase = .processing(.saving)
             let note = MeetingNote(
@@ -508,12 +645,11 @@ final class MeetingCoordinator: ObservableObject {
             )
             let saved = try store.save(note)
 
-            if !keepAudio {
-                try? FileManager.default.removeItem(at: audioURL)
-            }
-            for recordingURL in recordingURLs {
-                try? FileManager.default.removeItem(at: recordingURL)
-            }
+            let cleanupFailures = RecordingArtifactCleanup.removeArtifacts(
+                for: draft,
+                additionalURLs: recordingURLs + [audioURL],
+                preserving: keepAudio ? Set([audioURL]) : []
+            )
 
             activeDraft = nil
             processingTask = nil
@@ -527,15 +663,35 @@ final class MeetingCoordinator: ObservableObject {
             liveNotes = ""
             liveInsights = nil
             liveSummaryUpdatedAt = nil
-            phase = .completed(saved.title)
+            topPanelHidden = false
+            processingCancellationRequested = false
+            if cleanupFailures.isEmpty {
+                phase = .completed(saved.title)
+            } else {
+                phase = .failed(
+                    "Your meeting note was saved, but Nook could not remove every temporary recording file."
+                        + Self.cleanupNotice(for: cleanupFailures)
+                )
+            }
             onPresentationRequested?()
         } catch {
+            if Task.isCancelled || processingCancellationRequested {
+                await discardCancelledMeeting(
+                    draft: draft,
+                    additionalURLs: recordingURLs + [audioURL]
+                )
+                return
+            }
             liveStartupTask?.cancel()
             liveStartupTask = nil
             liveSummaryTask?.cancel()
             liveSummaryTask = nil
             liveSummaryIsRefreshing = false
             await liveTranscriber.cancel()
+            let cleanupFailures = RecordingArtifactCleanup.removeArtifacts(
+                for: draft,
+                additionalURLs: recordingURLs + [audioURL]
+            )
             activeDraft = nil
             processingTask = nil
             elapsed = 0
@@ -544,7 +700,11 @@ final class MeetingCoordinator: ObservableObject {
             isPaused = false
             pauseTransitionInFlight = false
             audioLevel = 0
-            phase = .failed(error.localizedDescription)
+            processingCancellationRequested = false
+            phase = .failed(
+                error.localizedDescription
+                    + Self.cleanupNotice(for: cleanupFailures)
+            )
             onPresentationRequested?()
         }
     }
@@ -629,6 +789,16 @@ final class MeetingCoordinator: ObservableObject {
             )
             guard !Task.isCancelled, phase.isRecording else { return }
             liveInsights = insights
+            if case .recording(_, let startedAt) = phase,
+               !MeetingTitleGenerator.isFallbackTitle(
+                    insights.title,
+                    fallbackTitle: fallbackTitle
+               ) {
+                phase = .recording(
+                    title: insights.title,
+                    startedAt: startedAt
+                )
+            }
             liveSummaryUpdatedAt = Date()
             liveSummaryIsRefreshing = false
             lastSummarizedSegmentCount = snapshotCount
@@ -655,6 +825,144 @@ final class MeetingCoordinator: ObservableObject {
         if let panelMode { self.panelMode = panelMode }
         self.liveInsights = liveInsights
         if let liveNotes { self.liveNotes = liveNotes }
+    }
+
+    private func discardCancelledMeeting(
+        draft: MeetingDraft,
+        additionalURLs: [URL]
+    ) async {
+        liveStartupTask?.cancel()
+        liveStartupTask = nil
+        liveSummaryTask?.cancel()
+        liveSummaryTask = nil
+        liveSummaryIsRefreshing = false
+        elapsedTask?.cancel()
+        meterTask?.cancel()
+
+        var files = additionalURLs
+        if capture.isCapturing,
+           let capturedURLs = try? await capture.stop() {
+            files.append(contentsOf: capturedURLs)
+        }
+        await liveTranscriber.cancel()
+        let cleanupFailures = RecordingArtifactCleanup.removeArtifacts(
+            for: draft,
+            additionalURLs: files
+        )
+
+        recordingStartTask = nil
+        processingTask = nil
+        activeDraft = nil
+        pendingStartRequest = nil
+        requiredPermission = nil
+        processingCancellationRequested = false
+        elapsed = 0
+        accumulatedElapsed = 0
+        activeElapsedStartedAt = nil
+        isPaused = false
+        pauseTransitionInFlight = false
+        pauseTask = nil
+        audioLevel = 0
+        targetAudioLevel = 0
+        liveCaptionNotice = nil
+        liveTranscript = .empty
+        liveNotes = ""
+        liveInsights = nil
+        liveSummaryUpdatedAt = nil
+        topPanelHidden = false
+        phase = cleanupFailures.isEmpty
+            ? .idle
+            : .failed(
+                "Nook stopped the meeting but could not remove every temporary recording file."
+                    + Self.cleanupNotice(for: cleanupFailures)
+            )
+    }
+
+    private static func cleanupNotice(for urls: [URL]) -> String {
+        guard !urls.isEmpty else { return "" }
+        return " Remove these files from the .recordings folder: "
+            + urls.map(\.lastPathComponent).sorted().joined(separator: ", ")
+            + "."
+    }
+}
+
+/// Deletes only artifacts owned by one meeting UUID. This intentionally does
+/// not sweep `.recordings`: retained audio and another meeting's recovery files
+/// must survive cleanup of the current lifecycle.
+enum RecordingArtifactCleanup {
+    static func artifactURLs(
+        for draft: MeetingDraft,
+        additionalURLs: [URL] = [],
+        fileManager: FileManager = .default
+    ) -> Set<URL> {
+        let directory = draft.recordingURL
+            .deletingLastPathComponent()
+            .standardizedFileURL
+        let stem = draft.recordingURL
+            .deletingPathExtension()
+            .lastPathComponent
+
+        var candidates = Set(
+            additionalURLs
+                .map(\.standardizedFileURL)
+                .filter { isOwnedArtifact($0, directory: directory, stem: stem) }
+        )
+        candidates.insert(draft.recordingURL.standardizedFileURL)
+        candidates.insert(
+            draft.recordingURL
+                .deletingPathExtension()
+                .appendingPathExtension("m4a")
+                .standardizedFileURL
+        )
+
+        if let contents = try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
+        ) {
+            candidates.formUnion(
+                contents
+                    .map(\.standardizedFileURL)
+                    .filter { isOwnedArtifact($0, directory: directory, stem: stem) }
+            )
+        }
+        return candidates
+    }
+
+    @discardableResult
+    static func removeArtifacts(
+        for draft: MeetingDraft,
+        additionalURLs: [URL] = [],
+        preserving preservedURLs: Set<URL> = [],
+        fileManager: FileManager = .default
+    ) -> [URL] {
+        let preserved = Set(preservedURLs.map(\.standardizedFileURL))
+        var failures: [URL] = []
+        for url in artifactURLs(
+            for: draft,
+            additionalURLs: additionalURLs,
+            fileManager: fileManager
+        ) where !preserved.contains(url) && fileManager.fileExists(atPath: url.path) {
+            do {
+                try fileManager.removeItem(at: url)
+            } catch {
+                failures.append(url)
+            }
+        }
+        return failures
+    }
+
+    private static func isOwnedArtifact(
+        _ url: URL,
+        directory: URL,
+        stem: String
+    ) -> Bool {
+        guard url.deletingLastPathComponent().standardizedFileURL == directory else {
+            return false
+        }
+        let filename = url.lastPathComponent
+        return filename == "\(stem).mp4"
+            || filename == "\(stem).m4a"
+            || (filename.hasPrefix("\(stem).part-") && url.pathExtension == "mp4")
     }
 }
 

@@ -310,29 +310,25 @@ struct MeetingDetailView: View {
             tint: NookPalette.accent
         ) {
             VStack(spacing: 0) {
-                ZStack(alignment: .topLeading) {
-                    if personalNotesDraft.isEmpty {
-                        Text("Add context, a follow-up, or something you want to remember…")
-                            .font(NookType.body)
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 9)
-                            .padding(.vertical, 9)
-                            .allowsHitTesting(false)
-                    }
-
-                    TextEditor(text: $personalNotesDraft)
-                        .font(NookType.body)
-                        .lineSpacing(5)
-                        .scrollContentBackground(.hidden)
-                        .padding(.horizontal, 2)
-                        .padding(.vertical, 1)
-                        .focused($personalNotesFocused)
-                        .disabled(markdownDraft.hasChanges)
-                        .accessibilityLabel("Personal meeting notes")
-                        .accessibilityHint(
-                            "Saved into the My notes section of this meeting’s Markdown file"
-                        )
-                }
+                NookNotesEditor(
+                    text: $personalNotesDraft,
+                    placeholder: "Add context, a follow-up, or something you want to remember…",
+                    isFocused: Binding(
+                        get: { personalNotesFocused },
+                        set: { personalNotesFocused = $0 }
+                    ),
+                    contentInsets: EdgeInsets(
+                        top: 9,
+                        leading: 9,
+                        bottom: 9,
+                        trailing: 9
+                    ),
+                    lineSpacing: 5
+                )
+                .disabled(markdownDraft.hasChanges)
+                .accessibilityHint(
+                    "Saved into the My notes section of this meeting’s Markdown file"
+                )
                 .frame(minHeight: 118)
 
                 SoftDivider()

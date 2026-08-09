@@ -55,6 +55,11 @@ final class AppModel: ObservableObject {
         meeting.onPanelInteractionRequested = { [weak panel] in
             panel?.makeInteractive()
         }
+        meeting.onPanelDismissRequested = { [weak panel] in
+            // "Fully hidden" keeps a tiny recording timer attached to the
+            // camera housing so the meeting can always be recovered.
+            panel?.show()
+        }
         meeting.onMeetingNotificationRequested = { [weak notifications] detection in
             notifications?.present(detection)
         }
@@ -185,7 +190,14 @@ final class AppModel: ObservableObject {
     }
 
     func completeWelcome() {
-        UserDefaults.standard.set(true, forKey: "hasSeenWelcome")
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: "automaticDetection") == nil {
+            // Dismissing setup without touching the toggle is still an
+            // explicit choice to keep detection off. Persist it so the legacy
+            // `hasSeenWelcome` fallback cannot enable detection next launch.
+            defaults.set(detector.isEnabled, forKey: "automaticDetection")
+        }
+        defaults.set(true, forKey: "hasSeenWelcome")
     }
 
     private func presentLaunchExperience() {

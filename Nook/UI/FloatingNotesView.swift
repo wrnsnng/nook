@@ -17,25 +17,22 @@ struct FloatingNotesView: View {
 
                 SoftDivider()
 
-                ZStack(alignment: .topLeading) {
-                    if meeting.liveNotes.isEmpty {
-                        Text("Capture a thought, question, or follow-up…")
-                            .font(NookType.body)
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 23)
-                            .padding(.vertical, 20)
-                            .allowsHitTesting(false)
-                    }
-
-                    TextEditor(text: $meeting.liveNotes)
-                        .font(NookType.body)
-                        .lineSpacing(5)
-                        .scrollContentBackground(.hidden)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                        .focused($editorFocused)
-                        .accessibilityLabel("Personal meeting notes")
-                }
+                NookNotesEditor(
+                    text: $meeting.liveNotes,
+                    placeholder: "Capture a thought, question, or follow-up…",
+                    isFocused: Binding(
+                        get: { editorFocused },
+                        set: { editorFocused = $0 }
+                    ),
+                    contentInsets: EdgeInsets(
+                        top: 20,
+                        leading: 23,
+                        bottom: 20,
+                        trailing: 23
+                    ),
+                    lineSpacing: 5
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .background(NookWindowBridge(role: .liveNotes, floats: true))

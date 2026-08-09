@@ -293,29 +293,17 @@ struct LiveMeetingView: View {
             )
 
             Button {
-                meeting.showLiveCaptions.toggle()
+                toggleTopPanel()
             } label: {
                 Label(
-                    meeting.showLiveCaptions
-                        ? "Hide top captions"
-                        : "Show top captions",
-                    systemImage: meeting.showLiveCaptions
-                        ? "captions.bubble.fill"
-                        : "captions.bubble"
+                    topPanelActionLabel,
+                    systemImage: topPanelSymbol
                 )
                 .labelStyle(.iconOnly)
             }
             .buttonStyle(LiveShelfControlStyle(isCompact: true))
-            .help(
-                meeting.showLiveCaptions
-                    ? "Hide top captions"
-                    : "Show top captions"
-            )
-            .accessibilityLabel(
-                meeting.showLiveCaptions
-                    ? "Hide top captions"
-                    : "Show top captions"
-            )
+            .help(topPanelActionLabel)
+            .accessibilityLabel(topPanelActionLabel)
 
             Button {
                 meeting.stopRecording()
@@ -368,15 +356,11 @@ struct LiveMeetingView: View {
 
     private var captionsButton: some View {
         Button {
-            meeting.showLiveCaptions.toggle()
+            toggleTopPanel()
         } label: {
             Label(
-                meeting.showLiveCaptions
-                    ? "Top captions on"
-                    : "Top captions off",
-                systemImage: meeting.showLiveCaptions
-                    ? "captions.bubble.fill"
-                    : "captions.bubble"
+                topPanelActionLabel,
+                systemImage: topPanelSymbol
             )
         }
         .buttonStyle(LiveShelfControlStyle())
@@ -426,7 +410,7 @@ struct LiveMeetingView: View {
                 meeting.isPaused ? NookPalette.success : .secondary
             )
 
-            Label("Top captions on", systemImage: "captions.bubble.fill")
+            Label("Top panel on", systemImage: "rectangle.topthird.inset.filled")
                 .font(NookType.metadata)
                 .foregroundStyle(.secondary)
 
@@ -470,8 +454,10 @@ struct LiveMeetingView: View {
                         .frame(maxWidth: 500)
                 }
 
-                ProcessingRail(current: step)
-                    .frame(maxWidth: 650)
+                if step != .discarding {
+                    ProcessingRail(current: step)
+                        .frame(maxWidth: 650)
+                }
 
                 if !meeting.liveTranscript.segments.isEmpty {
                     HStack(spacing: 20) {
@@ -486,6 +472,16 @@ struct LiveMeetingView: View {
                     }
                     .font(NookType.metadata)
                     .foregroundStyle(.secondary)
+                }
+
+                if step != .discarding, meeting.canCancelProcessing {
+                    Button("Cancel and discard recording") {
+                        meeting.cancelProcessing()
+                    }
+                    .buttonStyle(NookButtonStyle())
+                    .accessibilityHint(
+                        "Permanently discards this recording without saving a note"
+                    )
                 }
 
             }
@@ -574,6 +570,34 @@ struct LiveMeetingView: View {
         return String(format: "%02d:%02d", total / 60, total % 60)
     }
 
+    private var topPanelActionLabel: String {
+        if meeting.topPanelHidden {
+            return "Show top panel"
+        }
+        return meeting.showLiveCaptions
+            ? "Collapse top panel"
+            : "Expand top panel"
+    }
+
+    private var topPanelSymbol: String {
+        if meeting.topPanelHidden {
+            return "rectangle.expand.vertical"
+        }
+        return meeting.showLiveCaptions
+            ? "rectangle.compress.vertical"
+            : "rectangle.expand.vertical"
+    }
+
+    private func toggleTopPanel() {
+        if meeting.topPanelHidden {
+            meeting.restoreTopPanel()
+        } else if meeting.showLiveCaptions {
+            meeting.collapseTopPanel()
+        } else {
+            meeting.expandTopPanel()
+        }
+    }
+
     private func processingSymbol(_ step: MeetingPhase.ProcessingStep) -> String {
         switch step {
         case .preparing: "waveform"
@@ -581,6 +605,7 @@ struct LiveMeetingView: View {
         case .transcribing: "ear"
         case .summarizing: "sparkles"
         case .saving: "doc.badge.plus"
+        case .discarding: "trash"
         }
     }
 
@@ -598,6 +623,8 @@ struct LiveMeetingView: View {
             "Finding the useful shape of the conversation: themes, decisions, and next steps."
         case .saving:
             "Writing a durable Markdown note you can read with any editor."
+        case .discarding:
+            "Removing the accidental recording without creating a note."
         }
     }
 }
@@ -784,6 +811,7 @@ private struct ProcessingRail: View {
         case .refining, .transcribing: 1
         case .summarizing: 2
         case .saving: 3
+        case .discarding: 0
         }
     }
 
@@ -807,6 +835,7 @@ private struct ProcessingRail: View {
         case .refining, .transcribing: "Transcript"
         case .summarizing: "Distill"
         case .saving: "Save"
+        case .discarding: "Discard"
         }
     }
 }

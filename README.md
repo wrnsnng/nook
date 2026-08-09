@@ -2,171 +2,131 @@
 
 **Meetings, tucked away.**
 
-Nook is a native, local-first macOS meeting notebook that lives in the menu bar and anchors its recording prompt to the top edge of the active display.
+Nook is a native, local-first macOS meeting notebook. It lives in the menu bar,
+captures system audio and your microphone only after you choose to record,
+transcribes and summarizes on-device, and saves a portable Markdown note.
 
 ![Nook icon](Nook/Resources/Brand/NookIconSource-Cobalt.png)
 
-## What it does
+## Highlights
 
-- Captures both system audio and your microphone, independent of whether the call is in Teams, Zoom, FaceTime, Webex, Google Meet, or another app.
-- Watches visible app/window signals and prompts after a meeting is detected twice.
-- Stops automatically after the meeting signal has been gone for roughly 20 seconds.
-- Transcribes live with Apple's on-device Speech framework, keeping meeting audio and your microphone as distinct speakers.
-- Shows the spoken word as it arrives both in the top panel and in a dedicated live meeting view.
-- Turns the live conversation into an on-demand “gist so far” without interrupting capture.
-- Pauses and resumes capture without saving or transcribing the paused portion.
-- Remembers whether the meeting workspace was compact or expanded and which live view you last used.
-- Falls back to a careful second transcription pass over the saved audio if live recognition is interrupted.
-- Summarizes with Apple's on-device Foundation Models framework.
-- Falls back to a deterministic extractive summary when Apple Intelligence is unavailable.
-- Writes a readable Markdown file containing frontmatter, summary, key points, decisions, action items, and a timestamped transcript.
-- Provides a date-grouped native library, editable meeting notes and titles, a detachable live-notes window, speaker-aware transcripts, Finder reveal, and raw Markdown editing.
-- Supports Auto, Light, and Dark appearance choices, VoiceOver-friendly controls, Reduce Motion, Reduce Transparency, and Increased Contrast.
-- Adds Shortcuts actions for starting a recording and opening the library or latest meeting.
-- Checks for signed, notarized updates through Sparkle and lets people opt into automatic checks and downloads.
-- Uses the display's real menu-bar and camera safe areas for layout and never paints a simulated notch.
+- Records system audio and microphone audio without inviting a meeting bot.
+- Notices likely meetings across common native apps and browsers, then asks
+  before recording.
+- Produces live, speaker-aware captions using Apple's on-device Speech framework.
+- Uses Apple's on-device Foundation Models framework when available, with a
+  deterministic summary fallback.
+- Saves summaries, decisions, action items, personal notes, and a timestamped
+  transcript as ordinary Markdown.
+- Includes a searchable native library, editable notes, raw Markdown editing,
+  Shortcuts actions, and signed automatic updates.
+- Supports VoiceOver, keyboard navigation, Reduce Motion, Reduce Transparency,
+  Increased Contrast, and light/dark appearance.
 
 ## Requirements
 
 - macOS 26 or later.
 - A Mac supported by Apple's on-device Speech framework.
-- Apple Intelligence enabled for high-quality generated summaries. Transcription still works without it, and Nook has a basic summary fallback.
-- Xcode 27 to build the current project.
+- Apple Intelligence enabled for generated summaries. Transcription and the
+  deterministic summary fallback work without it.
+- Stable Xcode 26 and XcodeGen 2.45.4 to regenerate and build the project.
 
-Speech language assets may require a one-time macOS download. Meeting audio and text are not sent to an application server.
-
-## Build and run
-
-The generated Xcode project is committed, so the shortest route is:
+The generated Xcode project is committed, so a contributor can start with:
 
 ```sh
 open Nook.xcodeproj
 ```
 
-Select the **Nook** scheme and press Run. Or build an ad-hoc local app from Terminal:
-
-```sh
-./Scripts/build-app.sh
-open build/Nook.app
-```
-
-On the first recording, macOS asks for:
+Select the **Nook** scheme and press Run. Guided setup walks through:
 
 1. Microphone access.
 2. Speech Recognition access.
 3. Screen & System Audio Recording access.
+4. Direct screen and audio access without choosing a window for every meeting
+   (described by macOS as bypassing the private window picker).
 
-If screen-audio permission is changed, quit and relaunch Nook before trying again.
+Changing Screen & System Audio Recording permission normally requires quitting
+and reopening Nook. The direct-access check reads only shareable-content
+metadata during setup; it does not start or save a test recording.
 
-## Testing a distributed build
+## Build and test
 
-Use `build/distribution/Nook-1.4-notarized.zip`, extract it, and move `Nook.app`
-to `/Applications` before opening it. Do not keep an older copy of Nook in
-Downloads or another Applications folder because Launch Services may open the
-wrong build.
-
-When replacing a build that previously failed to request audio access, clear its
-stale privacy decisions once before launching the notarized app:
+Install the pinned XcodeGen version, regenerate the project, and run tests:
 
 ```sh
-tccutil reset Microphone com.localfirst.nook
-tccutil reset SpeechRecognition com.localfirst.nook
-tccutil reset ScreenCapture com.localfirst.nook
-```
-
-Start Nook from `/Applications`, begin a recording, and accept the Microphone,
-Speech Recognition, and Screen & System Audio Recording prompts. macOS requires
-Nook to relaunch after Screen & System Audio Recording is granted; Nook preserves
-the pending recording and resumes it after the relaunch.
-
-## Notes and recordings
-
-The default notes folder is:
-
-```text
-~/Documents/Nook
-```
-
-It can be changed in Settings. Each meeting is one portable Markdown file. Temporary video containers are always deleted after audio extraction. Extracted audio is deleted too unless **Keep extracted meeting audio** is enabled.
-
-The temporary video track is intentionally configured at 2×2 pixels and one frame per second: ScreenCaptureKit needs a capture stream, but Nook only retains the audio.
-
-## Automatic detection
-
-There is no shared public API through which every meeting app reports call state. Nook therefore uses debounced visible-window signals for Zoom, Teams, Google Meet, FaceTime, Webex, Slack Huddles, Around, and Whereby.
-
-Detection is deliberately conservative:
-
-- Two positive scans are required before the prompt appears.
-- Five missed scans are required before Nook considers the meeting ended.
-- Manual recording is always available from the menu bar with `⇧⌘R`.
-
-Window names can change when meeting apps update. Add or adjust patterns in `MeetingDetector.swift` when necessary.
-
-## Privacy
-
-Nook is designed to keep the data path local:
-
-```text
-Meeting audio
-  → ScreenCaptureKit system + microphone streams
-  → on-device live Speech models
-  → timestamped speaker-aware transcript
-  → saved-audio refinement when needed
-  → on-device Foundation Model
-  → Markdown in your chosen folder
-```
-
-Always follow applicable recording and consent laws and your organization's policy. Nook intentionally does not try to hide the macOS recording privacy indicator.
-
-## Development
-
-Regenerate the Xcode project after editing `project.yml`:
-
-```sh
+xcodegen --version # expected: 2.45.4
 xcodegen generate
+
+xcodebuild test -quiet \
+  -project Nook.xcodeproj \
+  -scheme Nook \
+  -destination 'platform=macOS' \
+  -derivedDataPath .build/DerivedData \
+  CODE_SIGNING_ALLOWED=NO
 ```
 
-Build and test:
+Contributor builds and tests do not require signing, notarization, GitHub, or
+Sparkle credentials. `./Scripts/build-app.sh` creates a local app; it is not an
+official release artifact.
 
-```sh
-xcodebuild -project Nook.xcodeproj -scheme Nook \
-  -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO build
+## Privacy and consent
 
-xcodebuild -project Nook.xcodeproj -scheme Nook \
-  -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO test
-```
+Nook has no application server in the meeting-data path. Meeting audio,
+transcripts, notes, and summaries are processed on the Mac. The app can contact
+Apple to install speech-language assets. Official builds can also contact GitHub
+to check for signed updates; neither request contains meeting content.
 
-The `NookSnapshot` development target renders the real SwiftUI hierarchy offscreen for light, dark, compact, live, and notch visual checks.
+Automatic meeting detection inspects local window titles, application identity,
+and app audio activity. New users choose whether to enable it, and Nook always
+asks before recording. Nook does not hide macOS recording indicators.
 
-## Automatic updates
+Notes are stored as plaintext Markdown in `~/Documents/Nook` by default. The
+folder can be changed in Settings. Temporary video containers are removed after
+processing; extracted audio is retained only when **Keep extracted meeting
+audio** is enabled.
 
-Nook uses [Sparkle 2](https://sparkle-project.org/) for native over-the-air updates. People can check manually from the Nook menu or choose automatic checks and downloads in **Settings → Updates**.
+Recording and transcription laws vary. You are responsible for obtaining
+consent and following applicable law and workplace policy. See
+[Privacy](docs/PRIVACY.md) for the complete data-flow and retention description.
 
-The update chain is deliberately separate from the private source repository:
+## Download
 
-- Source: private `wrnsnng/nook` repository.
-- Binaries and appcast: public `wrnsnng/nook-releases` repository.
-- Update archives: Apple Developer ID signed, notarized, stapled, and EdDSA signed.
-- Appcast: signed and verified before Nook trusts its contents.
-- Private Sparkle key: remains in the local macOS Keychain and is never committed.
+The latest signed and notarized build is published in the separate
+[Nook releases repository](https://github.com/wrnsnng/nook-releases/releases/latest).
+Move `Nook.app` to `/Applications` before opening it so macOS permissions and
+updates attach to a stable app location.
 
-Nook 1.4 is the first OTA-capable build, so existing 1.3 installations need one final manual replacement. Releases after 1.4 can arrive through Sparkle.
+## Contributing
 
-Prepare a release locally:
+Issues and pull requests are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md)
+and follow the [Code of Conduct](CODE_OF_CONDUCT.md). Security vulnerabilities
+should be reported privately as described in [SECURITY.md](SECURITY.md), not in
+a public issue.
 
-```sh
-./Scripts/release-update.sh --notes path/to/release-notes.md
-```
+The most useful contributions include:
 
-After the public release repository exists, publish the archive and stable feed:
+- reproducible fixes for meeting-detection false positives or misses;
+- tests around capture, transcription, Markdown round-trips, and updates;
+- accessibility improvements verified with macOS assistive settings;
+- careful UI refinements that preserve Nook's quiet, native behavior; and
+- documentation corrections based on observed behavior.
 
-```sh
-./Scripts/release-update.sh \
-  --notes path/to/release-notes.md \
-  --publish
-```
+## Documentation
 
-The release script refuses to publish into a repository that is not public. It uses the existing `NookNotary` keychain profile by default and never reads Apple credentials from the repository.
+- [Product and UX contract](docs/PRODUCT.md)
+- [Architecture overview](ARCHITECTURE.md)
+- [Technical details](docs/TECHNICAL.md)
+- [Privacy and data handling](docs/PRIVACY.md)
+- [Accessibility](docs/ACCESSIBILITY.md)
+- [Build and release operations](docs/OPERATIONS.md)
+- [Project governance](GOVERNANCE.md)
+- [Changelog](CHANGELOG.md)
 
-macOS may ask you to allow Sparkle’s release tool to use the signing key; approve that protected Keychain prompt to finish the appcast signature.
+## Project license
+
+Nook's original source code, documentation, and project assets are licensed
+under the [Apache License 2.0](LICENSE). The license does not grant permission
+to use the Nook name, logo, app icon, or other source-identifying marks to brand
+a modified distribution or imply endorsement; see the
+[trademark policy](TRADEMARKS.md). Third-party materials remain under their
+respective licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

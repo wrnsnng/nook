@@ -172,6 +172,9 @@ struct SettingsView: View {
 
                 HStack {
                     Spacer()
+                    Button("Review Nook Setup…") {
+                        AppModel.shared.openIntroduction()
+                    }
                     Button("Open Privacy & Security…") {
                         meeting.revealPermissions()
                     }
@@ -223,6 +226,19 @@ struct SettingsView: View {
                     destination: URL(string: "https://www.common-tools.co/")!
                 )
                 .font(.caption.weight(.semibold))
+
+                HStack(spacing: 6) {
+                    Link(
+                        "Source code",
+                        destination: URL(string: "https://github.com/wrnsnng/nook")!
+                    )
+                    Text("·")
+                    Link(
+                        "Apache-2.0",
+                        destination: URL(string: "https://www.apache.org/licenses/LICENSE-2.0")!
+                    )
+                }
+                .font(.caption)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -239,8 +255,16 @@ struct SettingsView: View {
 
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("Look for a newer Nook")
-                        Text("Checks the signed Common Tools Co. update feed.")
+                        Text(
+                            updater.isUpdaterEnabled
+                                ? "Look for a newer Nook"
+                                : "Contributor build"
+                        )
+                        Text(
+                            updater.isUpdaterEnabled
+                                ? "Checks the signed Common Tools Co. update feed."
+                                : "Official automatic updates are disabled for this build identity."
+                        )
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -250,7 +274,10 @@ struct SettingsView: View {
                     Button("Check Now") {
                         updater.checkForUpdates()
                     }
-                    .disabled(!updater.canCheckForUpdates)
+                    .disabled(
+                        !updater.isUpdaterEnabled
+                            || !updater.canCheckForUpdates
+                    )
                 }
             } header: {
                 Label(
@@ -271,6 +298,7 @@ struct SettingsView: View {
                         }
                     )
                 )
+                .disabled(!updater.isUpdaterEnabled)
 
                 Toggle(
                     "Download updates automatically",
@@ -283,11 +311,18 @@ struct SettingsView: View {
                         }
                     )
                 )
-                .disabled(!updater.automaticallyChecksForUpdates)
+                .disabled(
+                    !updater.isUpdaterEnabled
+                        || !updater.automaticallyChecksForUpdates
+                )
             } header: {
                 Label("Automatic updates", systemImage: "clock.arrow.circlepath")
             } footer: {
-                Text("Sparkle checks the secure feed periodically. Every download is verified with an EdDSA signature and Apple Developer ID before Nook offers to install it.")
+                Text(
+                    updater.isUpdaterEnabled
+                        ? "Sparkle checks the secure feed periodically. Every download is verified with an EdDSA signature and Apple Developer ID before Nook offers to install it."
+                        : "Builds from source use a separate bundle identity and never contact Nook’s production update feed."
+                )
             }
 
             Section {

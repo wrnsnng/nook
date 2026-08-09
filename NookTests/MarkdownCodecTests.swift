@@ -1,8 +1,307 @@
 import Foundation
+import Speech
 import Testing
 @testable import Nook
 
 struct MarkdownCodecTests {
+    @Test
+    func frontmatterRoundTripsEscapedCharacters() throws {
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let note = MeetingNote(
+            title: "Path C:\\Meetings — \"Planning\"\nFollow-up",
+            startedAt: start,
+            endedAt: start.addingTimeInterval(60),
+            sourceApp: "Browser\\Preview\tApp",
+            summary: "A portable note."
+        )
+
+        let markdown = MarkdownCodec.encode(note)
+        let decoded = try #require(MarkdownCodec.decode(markdown))
+
+        #expect(decoded.title == note.title)
+        #expect(decoded.sourceApp == note.sourceApp)
+        #expect(markdown.contains("# Path C:\\Meetings — \"Planning\" Follow-up"))
+    }
+
+    @Test
+    @MainActor
+    func majorMeetingProvidersDetectAndEndWithoutAWindowTitleChange() throws {
+        let fixtures: [(owner: String, title: String, appName: String)] = [
+            (
+                "Microsoft Teams",
+                "Meeting with Taylor Rivera | Microsoft Teams",
+                "Teams"
+            ),
+            ("zoom.us", "Weekly product sync", "Zoom"),
+            ("Google Chrome", "Meet - abc-defg-hij", "Google Meet"),
+            ("Safari", "Meet — abc-defg-hij", "Google Meet"),
+            ("Microsoft Edge", "Google Meet", "Google Meet"),
+            ("Firefox", "Meet – abc-defg-hij", "Google Meet"),
+            ("Webex", "Taylor's Personal Room", "Webex"),
+            ("FaceTime", "Taylor Rivera", "FaceTime")
+        ]
+
+        for fixture in fixtures {
+            let detection = try #require(
+                MeetingDetector.detectionForTesting(
+                    owner: fixture.owner,
+                    title: fixture.title,
+                    audioActivity: .active
+                )
+            )
+            #expect(detection.appName == fixture.appName)
+
+            let detector = MeetingDetector()
+            var endCount = 0
+            detector.onMeetingEnded = { endCount += 1 }
+            detector.acceptForTesting(
+                detection,
+                audioActivity: .active
+            )
+            detector.acceptForTesting(
+                detection,
+                audioActivity: .active
+            )
+            #expect(detector.currentDetection == detection)
+
+            for _ in 0..<5 {
+                detector.acceptForTesting(
+                    detection,
+                    audioActivity: .inactive
+                )
+            }
+
+            #expect(detector.currentDetection == nil)
+            #expect(endCount == 1)
+
+            detector.acceptForTesting(
+                detection,
+                audioActivity: .inactive
+            )
+            detector.acceptForTesting(
+                detection,
+                audioActivity: .inactive
+            )
+            #expect(detector.currentDetection == nil)
+        }
+    }
+
+    @Test
+    @MainActor
+    func nativeMeetingAppsNeedAudioWhenTheirTitleIsAmbiguous() {
+        let ambiguousWindows = [
+            ("zoom.us", "Weekly product sync"),
+            ("Webex", "Taylor's Personal Room"),
+            ("FaceTime", "Taylor Rivera")
+        ]
+
+        for window in ambiguousWindows {
+            #expect(
+                MeetingDetector.detectionForTesting(
+                    owner: window.0,
+                    title: window.1,
+                    audioActivity: .inactive
+                ) == nil
+            )
+            #expect(
+                MeetingDetector.detectionForTesting(
+                    owner: window.0,
+                    title: window.1,
+                    audioActivity: .active
+                ) != nil
+            )
+        }
+
+        #expect(
+            MeetingDetector.detectionForTesting(
+                owner: "FaceTime",
+                title: "FaceTime",
+                audioActivity: .inactive
+            ) == nil
+        )
+        #expect(
+            MeetingDetector.detectionForTesting(
+                owner: "Google Chrome",
+                title: "YouTube",
+                audioActivity: .active
+            ) == nil
+        )
+        #expect(
+            MeetingDetector.detectionForTesting(
+                owner: "Safari",
+                title: "Google Meet",
+                audioActivity: .inactive
+            ) == nil
+        )
+    }
+
+    @Test
+    @MainActor
+    func staleStrongMeetingWindowExpiresEvenWithoutObservedAudio() throws {
+        let detection = try #require(
+            MeetingDetector.detectionForTesting(
+                owner: "Microsoft Teams",
+                title: "Meeting with Taylor Rivera | Microsoft Teams",
+                audioActivity: .inactive
+            )
+        )
+        let detector = MeetingDetector()
+
+        detector.acceptForTesting(
+            detection,
+            audioActivity: .inactive
+        )
+        detector.acceptForTesting(
+            detection,
+            audioActivity: .inactive
+        )
+        #expect(detector.currentDetection == detection)
+
+        for _ in 0..<5 {
+            detector.acceptForTesting(
+                detection,
+                audioActivity: .inactive
+            )
+        }
+        #expect(detector.currentDetection == nil)
+
+        detector.acceptForTesting(
+            detection,
+            audioActivity: .inactive
+        )
+        detector.acceptForTesting(
+            detection,
+            audioActivity: .inactive
+        )
+        #expect(detector.currentDetection == nil)
+    }
+
+    @Test
+    @MainActor
+    func providerAudioProfilesCoverNativeAppsAndMajorBrowsers() {
+        let fixtures: [
+            (
+                owner: String,
+                title: String,
+                processIdentity: String
+            )
+        ] = [
+            (
+                "Microsoft Teams",
+                "Teams meeting",
+                "Microsoft Teams ModuleHost com.microsoft.teams2.modulehost"
+            ),
+            ("zoom.us", "Zoom Meeting", "zoom.us us.zoom.xos"),
+            (
+                "Google Chrome",
+                "Meet - abc-defg-hij",
+                "Google Chrome Helper com.google.Chrome.helper"
+            ),
+            (
+                "Safari",
+                "Google Meet",
+                "com.apple.WebKit.WebContent"
+            ),
+            (
+                "Microsoft Edge",
+                "Google Meet",
+                "Microsoft Edge Helper com.microsoft.edgemac.helper"
+            ),
+            (
+                "Firefox",
+                "Google Meet",
+                "FirefoxCP org.mozilla.firefox"
+            ),
+            (
+                "Webex",
+                "Webex Meeting",
+                "Webex com.cisco.webex2"
+            ),
+            (
+                "FaceTime",
+                "FaceTime call",
+                "FaceTime com.apple.FaceTime"
+            )
+        ]
+
+        for fixture in fixtures {
+            #expect(
+                MeetingDetector.audioIdentityMatchesForTesting(
+                    owner: fixture.owner,
+                    title: fixture.title,
+                    processIdentity: fixture.processIdentity
+                )
+            )
+        }
+    }
+
+    @Test
+    @MainActor
+    func detectedMeetingEndsWhenTeamsAudioStopsButItsWindowRemains() {
+        let detector = MeetingDetector()
+        let meeting = DetectedMeeting(
+            appName: "Teams",
+            windowTitle: "Meeting with Taylor Rivera | Microsoft Teams"
+        )
+        var startedMeeting: DetectedMeeting?
+        var endCount = 0
+        detector.onMeetingStarted = { startedMeeting = $0 }
+        detector.onMeetingEnded = { endCount += 1 }
+
+        detector.acceptForTesting(meeting, audioActivity: .active)
+        detector.acceptForTesting(meeting, audioActivity: .active)
+
+        #expect(detector.currentDetection == meeting)
+        #expect(startedMeeting == meeting)
+
+        for _ in 0..<4 {
+            detector.acceptForTesting(meeting, audioActivity: .inactive)
+        }
+        #expect(detector.currentDetection == meeting)
+        #expect(endCount == 0)
+
+        detector.acceptForTesting(meeting, audioActivity: .inactive)
+
+        #expect(detector.currentDetection == nil)
+        #expect(endCount == 1)
+    }
+
+    @Test
+    @MainActor
+    func anIgnoredMeetingCanBeDetectedAgainAfterItsAudioEnds() {
+        let detector = MeetingDetector()
+        let coordinator = MeetingCoordinator(
+            store: MarkdownStore(),
+            detector: detector
+        )
+        let meeting = DetectedMeeting(
+            appName: "Teams",
+            windowTitle: "Design review | Microsoft Teams"
+        )
+
+        detector.acceptForTesting(meeting, audioActivity: .active)
+        detector.acceptForTesting(meeting, audioActivity: .active)
+        #expect(coordinator.phase == .detected(meeting))
+
+        coordinator.dismissPrompt()
+        #expect(coordinator.phase == .idle)
+
+        for _ in 0..<5 {
+            detector.acceptForTesting(meeting, audioActivity: .inactive)
+        }
+        #expect(detector.currentDetection == nil)
+        #expect(coordinator.phase == .idle)
+
+        detector.acceptForTesting(meeting, audioActivity: .inactive)
+        detector.acceptForTesting(meeting, audioActivity: .inactive)
+        #expect(detector.currentDetection == nil)
+        #expect(coordinator.phase == .idle)
+
+        detector.acceptForTesting(meeting, audioActivity: .active)
+        detector.acceptForTesting(meeting, audioActivity: .active)
+        #expect(coordinator.phase == .detected(meeting))
+    }
+
     @Test
     func updateFeedUsesThePublicReleaseRepository() {
         #expect(
@@ -28,6 +327,22 @@ struct MarkdownCodecTests {
         #expect(project.contains("SUEnableAutomaticChecks: true"))
         #expect(project.contains("SURequireSignedFeed: true"))
         #expect(project.contains("SUVerifyUpdateBeforeExtraction: true"))
+    }
+
+    @Test
+    func applicationBundleShipsOnlyTheCobaltBrandIcon() {
+        #expect(
+            Bundle.main.url(
+                forResource: "NookIconSource-Cobalt",
+                withExtension: "png"
+            ) != nil
+        )
+        #expect(
+            Bundle.main.url(
+                forResource: "NookIconSource",
+                withExtension: "png"
+            ) == nil
+        )
     }
 
     @Test
@@ -138,8 +453,21 @@ struct MarkdownCodecTests {
             panelMode: .transcript
         )
 
-        #expect(size.width == 304)
-        #expect(size.height == 34)
+        #expect(size.width == 316)
+        #expect(size.height == 38)
+    }
+
+    @Test
+    func hiddenRecordingKeepsARecoverableCameraEdgeIndicator() {
+        let size = NotchPanelMetrics.bodySize(
+            for: .recording(title: "Design review", startedAt: .now),
+            showsCaptions: false,
+            panelMode: .transcript,
+            isHidden: true
+        )
+
+        #expect(size.width == 86)
+        #expect(size.height == 0)
     }
 
     @Test
@@ -170,6 +498,77 @@ struct MarkdownCodecTests {
         )
 
         #expect(title == "The onboarding should explain privacy at the moment")
+    }
+
+    @Test
+    func generatedMeetingTitleReplacesTheTimestampFallback() {
+        let title = MeetingTitleGenerator.resolvedTitle(
+            proposedTitle: "Meeting — Thu 2:14 PM",
+            summary: "The team agreed to simplify Nook’s top panel and make recording easier to spot.",
+            keyPoints: ["Simplify the top panel recording controls"],
+            transcript: [],
+            fallbackTitle: "Meeting — Thu 2:14 PM"
+        )
+
+        #expect(title == "Simplify the top panel recording controls")
+    }
+
+    @Test
+    func generatedMeetingTitlePreservesASpecificSubject() {
+        let title = MeetingTitleGenerator.resolvedTitle(
+            proposedTitle: "Nook top panel design review",
+            summary: "The team reviewed the recording workspace.",
+            keyPoints: [],
+            transcript: [],
+            fallbackTitle: "Meeting — Thu 2:14 PM"
+        )
+
+        #expect(title == "Nook top panel design review")
+    }
+
+    @Test
+    func generatedMeetingTitleCanNaturallyEndInMeeting() {
+        let title = MeetingTitleGenerator.resolvedTitle(
+            proposedTitle: "Quarterly board meeting",
+            summary: "",
+            keyPoints: [],
+            transcript: [],
+            fallbackTitle: "Meeting — Thu 2:14 PM"
+        )
+
+        #expect(title == "Quarterly board meeting")
+    }
+
+    @Test
+    func generatedMeetingTitleStripsSummaryLeadIns() {
+        let title = MeetingTitleGenerator.resolvedTitle(
+            proposedTitle: "Meeting",
+            summary: "The discussion focused on accessibility fixes for the notes editor.",
+            keyPoints: [],
+            transcript: [],
+            fallbackTitle: "Meeting — Thu 2:14 PM"
+        )
+
+        #expect(title == "Accessibility fixes for the notes editor")
+    }
+
+    @Test
+    func generatedMeetingTitleUsesFallbackOnlyWithoutUsefulContent() {
+        let fallback = "Meeting — Thu 2:14 PM"
+        let title = MeetingTitleGenerator.resolvedTitle(
+            proposedTitle: fallback,
+            summary: "",
+            keyPoints: [],
+            transcript: [],
+            fallbackTitle: fallback
+        )
+
+        #expect(title == fallback)
+    }
+
+    @Test
+    func meetingWorkspaceUsesThePlainSummaryLabel() {
+        #expect(MeetingPanelMode.summary.label == "Summary")
     }
 
     @Test
@@ -291,6 +690,78 @@ struct MarkdownCodecTests {
 
         coordinator.setLiveNotesDetached(false)
         #expect(!coordinator.liveNotesDetached)
+    }
+
+    @Test
+    @MainActor
+    func recordingTopPanelMovesBetweenExpandedCompactAndHiddenStates() {
+        let coordinator = MeetingCoordinator(
+            store: MarkdownStore(),
+            detector: MeetingDetector()
+        )
+        coordinator.setPreviewState(
+            phase: .recording(title: "Design review", startedAt: .now),
+            elapsed: 42,
+            liveTranscript: .empty,
+            audioLevel: 0.2
+        )
+
+        coordinator.expandTopPanel()
+        #expect(coordinator.showLiveCaptions)
+        #expect(!coordinator.topPanelHidden)
+
+        coordinator.collapseTopPanel()
+        #expect(!coordinator.showLiveCaptions)
+        #expect(!coordinator.topPanelHidden)
+
+        coordinator.hideTopPanel()
+        #expect(coordinator.topPanelHidden)
+
+        coordinator.restoreTopPanel()
+        #expect(!coordinator.topPanelHidden)
+        #expect(!coordinator.showLiveCaptions)
+    }
+
+    @Test
+    @MainActor
+    func statusMenuTracksRecordingCommandsWithoutFollowingTheClock() {
+        let store = MarkdownStore()
+        let coordinator = MeetingCoordinator(
+            store: store,
+            detector: MeetingDetector()
+        )
+        let state = StatusMenuState(
+            meeting: coordinator,
+            store: store
+        )
+
+        #expect(state.phase == .idle)
+
+        coordinator.setPreviewState(
+            phase: .recording(title: "Design review", startedAt: .now),
+            elapsed: 42,
+            liveTranscript: .empty,
+            audioLevel: 0.2
+        )
+
+        #expect(state.phase == .recording)
+        #expect(!state.isPaused)
+
+        coordinator.setPreviewState(
+            phase: .recording(title: "Design review", startedAt: .now),
+            elapsed: 84,
+            liveTranscript: .empty,
+            audioLevel: 0,
+            isPaused: true
+        )
+        coordinator.hideTopPanel()
+
+        #expect(state.phase == .recording)
+        #expect(state.isPaused)
+        #expect(state.topPanelHidden)
+
+        coordinator.restoreTopPanel()
+        #expect(!state.topPanelHidden)
     }
 
     @Test
@@ -436,6 +907,24 @@ struct MarkdownCodecTests {
     }
 
     @Test
+    func permissionSetupCoversEveryRecordingPermissionInOrder() {
+        #expect(
+            NookPermission.allCases == [
+                .microphone,
+                .speechRecognition,
+                .screenRecording,
+            ]
+        )
+
+        for permission in NookPermission.allCases {
+            #expect(!permission.title.isEmpty)
+            #expect(!permission.setupDescription.isEmpty)
+            #expect(!permission.privacyExplanation.isEmpty)
+            #expect(!permission.requestActionTitle.isEmpty)
+        }
+    }
+
+    @Test
     func permissionSettingsRouteToTheMatchingPrivacyPane() {
         #expect(
             NookPermission.screenRecording.settingsURL?.absoluteString
@@ -449,6 +938,39 @@ struct MarkdownCodecTests {
             NookPermission.speechRecognition.settingsURL?.absoluteString
                 .hasSuffix("Privacy_SpeechRecognition") == true
         )
+    }
+
+    @Test
+    @MainActor
+    func screenPermissionRequiresTheDirectCaptureCheck() {
+        #expect(
+            PermissionSetupController.resolvedScreenRecordingStatus(
+                screenCaptureAllowed: true,
+                directCaptureVerified: false,
+                attempted: true,
+                setupFailed: false
+            ) == .notRequested
+        )
+        #expect(
+            PermissionSetupController.resolvedScreenRecordingStatus(
+                screenCaptureAllowed: true,
+                directCaptureVerified: true,
+                attempted: true,
+                setupFailed: false
+            ) == .allowed
+        )
+    }
+
+    @Test
+    @MainActor
+    func speechPermissionCallbackMayReturnOffTheMainActor() async {
+        let status = await SpeechAssets.requestAuthorizationStatus { completion in
+            DispatchQueue.global(qos: .userInitiated).async {
+                completion(.authorized)
+            }
+        }
+
+        #expect(status == .authorized)
     }
 
     @Test

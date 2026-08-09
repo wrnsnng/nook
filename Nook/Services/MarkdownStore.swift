@@ -64,6 +64,7 @@ final class MarkdownStore: ObservableObject {
         var saved = note
         let destination = note.fileURL ?? availableDestination(for: note)
         try MarkdownCodec.encode(note).write(to: destination, atomically: true, encoding: .utf8)
+        protectSensitiveFile(at: destination)
         saved.fileURL = destination
         upsert(saved)
         lastError = nil
@@ -133,6 +134,7 @@ final class MarkdownStore: ObservableObject {
             throw MarkdownStoreError.invalidDocument
         }
         try markdown.write(to: url, atomically: true, encoding: .utf8)
+        protectSensitiveFile(at: url)
         decoded.fileURL = url
         upsert(decoded)
         loadIssues.removeAll { $0.fileURL == url }
@@ -200,8 +202,24 @@ final class MarkdownStore: ObservableObject {
             try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
         } catch {
             lastError = "Couldn’t prepare the recordings folder: \(error.localizedDescription)"
+            return url
         }
+        // User-selected non-POSIX volumes may not support this attribute.
+        try? fileManager.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: url.path
+        )
         return url
+    }
+
+    private func protectSensitiveFile(at url: URL) {
+        // Some user-selected volumes do not implement POSIX permissions. The
+        // note is already saved in that case, so do not turn a successful save
+        // into data loss; use the strictest permissions the volume supports.
+        try? fileManager.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: url.path
+        )
     }
 
     private func ensureDirectory() {

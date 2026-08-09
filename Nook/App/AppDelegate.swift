@@ -2,7 +2,10 @@ import AppKit
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var terminationTask: Task<Void, Never>?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        installApplicationIcon()
         NSApp.setActivationPolicy(.accessory)
 
         #if DEBUG
@@ -65,6 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     ? "Ask Ana to test the meeting prompt.\nRevisit the transition timing before Friday."
                     : nil
             )
+            AppModel.shared.meeting.expandTopPanel()
             AppModel.shared.panel.show()
         }
 
@@ -136,6 +140,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         #endif
+    }
+
+    /// Launch Services may preserve artwork from an older build for a stable
+    /// bundle identifier. Setting the packaged cobalt master explicitly keeps
+    /// the Dock and app switcher in sync immediately after an OTA update.
+    private func installApplicationIcon() {
+        guard
+            let url = Bundle.main.url(
+                forResource: "NookIconSource-Cobalt",
+                withExtension: "png"
+            ),
+            let image = NSImage(contentsOf: url)
+        else {
+            return
+        }
+        NSApp.applicationIconImage = image
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -235,8 +255,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ sender: NSApplication
     ) -> NSApplication.TerminateReply {
         let model = AppModel.shared
+        if terminationTask != nil {
+            return .terminateLater
+        }
+        guard prepareMarkdownForTermination(model: model, sender: sender) else {
+            return .terminateCancel
+        }
+
+        let terminationState = model.meeting.terminationState
+        guard terminationState != .inactive else {
+            return .terminateNow
+        }
+        guard confirmMeetingTermination(terminationState, sender: sender) else {
+            return .terminateCancel
+        }
+
+        terminationTask = Task { @MainActor [weak self, weak sender] in
+            let ready = await model.meeting.prepareForApplicationTermination()
+            self?.terminationTask = nil
+            if !ready {
+                self?.showMeetingTerminationFailure()
+            }
+            sender?.reply(toApplicationShouldTerminate: ready)
+        }
+        return .terminateLater
+    }
+
+    private func prepareMarkdownForTermination(
+        model: AppModel,
+        sender: NSApplication
+    ) -> Bool {
         let draft = model.markdownDraft
-        guard draft.hasChanges else { return .terminateNow }
+        guard draft.hasChanges else { return true }
 
         sender.activate(ignoringOtherApps: true)
         let alert = NSAlert()
@@ -252,21 +302,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                   let note = model.store.notes.first(where: { $0.id == noteID })
             else {
                 showSaveFailure("The original note is no longer in the current notes folder.")
-                return .terminateCancel
+                return false
             }
             do {
                 try draft.save(note: note, store: model.store)
-                return .terminateNow
+                return true
             } catch {
                 showSaveFailure(error.localizedDescription)
-                return .terminateCancel
+                return false
             }
         case .alertThirdButtonReturn:
             draft.discardChanges()
-            return .terminateNow
+            return true
         default:
-            return .terminateCancel
+            return false
         }
+    }
+
+    private func confirmMeetingTermination(
+        _ state: MeetingTerminationState,
+        sender: NSApplication
+    ) -> Bool {
+        sender.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        switch state {
+        case .recording:
+            alert.messageText = "Finish this meeting before quitting?"
+            alert.informativeText = "Nook will stop recording, create the local meeting note, remove temporary capture files, and then quit."
+            alert.addButton(withTitle: "Finish and Quit")
+        case .processing:
+            alert.messageText = "Nook is still creating your meeting note"
+            alert.informativeText = "Nook will finish its local processing, remove temporary capture files, and then quit."
+            alert.addButton(withTitle: "Wait and Quit")
+        case .inactive:
+            return true
+        }
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private func showMeetingTerminationFailure() {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Nook couldn’t finish the meeting before quitting"
+        alert.informativeText = "Nook will stay open so you can review the error. It removed temporary recording files where possible and will identify any file that needs manual cleanup."
+        alert.addButton(withTitle: "Keep Nook Open")
+        alert.runModal()
     }
 
     private func showSaveFailure(_ message: String) {

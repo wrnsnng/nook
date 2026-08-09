@@ -1,0 +1,117 @@
+name: Maintainer unsigned distribution build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: maintainer-distribution-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build official configuration without credentials
+    runs-on: macos-26
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Select stable Xcode 26
+        shell: bash
+        run: |
+          set -euo pipefail
+          stable_xcode="$(
+            find /Applications -maxdepth 1 -type d -name 'Xcode_26*.app' \
+              | grep -Ev '(beta|Beta|RC|rc)' \
+              | sort \
+              | tail -n 1
+          )"
+          test -n "$stable_xcode"
+          sudo xcode-select --switch "$stable_xcode/Contents/Developer"
+          xcodebuild -version
+          if xcodebuild -version | grep -Eiq '(beta|rc|Xcode 27)'; then
+            echo "Distribution artifacts require stable Xcode 26." >&2
+            exit 1
+          fi
+
+      - name: Install pinned XcodeGen
+        shell: bash
+        run: |
+          set -euo pipefail
+          version='2.45.4'
+          expected_sha='090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc86bc170bdbef'
+          archive="$RUNNER_TEMP/xcodegen-$version.zip"
+          install_root="$RUNNER_TEMP/xcodegen-$version"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/$version/xcodegen.zip" \
+            --output "$archive"
+          echo "$expected_sha  $archive" | shasum -a 256 --check
+          unzip -q "$archive" -d "$install_root"
+          echo "$install_root/xcodegen/bin" >> "$GITHUB_PATH"
+          "$install_root/xcodegen/bin/xcodegen" --version
+
+      - name: Verify generated project
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodegen generate
+          git diff --exit-code -- Nook.xcodeproj
+
+      - name: Test official configuration
+        run: |
+          xcodebuild test -quiet \
+            -project Nook.xcodeproj \
+            -scheme Nook \
+            -destination 'platform=macOS' \
+            -derivedDataPath .build/StableDerivedData \
+            NOOK_OFFICIAL_BUILD=YES \
+            PRODUCT_BUNDLE_IDENTIFIER=com.localfirst.nook \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Build universal official configuration
+        run: |
+          xcodebuild build -quiet \
+            -project Nook.xcodeproj \
+            -scheme Nook \
+            -configuration Release \
+            -derivedDataPath .build/StableDerivedData \
+            ARCHS='arm64 x86_64' \
+            ONLY_ACTIVE_ARCH=NO \
+            NOOK_OFFICIAL_BUILD=YES \
+            PRODUCT_BUNDLE_IDENTIFIER=com.localfirst.nook \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Verify unsigned official configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          app='.build/StableDerivedData/Build/Products/Release/Nook.app'
+          executable="$app/Contents/MacOS/Nook"
+          info="$app/Contents/Info.plist"
+          test -d "$app"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info")" = 'com.localfirst.nook'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :NookOfficialBuild' "$info")" = 'YES'
+          lipo -archs "$executable" | grep -q arm64
+          lipo -archs "$executable" | grep -q x86_64
+          if vtool -show-build "$executable" | grep -q 'sdk 27'; then
+            echo "Refusing an app linked against the macOS 27 SDK." >&2
+            exit 1
+          fi
+          /usr/bin/ditto -c -k --keepParent "$app" Nook-stable-unsigned.zip
+          shasum -a 256 Nook-stable-unsigned.zip > Nook-stable-unsigned.zip.sha256
+
+      - name: Upload unsigned official-configuration app
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Nook-stable-unsigned
+          path: |
+            Nook-stable-unsigned.zip
+            Nook-stable-unsigned.zip.sha256
+          if-no-files-found: error
+          retention-days: 1

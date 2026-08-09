@@ -8,7 +8,7 @@ struct SnapshotRenderer {
         let arguments = CommandLine.arguments
         guard (2...3).contains(arguments.count) else {
             FileHandle.standardError.write(
-                Data("Usage: NookSnapshot <output.png> [library|library-light|library-compact|detail-transcript-light|detail-transcript-dark|detail-markdown-light|detail-markdown-dark|settings-about-light|settings-about-dark|live|notch|external-panel|summary-light|summary-dark|notes-light|notes-dark|detected-light|detected-dark|processing-light|processing-dark|completed-light|completed-dark|failure-light|failure-dark]\n".utf8)
+                Data("Usage: NookSnapshot <output.png> [library|library-light|library-compact|welcome-light|welcome-dark|welcome-permission-light|welcome-permission-dark|welcome-ready-light|welcome-ready-dark|detail-transcript-light|detail-transcript-dark|detail-markdown-light|detail-markdown-dark|settings-about-light|settings-about-dark|live|notch|external-panel|summary-light|summary-dark|notes-light|notes-dark|detected-light|detected-dark|processing-light|processing-dark|completed-light|completed-dark|failure-light|failure-dark]\n".utf8)
             )
             Foundation.exit(64)
         }
@@ -94,6 +94,19 @@ struct SnapshotRenderer {
         let canvasSize: CGSize
         let content: AnyView
         switch mode {
+        case "welcome-light", "welcome-dark",
+             "welcome-permission-light", "welcome-permission-dark",
+             "welcome-ready-light", "welcome-ready-dark":
+            canvasSize = CGSize(width: 680, height: 560)
+            let welcomeStep: WelcomeStep = mode.contains("permission")
+                ? .screenRecording
+                : (mode.contains("ready") ? .ready : .introduction)
+            content = AnyView(
+                WelcomeView(detector: detector, initialStep: welcomeStep)
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .environment(\.colorScheme, snapshotColorScheme)
+                    .transaction { $0.disablesAnimations = true }
+            )
         case "detail-transcript-light", "detail-transcript-dark",
              "detail-markdown-light", "detail-markdown-dark":
             canvasSize = CGSize(width: 1_100, height: 700)

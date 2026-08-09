@@ -30,20 +30,29 @@ actor SummaryService {
                     text: text,
                     fallbackTitle: fallbackTitle
                 )
-                return MeetingInsightGrounder.ground(
+                return finalized(
                     insights,
-                    in: transcript
+                    transcript: transcript,
+                    fallbackTitle: fallbackTitle
                 )
             } catch {
                 let insights = heuristicSummary(
                     text: text,
                     fallbackTitle: fallbackTitle
                 )
-                return MeetingInsightGrounder.ground(insights, in: transcript)
+                return finalized(
+                    insights,
+                    transcript: transcript,
+                    fallbackTitle: fallbackTitle
+                )
             }
         }
         let insights = heuristicSummary(text: text, fallbackTitle: fallbackTitle)
-        return MeetingInsightGrounder.ground(insights, in: transcript)
+        return finalized(
+            insights,
+            transcript: transcript,
+            fallbackTitle: fallbackTitle
+        )
     }
 
     private func summarizeWithAppleIntelligence(
@@ -78,12 +87,15 @@ actor SummaryService {
             Output exactly these Markdown headings: # Title, ## Summary, ## Key points,
             ## Decisions, ## Action items. Use bullets under the last three headings.
             For actions, preserve an owner and due date only when stated. Never invent details.
+            The title must be a short, specific description of the main subject,
+            not a date, app name, generic "Meeting" label, or opening pleasantry.
             """
         )
         let response = try await session.respond(
             to: """
             Create the final meeting note from these faithful transcript extracts.
-            Use "\(fallbackTitle)" only if no better short title is apparent.
+            Use "\(fallbackTitle)" only when the transcript truly has no
+            identifiable subject.
 
             \(condensed.joined(separator: "\n\n---\n\n"))
             """
@@ -140,9 +152,61 @@ actor SummaryService {
         )
     }
 
+    private func finalized(
+        _ insights: MeetingInsights,
+        transcript: [TranscriptSegment],
+        fallbackTitle: String
+    ) -> MeetingInsights {
+        var grounded = MeetingInsightGrounder.ground(insights, in: transcript)
+        grounded.title = MeetingTitleGenerator.resolvedTitle(
+            proposedTitle: grounded.title,
+            summary: grounded.summary,
+            keyPoints: grounded.keyPoints,
+            transcript: transcript,
+            fallbackTitle: fallbackTitle
+        )
+        return grounded
+    }
 }
 
 enum MeetingTitleGenerator {
+    static func resolvedTitle(
+        proposedTitle: String,
+        summary: String,
+        keyPoints: [String],
+        transcript: [TranscriptSegment],
+        fallbackTitle: String
+    ) -> String {
+        let proposed = cleanedTitle(proposedTitle)
+        if !isFallbackTitle(proposed, fallbackTitle: fallbackTitle) {
+            return proposed
+        }
+
+        let summarySentences = summary
+            .split(whereSeparator: { ".!?".contains($0) })
+            .map(String.init)
+        let transcriptSentences = transcript
+            .map(\.text)
+            .filter { $0.count > 15 }
+        return heuristicTitle(
+            from: keyPoints + summarySentences + transcriptSentences,
+            fallbackTitle: fallbackTitle
+        )
+    }
+
+    static func isFallbackTitle(
+        _ title: String,
+        fallbackTitle: String
+    ) -> Bool {
+        let normalized = cleanedTitle(title).lowercased()
+        let normalizedFallback = cleanedTitle(fallbackTitle).lowercased()
+        guard !normalized.isEmpty else { return true }
+        if normalized == normalizedFallback { return true }
+        return genericTitles.contains(normalized)
+            || normalized.hasPrefix("meeting —")
+            || normalized.hasPrefix("meeting -")
+    }
+
     static func heuristicTitle(
         from sentences: [String],
         fallbackTitle: String
@@ -159,8 +223,8 @@ enum MeetingTitleGenerator {
         ]
 
         for sentence in sentences {
-            var candidate = sentence.trimmingCharacters(
-                in: .whitespacesAndNewlines
+            var candidate = strippedLeadIn(
+                sentence.trimmingCharacters(in: .whitespacesAndNewlines)
             )
             if let colon = candidate.firstIndex(of: ":") {
                 let speaker = candidate[..<colon].lowercased()
@@ -181,20 +245,55 @@ enum MeetingTitleGenerator {
 
             let words = candidate.split(whereSeparator: \.isWhitespace)
             guard words.count >= 3 else { continue }
-            var title = words.prefix(8).joined(separator: " ")
-                .trimmingCharacters(
-                    in: CharacterSet.punctuationCharacters
-                        .union(.whitespacesAndNewlines)
-                )
-            if title.count > 58 {
-                title = String(title.prefix(58))
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-            }
+            let title = cleanedTitle(words.prefix(8).joined(separator: " "))
             guard let first = title.first else { continue }
             return String(first).uppercased() + title.dropFirst()
         }
         return fallbackTitle
     }
+
+    private static func strippedLeadIn(_ value: String) -> String {
+        let leadIns = [
+            "the meeting transcript begins with ",
+            "the meeting begins with ",
+            "the meeting focused on ",
+            "the discussion focused on ",
+            "the team discussed ",
+            "this meeting covered ",
+            "the conversation covered ",
+        ]
+        let normalized = value.lowercased()
+        guard let leadIn = leadIns.first(where: normalized.hasPrefix) else {
+            return value
+        }
+        return String(value.dropFirst(leadIn.count))
+    }
+
+    private static func cleanedTitle(_ value: String) -> String {
+        var title = value.trimmingCharacters(
+            in: CharacterSet.punctuationCharacters
+                .union(.whitespacesAndNewlines)
+        )
+        if title.count > 58 {
+            title = String(title.prefix(58))
+                .trimmingCharacters(
+                    in: CharacterSet.punctuationCharacters
+                        .union(.whitespacesAndNewlines)
+                )
+        }
+        return title
+    }
+
+    private static let genericTitles: Set<String> = [
+        "meeting",
+        "manual meeting",
+        "zoom meeting",
+        "teams meeting",
+        "google meet meeting",
+        "browser meeting",
+        "untitled meeting",
+        "title",
+    ]
 }
 
 private extension SummaryService {
