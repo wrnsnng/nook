@@ -14,7 +14,7 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
     private var recordingURLs: [URL] = []
     private var nextSegmentNumber = 2
     private(set) var isPaused = false
-    private var finishContinuation: CheckedContinuation<Void, Error>?
+    private let finalizationWaiter: CaptureFinalizationWaiter
     private let preparesLiveInput = Mutex(false)
     private weak var liveTranscription: LiveTranscriptionService?
     private var audioLevelHandler: ((Double, TranscriptSegment.Source) -> Void)?
@@ -27,6 +27,17 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         qos: .userInteractive
     )
     private(set) var lastError: Error?
+
+    override convenience init() {
+        self.init(finalizationTimeout: .seconds(12))
+    }
+
+    init(finalizationTimeout: Duration) {
+        self.finalizationWaiter = CaptureFinalizationWaiter(
+            timeout: finalizationTimeout
+        )
+        super.init()
+    }
 
     var isCapturing: Bool { stream != nil }
 
@@ -129,9 +140,7 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         do {
             try await stream.startCapture()
         } catch {
-            self.stream = nil
-            self.recordingOutput = nil
-            self.recordingURL = nil
+            clear()
             throw error
         }
     }
@@ -144,13 +153,8 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         preparesLiveInput.withLock { $0 = false }
         isPaused = true
         do {
-            try await withCheckedThrowingContinuation { continuation in
-                finishContinuation = continuation
-                do {
-                    try stream.removeRecordingOutput(recordingOutput)
-                } catch {
-                    completeStop(with: error)
-                }
+            try await finalizationWaiter.wait {
+                try stream.removeRecordingOutput(recordingOutput)
             }
             self.recordingOutput = nil
             recordingURL = nil
@@ -199,20 +203,28 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         let completedURLs = recordingURLs
         if isPaused {
             do {
-                try await stream.stopCapture()
+                try await finalizationWaiter.wait {
+                    Task { @MainActor in
+                        do {
+                            try await stream.stopCapture()
+                            self.completeStop()
+                        } catch {
+                            self.completeStop(with: error)
+                        }
+                    }
+                }
             } catch {
                 clear()
                 throw error
             }
         } else {
             do {
-                try await withCheckedThrowingContinuation { continuation in
-                    finishContinuation = continuation
+                try await finalizationWaiter.wait {
                     Task { @MainActor in
                         do {
                             try await stream.stopCapture()
                         } catch {
-                            completeStop(with: error)
+                            self.completeStop(with: error)
                         }
                     }
                 }
@@ -295,12 +307,10 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
     }
 
     private func completeStop(with error: Error? = nil) {
-        guard let continuation = finishContinuation else { return }
-        finishContinuation = nil
         if let error {
-            continuation.resume(throwing: error)
+            finalizationWaiter.resolve(.failure(error))
         } else {
-            continuation.resume()
+            finalizationWaiter.resolve(.success(()))
         }
     }
 
@@ -312,7 +322,7 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         recordingURLs = []
         nextSegmentNumber = 2
         isPaused = false
-        finishContinuation = nil
+        finalizationWaiter.cancel()
         liveTranscription = nil
         audioLevelHandler = nil
         preparesLiveInput.withLock { $0 = false }
@@ -426,6 +436,8 @@ enum CaptureError: LocalizedError {
     case notRecording
     case noDisplay
     case recordingMissing
+    case finalizationInProgress
+    case finalizationTimedOut
 
     var errorDescription: String? {
         switch self {
@@ -445,6 +457,80 @@ enum CaptureError: LocalizedError {
             "Nook could not find a display to capture system audio from."
         case .recordingMissing:
             "The recording did not finish writing to disk."
+        case .finalizationInProgress:
+            "Nook is already securing this recording."
+        case .finalizationTimedOut:
+            "Nook timed out while securing the recording. Temporary files were cleaned up safely."
         }
+    }
+}
+
+/// Waits for ScreenCaptureKit's recording-output delegate without allowing a
+/// missing callback to wedge pause, stop, cancellation, or application quit.
+@MainActor
+final class CaptureFinalizationWaiter {
+    private let timeout: Duration
+    private var continuation: CheckedContinuation<Void, Error>?
+    private var timeoutTask: Task<Void, Never>?
+
+    init(timeout: Duration) {
+        self.timeout = timeout
+    }
+
+    func wait(
+        start: @escaping @MainActor () throws -> Void
+    ) async throws {
+        try Task.checkCancellation()
+        try await withTaskCancellationHandler(
+            operation: {
+                try await self.suspendUntilResolved(start: start)
+            },
+            onCancel: { [weak self] in
+                Task { @MainActor in
+                    self?.cancel()
+                }
+            }
+        )
+    }
+
+    private func suspendUntilResolved(
+        start: @escaping @MainActor () throws -> Void
+    ) async throws {
+        try await withCheckedThrowingContinuation {
+            (continuation: CheckedContinuation<Void, any Error>) in
+            guard self.continuation == nil else {
+                continuation.resume(throwing: CaptureError.finalizationInProgress)
+                return
+            }
+
+            self.continuation = continuation
+            timeoutTask = Task { [weak self] in
+                guard let self else { return }
+                try? await Task.sleep(for: timeout)
+                guard !Task.isCancelled else { return }
+                resolve(.failure(CaptureError.finalizationTimedOut))
+            }
+
+            do {
+                try start()
+                if Task.isCancelled {
+                    resolve(.failure(CancellationError()))
+                }
+            } catch {
+                resolve(.failure(error))
+            }
+        }
+    }
+
+    func resolve(_ result: Result<Void, Error>) {
+        guard let continuation else { return }
+        self.continuation = nil
+        timeoutTask?.cancel()
+        timeoutTask = nil
+        continuation.resume(with: result)
+    }
+
+    func cancel() {
+        resolve(.failure(CancellationError()))
     }
 }

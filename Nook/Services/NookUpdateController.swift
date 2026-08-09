@@ -26,11 +26,44 @@ enum NookUpdateFeed {
     }
 }
 
+enum NookBuildIdentity {
+    static let officialBundleIdentifier = "com.localfirst.nook"
+    static let officialBuildInfoKey = "NookOfficialBuild"
+
+    static var permitsOfficialUpdates: Bool {
+        permitsOfficialUpdates(
+            bundleIdentifier: Bundle.main.bundleIdentifier,
+            officialBuildValue: Bundle.main.object(
+                forInfoDictionaryKey: officialBuildInfoKey
+            )
+        )
+    }
+
+    static func permitsOfficialUpdates(
+        bundleIdentifier: String?,
+        officialBuildValue: Any?
+    ) -> Bool {
+        guard bundleIdentifier == officialBundleIdentifier else {
+            return false
+        }
+
+        if let value = officialBuildValue as? Bool {
+            return value
+        }
+
+        guard let value = officialBuildValue as? String else {
+            return false
+        }
+        return ["1", "true", "yes"].contains(value.lowercased())
+    }
+}
+
 /// Owns Sparkle for Nook's lifetime and exposes its user-controlled update
 /// settings to SwiftUI. Sparkle handles download verification, installation,
 /// relaunching, and its standard macOS update dialogs.
 @MainActor
 final class NookUpdateController: ObservableObject {
+    let isUpdaterEnabled: Bool
     @Published private(set) var canCheckForUpdates = false
     @Published private(set) var automaticallyChecksForUpdates = false
     @Published private(set) var automaticallyDownloadsUpdates = false
@@ -40,10 +73,12 @@ final class NookUpdateController: ObservableObject {
     private let controller: SPUStandardUpdaterController
 
     init(startingUpdater: Bool = true) {
+        let isUpdaterEnabled = NookBuildIdentity.permitsOfficialUpdates
+        self.isUpdaterEnabled = isUpdaterEnabled
         let userDriverDelegate = NookUpdateUserDriverDelegate()
         self.userDriverDelegate = userDriverDelegate
         controller = SPUStandardUpdaterController(
-            startingUpdater: startingUpdater,
+            startingUpdater: startingUpdater && isUpdaterEnabled,
             updaterDelegate: nil,
             userDriverDelegate: userDriverDelegate
         )
@@ -64,14 +99,17 @@ final class NookUpdateController: ObservableObject {
     }
 
     func checkForUpdates() {
+        guard isUpdaterEnabled else { return }
         controller.checkForUpdates(nil)
     }
 
     func setAutomaticallyChecksForUpdates(_ enabled: Bool) {
+        guard isUpdaterEnabled else { return }
         controller.updater.automaticallyChecksForUpdates = enabled
     }
 
     func setAutomaticallyDownloadsUpdates(_ enabled: Bool) {
+        guard isUpdaterEnabled else { return }
         controller.updater.automaticallyDownloadsUpdates = enabled
     }
 }

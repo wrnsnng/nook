@@ -4,11 +4,14 @@
 
 - Native SwiftUI and AppKit macOS application.
 - Minimum deployment target: macOS 26.
-- Xcode 27 / Swift 6 with strict concurrency.
+- Stable Xcode 26 / Swift 6 with strict concurrency.
 - Bundle identifier: `com.localfirst.nook`.
 - App Sandbox is disabled because ScreenCaptureKit system-audio capture and
   user-selected local storage do not fit the current sandbox model.
 - Hardened Runtime is enabled for distribution.
+- Contributor builds use `com.localfirst.nook.dev` and keep the production
+  updater disabled. Maintainer distribution builds explicitly opt into
+  `com.localfirst.nook` and the production updater.
 
 ## System overview
 
@@ -54,8 +57,9 @@ Uses ScreenCaptureKit to capture system audio and microphone audio. The visual
 stream is a minimal 2×2 pixel, one-frame-per-second requirement of the capture
 API; Nook does not retain useful screen video.
 
-Temporary capture containers are deleted after audio extraction. Extracted
-audio is also removed unless the user enables **Keep extracted meeting audio**.
+Temporary capture containers are deleted after processing. Extracted audio is
+also removed unless the user enables **Keep extracted meeting audio**. Failure
+cleanup reports any artifact that could not be removed.
 
 ### `LiveTranscriptionService`
 
@@ -166,6 +170,9 @@ source: "Teams / Zoom / Manual / …"
 
 Saving personal notes refreshes the raw Markdown draft so the Notes and
 Markdown views cannot silently diverge.
+
+Files are plaintext and the selected directory may participate in user-configured
+backup or sync. See [PRIVACY.md](PRIVACY.md).
 
 ## Permissions
 

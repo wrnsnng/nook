@@ -66,8 +66,14 @@ else
     echo "xcodegen is required." >&2
     exit 69
   fi
-  ./Scripts/build-app.sh
+  NOOK_OFFICIAL_BUILD=YES \
+    NOOK_PRODUCT_BUNDLE_IDENTIFIER=com.localfirst.nook \
+    ./Scripts/build-app.sh
 fi
+
+# Fail before notarization if a contributor build, an outdated Sparkle binary,
+# missing notices, or over-entitled updater helper entered the release path.
+./Scripts/verify-release-app.sh "$APP_PATH"
 
 RUNTIME_VERSION=$(
   /usr/bin/codesign -dv --verbose=4 "$APP_PATH" 2>&1 \
@@ -101,7 +107,7 @@ xcrun notarytool submit "$SUBMISSION_ARCHIVE" \
 xcrun stapler staple "$APP_PATH"
 xcrun stapler validate "$APP_PATH"
 
-/usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+./Scripts/verify-release-app.sh "$APP_PATH"
 /usr/sbin/spctl --assess --type execute --verbose=4 "$APP_PATH"
 
 /usr/bin/ditto -c -k --keepParent "$APP_PATH" "$UPDATE_ARCHIVE"

@@ -21,7 +21,7 @@ enum MarkdownCodec {
         source: "\(escape(note.sourceApp))"
         ---
 
-        # \(note.title)
+        # \(headingText(note.title))
 
         ## Summary
 
@@ -183,14 +183,49 @@ enum MarkdownCodec {
     }
 
     private static func escape(_ value: String) -> String {
-        value.replacingOccurrences(of: "\"", with: "\\\"")
+        value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+            .replacingOccurrences(of: "\t", with: "\\t")
     }
 
     private static func unquote(_ value: String) -> String {
         guard value.hasPrefix("\""), value.hasSuffix("\""), value.count >= 2 else {
             return value
         }
-        return String(value.dropFirst().dropLast()).replacingOccurrences(of: "\\\"", with: "\"")
+        let content = value.dropFirst().dropLast()
+        var result = ""
+        var isEscaped = false
+        for character in content {
+            if isEscaped {
+                switch character {
+                case "n": result.append("\n")
+                case "r": result.append("\r")
+                case "t": result.append("\t")
+                case "\\": result.append("\\")
+                case "\"": result.append("\"")
+                default:
+                    result.append("\\")
+                    result.append(character)
+                }
+                isEscaped = false
+            } else if character == "\\" {
+                isEscaped = true
+            } else {
+                result.append(character)
+            }
+        }
+        if isEscaped { result.append("\\") }
+        return result
+    }
+
+    private static func headingText(_ value: String) -> String {
+        value
+            .split(whereSeparator: \.isNewline)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func isoString(from date: Date) -> String {

@@ -4,12 +4,31 @@ import Testing
 
 struct MarkdownCodecTests {
     @Test
+    func frontmatterRoundTripsEscapedCharacters() throws {
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let note = MeetingNote(
+            title: "Path C:\\Meetings — \"Planning\"\nFollow-up",
+            startedAt: start,
+            endedAt: start.addingTimeInterval(60),
+            sourceApp: "Browser\\Preview\tApp",
+            summary: "A portable note."
+        )
+
+        let markdown = MarkdownCodec.encode(note)
+        let decoded = try #require(MarkdownCodec.decode(markdown))
+
+        #expect(decoded.title == note.title)
+        #expect(decoded.sourceApp == note.sourceApp)
+        #expect(markdown.contains("# Path C:\\Meetings — \"Planning\" Follow-up"))
+    }
+
+    @Test
     @MainActor
     func majorMeetingProvidersDetectAndEndWithoutAWindowTitleChange() throws {
         let fixtures: [(owner: String, title: String, appName: String)] = [
             (
                 "Microsoft Teams",
-                "Meeting with Marc Obieglo | Microsoft Teams",
+                "Meeting with Taylor Rivera | Microsoft Teams",
                 "Teams"
             ),
             ("zoom.us", "Weekly product sync", "Zoom"),
@@ -17,8 +36,8 @@ struct MarkdownCodecTests {
             ("Safari", "Meet — abc-defg-hij", "Google Meet"),
             ("Microsoft Edge", "Google Meet", "Google Meet"),
             ("Firefox", "Meet – abc-defg-hij", "Google Meet"),
-            ("Webex", "Marco's Personal Room", "Webex"),
-            ("FaceTime", "Marc Obieglo", "FaceTime")
+            ("Webex", "Taylor's Personal Room", "Webex"),
+            ("FaceTime", "Taylor Rivera", "FaceTime")
         ]
 
         for fixture in fixtures {
@@ -71,8 +90,8 @@ struct MarkdownCodecTests {
     func nativeMeetingAppsNeedAudioWhenTheirTitleIsAmbiguous() {
         let ambiguousWindows = [
             ("zoom.us", "Weekly product sync"),
-            ("Webex", "Marco's Personal Room"),
-            ("FaceTime", "Marc Obieglo")
+            ("Webex", "Taylor's Personal Room"),
+            ("FaceTime", "Taylor Rivera")
         ]
 
         for window in ambiguousWindows {
@@ -121,7 +140,7 @@ struct MarkdownCodecTests {
         let detection = try #require(
             MeetingDetector.detectionForTesting(
                 owner: "Microsoft Teams",
-                title: "Meeting with Marc Obieglo | Microsoft Teams",
+                title: "Meeting with Taylor Rivera | Microsoft Teams",
                 audioActivity: .inactive
             )
         )
@@ -221,7 +240,7 @@ struct MarkdownCodecTests {
         let detector = MeetingDetector()
         let meeting = DetectedMeeting(
             appName: "Teams",
-            windowTitle: "Meeting with Marc Obieglo | Microsoft Teams"
+            windowTitle: "Meeting with Taylor Rivera | Microsoft Teams"
         )
         var startedMeeting: DetectedMeeting?
         var endCount = 0

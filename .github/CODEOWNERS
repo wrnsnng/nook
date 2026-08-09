@@ -1,0 +1,10 @@
+# Default review ownership.
+* @wrnsnng
+
+# Release and security-sensitive areas.
+/.github/ @wrnsnng
+/Scripts/ @wrnsnng
+/Nook/Services/CaptureService.swift @wrnsnng
+/Nook/Services/NookUpdateController.swift @wrnsnng
+/Nook/Nook.entitlements @wrnsnng
+/project.yml @wrnsnng

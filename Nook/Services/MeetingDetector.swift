@@ -67,7 +67,7 @@ final class MeetingDetector: ObservableObject {
     var onMeetingEnded: (() -> Void)?
 
     @Published private(set) var currentDetection: DetectedMeeting?
-    @Published var isEnabled = UserDefaults.standard.object(forKey: "automaticDetection") as? Bool ?? true {
+    @Published var isEnabled = MeetingDetector.initialDetectionPreference() {
         didSet { UserDefaults.standard.set(isEnabled, forKey: "automaticDetection") }
     }
 
@@ -77,6 +77,17 @@ final class MeetingDetector: ObservableObject {
     private var consecutiveHits = 0
     private var consecutiveMisses = 0
     private var consecutiveInactiveAudioScans = 0
+
+    /// New installs wait for an explicit choice in the welcome screen before
+    /// inspecting window and audio-process metadata. Existing installs retain
+    /// the behavior they had before this preference was introduced.
+    private nonisolated static func initialDetectionPreference() -> Bool {
+        let defaults = UserDefaults.standard
+        if let configured = defaults.object(forKey: "automaticDetection") as? Bool {
+            return configured
+        }
+        return defaults.bool(forKey: "hasSeenWelcome")
+    }
 
     func start() {
         guard scanTask == nil else { return }

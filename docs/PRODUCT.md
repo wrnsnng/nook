@@ -132,6 +132,8 @@ stateDiagram-v2
 - Notes placeholders and insertion points align consistently in every editor.
 - Keyboard shortcuts remain available when the top panel is not visible.
 
+The contributor acceptance checklist lives in [ACCESSIBILITY.md](ACCESSIBILITY.md).
+
 ## Voice and copy
 
 Nook should sound calm, plain, and slightly warm. Prefer:
@@ -153,3 +155,5 @@ for consent, applicable recording laws, and workplace policy.
 There is no Nook application server in the meeting data path. The release and
 update infrastructure only distributes the app; it does not receive meeting
 audio or notes.
+
+The complete behavior and retention disclosure lives in [PRIVACY.md](PRIVACY.md).

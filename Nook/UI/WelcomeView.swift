@@ -45,6 +45,27 @@ struct WelcomeView: View {
                 .padding(.top, 13)
                 .accessibilityElement(children: .combine)
 
+                Toggle(
+                    isOn: Binding(
+                        get: { appModel.detector.isEnabled },
+                        set: { appModel.detector.isEnabled = $0 }
+                    )
+                ) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Notice likely meetings")
+                            .font(NookType.control)
+                        Text(
+                            "Checks local window titles and app audio activity. "
+                                + "Nook always asks before recording."
+                        )
+                        .font(NookType.micro)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+                .padding(.horizontal, 34)
+                .padding(.top, 12)
+
                 Spacer(minLength: 14)
 
                 HStack(spacing: 14) {
@@ -81,7 +102,7 @@ struct WelcomeView: View {
                 .padding(.bottom, 18)
 
                 Link(
-                    "A private Mac app by Common Tools Co.",
+                    "A local-first Mac app by Common Tools Co.",
                     destination: URL(string: "https://www.common-tools.co/")!
                 )
                 .font(NookType.micro)
@@ -89,7 +110,7 @@ struct WelcomeView: View {
                 .padding(.bottom, 14)
             }
         }
-        .frame(width: 560, height: 430)
+        .frame(width: 560, height: 480)
         .onDisappear {
             previewTask?.cancel()
             previewTask = nil

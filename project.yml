@@ -14,7 +14,7 @@ settings:
 packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
-    exactVersion: "2.9.4"
+    exactVersion: "2.9.5"
 targets:
   Nook:
     type: application
@@ -23,6 +23,16 @@ targets:
       - path: Nook
         excludes:
           - Resources/Brand/NookIconSource.png
+      - path: THIRD_PARTY_NOTICES.md
+        buildPhase: resources
+      - path: ThirdParty/Sparkle-LICENSE.txt
+        buildPhase: resources
+      - path: LICENSE
+        buildPhase: resources
+      - path: NOTICE
+        buildPhase: resources
+      - path: TRADEMARKS.md
+        buildPhase: resources
     dependencies:
       - package: Sparkle
         product: Sparkle
@@ -42,8 +52,9 @@ targets:
         LSMinimumSystemVersion: "$(MACOSX_DEPLOYMENT_TARGET)"
         LSUIElement: true
         NSAudioCaptureUsageDescription: "Nook captures meeting audio from your Mac so it can create a private local transcript."
-        NSHumanReadableCopyright: "Copyright © 2026 Common Tools Co. All rights reserved."
+        NSHumanReadableCopyright: "Copyright © 2026 Common Tools Co."
         NSMicrophoneUsageDescription: "Nook records your microphone so your side of a meeting can be transcribed locally."
+        NookOfficialBuild: "$(NOOK_OFFICIAL_BUILD)"
         NSScreenCaptureUsageDescription: "Nook captures a minimal screen stream to record meeting system audio locally."
         NSSpeechRecognitionUsageDescription: "Nook uses on-device speech recognition to turn meeting audio into local notes."
         SUEnableAutomaticChecks: true
@@ -53,7 +64,11 @@ targets:
         SUVerifyUpdateBeforeExtraction: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.localfirst.nook
+        # Contributor builds deliberately use a separate identity and never
+        # start Nook's production updater. release-update.sh opts into the
+        # official values explicitly when preparing a signed release.
+        PRODUCT_BUNDLE_IDENTIFIER: com.localfirst.nook.dev
+        NOOK_OFFICIAL_BUILD: NO
         PRODUCT_NAME: Nook
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_ENTITLEMENTS: Nook/Nook.entitlements

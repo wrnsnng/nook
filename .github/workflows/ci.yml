@@ -1,18 +1,21 @@
-name: Maintainer unsigned distribution build
+name: Contributor CI
 
 on:
-  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
 
 concurrency:
-  group: maintainer-distribution-${{ github.ref }}
+  group: contributor-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: Build official configuration without credentials
+  test:
+    name: Test on stable Xcode 26
     runs-on: macos-26
     timeout-minutes: 25
 
@@ -36,7 +39,7 @@ jobs:
           sudo xcode-select --switch "$stable_xcode/Contents/Developer"
           xcodebuild -version
           if xcodebuild -version | grep -Eiq '(beta|rc|Xcode 27)'; then
-            echo "Distribution artifacts require stable Xcode 26." >&2
+            echo "Contributor CI requires stable Xcode 26." >&2
             exit 1
           fi
 
@@ -63,55 +66,29 @@ jobs:
           xcodegen generate
           git diff --exit-code -- Nook.xcodeproj
 
-      - name: Test official configuration
+      - name: Test contributor configuration
         run: |
           xcodebuild test -quiet \
             -project Nook.xcodeproj \
             -scheme Nook \
             -destination 'platform=macOS' \
-            -derivedDataPath .build/StableDerivedData \
-            NOOK_OFFICIAL_BUILD=YES \
-            PRODUCT_BUNDLE_IDENTIFIER=com.localfirst.nook \
+            -derivedDataPath .build/ContributorDerivedData \
             CODE_SIGNING_ALLOWED=NO
 
-      - name: Build universal official configuration
+      - name: Build contributor configuration
         run: |
           xcodebuild build -quiet \
             -project Nook.xcodeproj \
             -scheme Nook \
             -configuration Release \
-            -derivedDataPath .build/StableDerivedData \
-            ARCHS='arm64 x86_64' \
-            ONLY_ACTIVE_ARCH=NO \
-            NOOK_OFFICIAL_BUILD=YES \
-            PRODUCT_BUNDLE_IDENTIFIER=com.localfirst.nook \
+            -derivedDataPath .build/ContributorDerivedData \
             CODE_SIGNING_ALLOWED=NO
 
-      - name: Verify unsigned official configuration
+      - name: Verify development identity and disabled updater
         shell: bash
         run: |
           set -euo pipefail
-          app='.build/StableDerivedData/Build/Products/Release/Nook.app'
-          executable="$app/Contents/MacOS/Nook"
+          app='.build/ContributorDerivedData/Build/Products/Release/Nook.app'
           info="$app/Contents/Info.plist"
-          test -d "$app"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info")" = 'com.localfirst.nook'
-          test "$(/usr/libexec/PlistBuddy -c 'Print :NookOfficialBuild' "$info")" = 'YES'
-          lipo -archs "$executable" | grep -q arm64
-          lipo -archs "$executable" | grep -q x86_64
-          if vtool -show-build "$executable" | grep -q 'sdk 27'; then
-            echo "Refusing an app linked against the macOS 27 SDK." >&2
-            exit 1
-          fi
-          /usr/bin/ditto -c -k --keepParent "$app" Nook-stable-unsigned.zip
-          shasum -a 256 Nook-stable-unsigned.zip > Nook-stable-unsigned.zip.sha256
-
-      - name: Upload unsigned official-configuration app
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: Nook-stable-unsigned
-          path: |
-            Nook-stable-unsigned.zip
-            Nook-stable-unsigned.zip.sha256
-          if-no-files-found: error
-          retention-days: 1
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info")" = 'com.localfirst.nook.dev'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :NookOfficialBuild' "$info")" = 'NO'

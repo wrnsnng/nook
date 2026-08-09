@@ -46,12 +46,12 @@ final class MeetingNotificationService: NSObject, UNUserNotificationCenterDelega
             let content = UNMutableNotificationContent()
             content.title = "Meeting detected"
             content.subtitle = detection.appName
-            content.body = "Record “\(detection.suggestedTitle)” locally with Nook?"
+            content.body = "Record this meeting locally with Nook?"
             content.interruptionLevel = .passive
             content.categoryIdentifier = Action.category
 
             let request = UNNotificationRequest(
-                identifier: "nook-meeting-\(detection.appName)-\(detection.windowTitle)",
+                identifier: "nook-meeting-\(UUID().uuidString)",
                 content: content,
                 trigger: nil
             )

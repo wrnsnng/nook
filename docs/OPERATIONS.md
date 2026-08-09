@@ -1,24 +1,64 @@
-# Nook build and release operations
+# Build and release operations
+
+This document separates public, credential-free contributor work from official
+distribution. Normal pull requests and CI never receive Apple, Sparkle, or
+publishing credentials.
 
 ## Repositories
 
-- Private source: `wrnsnng/nook`
-- Public binaries and update feed: `wrnsnng/nook-releases`
+- Source and collaboration: `wrnsnng/nook`
+- Signed binaries and update feed: `wrnsnng/nook-releases`
 - Stable feed:
   `https://github.com/wrnsnng/nook-releases/releases/download/updates/appcast.xml`
 
-The source repository must remain private. The release repository must remain
-public so Sparkle can download archives without authentication.
+The release repository remains public so installed official builds can fetch
+updates without a GitHub credential.
 
-## Local build
+## Open-source publication gate
 
-Regenerate after editing `project.yml`:
+Before making the source repository public, an owner must confirm that:
+
+- Common Tools Co. owns, or has permission to license, every original code,
+  documentation, and artwork file covered by Apache-2.0;
+- the Nook name and visual identity have received an appropriate trademark
+  clearance review in each intended launch market;
+- the public Git history contains no secrets, private material, or author
+  metadata the contributors do not consent to publish;
+- `LICENSE`, `NOTICE`, `TRADEMARKS.md`, `THIRD_PARTY_NOTICES.md`, and all
+  referenced third-party license files are present in the source distribution;
+  and
+- repository visibility, branch protection, security-advisory access, issue
+  templates, and the default branch are configured as intended.
+
+A trademark policy documents permitted use of marks the project is entitled to
+use; it does not establish ownership, registration, or clearance against prior
+rights. Record legal or provenance evidence privately rather than committing
+contracts or personal records to the repository.
+
+## Toolchains and identities
+
+Both contributor CI and distribution builds use:
+
+- macOS 26;
+- stable Xcode 26, never a beta or release candidate; and
+- XcodeGen 2.45.4.
+
+The generated Xcode project is committed. `project.yml` is authoritative; after
+changing it, run:
 
 ```sh
 xcodegen generate
+git diff --exit-code -- Nook.xcodeproj
 ```
 
-Run the full tests:
+Contributor builds use `com.localfirst.nook.dev` and `NOOK_OFFICIAL_BUILD=NO`.
+That separates macOS privacy grants from the distributed app and disables the
+production updater. Only the maintainer artifact workflow and release tooling
+may opt into `com.localfirst.nook` with `NOOK_OFFICIAL_BUILD=YES`.
+
+## Contributor validation
+
+Run tests without code signing:
 
 ```sh
 xcodebuild test -quiet \
@@ -29,180 +69,134 @@ xcodebuild test -quiet \
   CODE_SIGNING_ALLOWED=NO
 ```
 
-Build a universal local app:
+`.github/workflows/ci.yml` performs the same credential-free validation for pull
+requests and `main`, checks that XcodeGen produces no project drift, builds the
+development configuration, and verifies the development bundle identity and
+disabled-updater marker.
+
+## Unsigned official-configuration artifact
+
+`.github/workflows/stable-macos-build.yml` is manually dispatched by a
+maintainer. It has read-only repository permissions and no release secrets. It:
+
+1. selects stable Xcode 26;
+2. downloads XcodeGen 2.45.4 and checks the pinned SHA-256;
+3. tests with `NOOK_OFFICIAL_BUILD=YES` and
+   `PRODUCT_BUNDLE_IDENTIFIER=com.localfirst.nook`;
+4. builds an unsigned universal app with the same explicit settings;
+5. verifies both architectures, SDK, official bundle identity, and official
+   build marker; and
+6. uploads the app plus a SHA-256 file for one day.
+
+The artifact is not an official release. Before signing it, a maintainer must
+verify the workflow run, source commit, artifact digest, Info.plist values, and
+binary architecture.
+
+## Release credentials
+
+Official publication requires maintainer-controlled local access to:
+
+- an Apple Developer ID Application identity;
+- a `notarytool` Keychain profile;
+- the matching Sparkle Ed25519 private key; and
+- an authenticated GitHub CLI session authorized for the releases repository.
+
+Names and paths can be supplied through the `NOOK_*` environment variables
+documented by the scripts. Private keys, credentials, exported Keychain items,
+provisioning profiles, and notarization records must never be committed, placed
+in CI artifacts, pasted into issues, or accepted from a pull request.
+
+## Version and release-note mapping
+
+Update `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in `project.yml`, then
+regenerate the Xcode project.
+
+- `MARKETING_VERSION` is the user-facing version, release-note filename, and
+  `v<version>` GitHub tag.
+- `CURRENT_PROJECT_VERSION` is the monotonically increasing Sparkle build number
+  and must never be reused.
+- Release notes live at `Releases/Nook-<version>.md` and are linked from
+  [CHANGELOG.md](../CHANGELOG.md).
+
+Commit the version, generated project, release note, and changelog update
+together. Do not include private release logs or notarization submission IDs.
+
+## Preparing an official release
+
+After all automated and manual acceptance checks pass, a credentialed maintainer
+can use the local release script with release notes:
 
 ```sh
-./Scripts/build-app.sh
+NOOK_PREBUILT_APP=/absolute/path/to/Nook.app \
+  ./Scripts/release-update.sh \
+  --notes Releases/Nook-<version>.md
 ```
 
-The script builds arm64 and x86_64, copies the result to `build/Nook.app`, and
-uses an installed Apple code-signing identity when available. A stable
-Developer ID identity is essential for reusable privacy grants.
+Review the prepared archive and feed before adding `--publish`. The script is
+expected to:
 
-## Release prerequisites
+1. require the official build marker and bundle identity;
+2. apply component-correct Developer ID signatures and Hardened Runtime;
+3. notarize, staple, and validate the app;
+4. verify signatures and Gatekeeper assessment;
+5. create and EdDSA-sign the update archive;
+6. generate a signed appcast; and
+7. refuse publication to a non-public or unexpected repository.
 
-- Xcode 27 and command-line tools.
-- `xcodegen`.
-- Authenticated GitHub CLI with access to both repositories.
-- `Developer ID Application: Marc Obieglo (V2KY59725J)` in the login keychain.
-- `NookNotary` notarytool keychain profile.
-- Sparkle Ed25519 private key in Keychain account `ed25519`.
-- The public Sparkle key in the app bundle must match the Keychain private key.
+Release signing is an explicit local maintainer action. Do not add Apple or
+Sparkle private keys to GitHub Actions to automate it.
 
-No Apple or Sparkle private credential belongs in the repository.
+## Verification before publication
 
-## Versioning
-
-Update both values in `project.yml`:
-
-```yaml
-MARKETING_VERSION: "1.6.1"
-CURRENT_PROJECT_VERSION: "9"
-```
-
-- Marketing version is user-facing and becomes the GitHub release tag.
-- Build version must increase monotonically for Sparkle.
-- Run `xcodegen generate` and commit the resulting
-  `Nook.xcodeproj/project.pbxproj` change with `project.yml`.
-
-## Full OTA release
-
-Write Markdown release notes, then run:
+At minimum, verify:
 
 ```sh
-./Scripts/release-update.sh \
-  --notes path/to/release-notes.md \
-  --publish
-```
-
-The script:
-
-1. Builds the universal Release app.
-2. Signs it with Developer ID and Hardened Runtime.
-3. Submits a zip to Apple notarization and waits.
-4. Staples and validates the notarization ticket.
-5. Verifies the deep code signature and Gatekeeper assessment.
-6. Packages the notarized app for Sparkle.
-7. Generates signed deltas from retained releases.
-8. Generates and signs `appcast.xml`.
-9. Publishes only the current versioned archive and stable `Nook.zip` alias
-   under the new version tag.
-10. Publishes the complete historical feed snapshot and signed appcast under
-    the stable `updates` tag.
-
-Human-facing version releases contain only:
-
-- `Nook-<version>.zip`, the versioned notarized archive.
-- `Nook.zip`, a stable alias for
-  `https://github.com/wrnsnng/nook-releases/releases/latest/download/Nook.zip`.
-
-Historical archives, deltas, and the signed appcast live on the dedicated
-`updates` release. This keeps the latest release unambiguous without breaking
-Sparkle update paths.
-
-## Release verification
-
-After publication, verify:
-
-```sh
+codesign --verify --deep --strict --verbose=2 build/Nook.app
 spctl --assess --type execute --verbose=4 build/Nook.app
 xcrun stapler validate build/Nook.app
-codesign --verify --deep --strict --verbose=2 build/Nook.app
 
-gh release view "v<version>" \
-  --repo wrnsnng/nook-releases
-
-curl -fsSL \
-  https://github.com/wrnsnng/nook-releases/releases/download/updates/appcast.xml
+/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \
+  build/Nook.app/Contents/Info.plist
+/usr/libexec/PlistBuddy -c 'Print :NookOfficialBuild' \
+  build/Nook.app/Contents/Info.plist
 ```
 
-The newest appcast item must contain:
+Also inspect the main app and every embedded Sparkle executable with
+`codesign -d --entitlements :-`. The main app should have only its intended
+entitlements; updater helpers must retain their component-specific entitlements.
+Using `codesign --deep` for verification is acceptable, but it must not be used
+as a blanket signing operation.
 
-- the expected `<sparkle:version>` build number
-- the expected `<sparkle:shortVersionString>`
-- the current archive URL
-- `sparkle:edSignature` on the archive
-- a final `sparkle-signatures` block
-- a delta from the immediately previous build when generation succeeds
-
-Compare the local archive SHA-256 with the GitHub release asset digest.
-
-## Current release
-
-As of 5 August 2026:
-
-- Version: **1.6.4**
-- Build: **12**
-- Release:
-  `https://github.com/wrnsnng/nook-releases/releases/tag/v1.6.4`
-- Notarization submission:
-  `888970ec-e072-4f96-bec4-2993a8e1daf5`
-- Status: stable macOS 26.5 SDK build; accepted, stapled, Gatekeeper accepted
-- Sparkle delta from build 11: published
-- Test suite: 49 passing tests
-
-## Building a release without local stable Xcode
-
-`release-update.sh` refuses any app whose runtime version is 27.x, so a machine
-that only has Xcode 27 installed cannot produce a releasable build directly.
-
-Push the release commit to `agent/release-nook-1-6`, let the
-`Stable macOS build` workflow produce the universal `Nook-stable-unsigned`
-artifact on a `macos-26` runner, then sign, notarize, and publish it locally:
-
-```sh
-gh run download <run-id> --repo wrnsnng/nook --name Nook-stable-unsigned --dir /tmp/stable
-ditto -x -k /tmp/stable/Nook-stable-unsigned.zip /tmp/stable
-
-NOOK_PREBUILT_APP=/tmp/stable/Nook.app ./Scripts/release-update.sh \
-  --notes Releases/Nook-<version>.md \
-  --publish
-```
-
-Confirm the artifact before signing it:
-
-```sh
-vtool -show-build /tmp/stable/Nook.app/Contents/MacOS/Nook   # sdk must not be 27
-lipo -archs /tmp/stable/Nook.app/Contents/MacOS/Nook          # arm64 and x86_64
-```
-
-Verify the shipped binary still contains toolchain-sensitive code paths. Nook
-1.6.2 and 1.6.3 lost live transcription because a `#if compiler(>=6.4)` fence
-compiled the audio converter out of every stable-toolchain build while local
-Xcode 27 builds kept it:
-
-```sh
-nm -a /tmp/stable/Nook.app/Contents/MacOS/Nook | grep -c Resampling
-```
+Verify the appcast contains the expected version/build, HTTPS archive URL,
+archive EdDSA signature, and signed-feed block. Compare local archive SHA-256
+with the uploaded release-asset digest.
 
 ## Privacy-permission QA
 
-Test distributed builds from `/Applications/Nook.app`. Remove duplicate app
-copies first so Launch Services cannot open the wrong path.
+Test official builds from `/Applications/Nook.app` and remove duplicate copies
+first. Confirm fresh grant, denial, revocation, and relaunch behavior for
+Microphone, Speech Recognition, and Screen & System Audio Recording.
 
-If an older or incorrectly signed build left stale TCC decisions, reset once:
+Do not make `tccutil reset` a normal update step. Correctly signed releases with
+the stable bundle identity and designated requirement should preserve grants.
 
-```sh
-tccutil reset Microphone com.localfirst.nook
-tccutil reset SpeechRecognition com.localfirst.nook
-tccutil reset ScreenCapture com.localfirst.nook
-```
+## Rollback
 
-Then launch the notarized app from `/Applications`, accept each requested
-permission, and allow the required relaunch after Screen & System Audio
-Recording is granted.
+Prefer fixing forward with a higher build number. If a bad feed is published:
 
-Do not make TCC reset a normal update step. A correctly signed build with the
-stable designated requirement should preserve grants.
+1. preserve source and user data;
+2. stop promoting the bad release;
+3. restore a previously verified signed appcast only when doing so preserves the
+   update trust chain; and
+4. publish a corrected, higher build as soon as it is verified.
 
-## Release rollback
+Deleting or replacing public release assets is externally destructive and must
+be deliberate, reviewed, and documented without exposing credentials.
 
-If a bad feed is published:
+## Dependency maintenance
 
-1. Do not delete meeting data or alter the source repository history.
-2. Restore the previous known-good `appcast.xml` asset on the `updates` release.
-3. Mark the bad version release as a prerelease or remove only its public
-   release assets if necessary.
-4. Fix forward with a higher build number; never reuse a Sparkle build number.
-
-GitHub release deletion is externally destructive and should be deliberate.
+GitHub Actions dependencies are SHA-pinned and monitored by Dependabot. Sparkle
+is declared through the generated Xcode project rather than a root
+`Package.swift`, so maintainers review its releases and security advisories
+manually, update the exact version and resolved revision together, preserve its
+complete third-party notices, and run the full update-chain acceptance pass.
