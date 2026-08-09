@@ -6,6 +6,9 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
+- Added a guided first-run setup that explains Nook’s local workflow and walks
+  through microphone, speech recognition, and both macOS system-audio consent
+  layers before the first recording.
 - Prepared the source project for public collaboration under the Apache License
   2.0, with the Nook identity covered by a separate trademark policy.
 

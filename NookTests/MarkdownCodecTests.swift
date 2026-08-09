@@ -1,4 +1,5 @@
 import Foundation
+import Speech
 import Testing
 @testable import Nook
 
@@ -906,6 +907,24 @@ struct MarkdownCodecTests {
     }
 
     @Test
+    func permissionSetupCoversEveryRecordingPermissionInOrder() {
+        #expect(
+            NookPermission.allCases == [
+                .microphone,
+                .speechRecognition,
+                .screenRecording,
+            ]
+        )
+
+        for permission in NookPermission.allCases {
+            #expect(!permission.title.isEmpty)
+            #expect(!permission.setupDescription.isEmpty)
+            #expect(!permission.privacyExplanation.isEmpty)
+            #expect(!permission.requestActionTitle.isEmpty)
+        }
+    }
+
+    @Test
     func permissionSettingsRouteToTheMatchingPrivacyPane() {
         #expect(
             NookPermission.screenRecording.settingsURL?.absoluteString
@@ -919,6 +938,39 @@ struct MarkdownCodecTests {
             NookPermission.speechRecognition.settingsURL?.absoluteString
                 .hasSuffix("Privacy_SpeechRecognition") == true
         )
+    }
+
+    @Test
+    @MainActor
+    func screenPermissionRequiresTheDirectCaptureCheck() {
+        #expect(
+            PermissionSetupController.resolvedScreenRecordingStatus(
+                screenCaptureAllowed: true,
+                directCaptureVerified: false,
+                attempted: true,
+                setupFailed: false
+            ) == .notRequested
+        )
+        #expect(
+            PermissionSetupController.resolvedScreenRecordingStatus(
+                screenCaptureAllowed: true,
+                directCaptureVerified: true,
+                attempted: true,
+                setupFailed: false
+            ) == .allowed
+        )
+    }
+
+    @Test
+    @MainActor
+    func speechPermissionCallbackMayReturnOffTheMainActor() async {
+        let status = await SpeechAssets.requestAuthorizationStatus { completion in
+            DispatchQueue.global(qos: .userInitiated).async {
+                completion(.authorized)
+            }
+        }
+
+        #expect(status == .authorized)
     }
 
     @Test

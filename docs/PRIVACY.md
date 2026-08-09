@@ -46,6 +46,11 @@ Nook requests macOS-controlled access to:
 - **Speech Recognition**, for on-device transcription; and
 - **Screen & System Audio Recording**, for meeting audio from other apps.
 
+macOS may separately ask Nook to confirm direct screen and audio access without
+using the private window picker for every meeting. Guided setup triggers that
+consent by fetching shareable-content metadata only; it does not start or save
+a test recording.
+
 Nook starts capture only after the user invokes a manual recording or accepts a
 detected-meeting prompt. It does not hide the macOS recording indicator. The
 ScreenCaptureKit stream includes a 2×2-pixel, one-frame-per-second video track

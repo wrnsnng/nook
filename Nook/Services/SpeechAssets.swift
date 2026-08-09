@@ -2,12 +2,22 @@ import Foundation
 import Speech
 
 enum SpeechAssets {
-    static func requestAuthorization() async throws {
-        let status = await withCheckedContinuation { continuation in
-            SFSpeechRecognizer.requestAuthorization { status in
+    /// TCC may deliver this callback on any queue. Keeping the bridge nonisolated
+    /// prevents Swift from asserting a caller's actor (such as MainActor) there.
+    nonisolated static func requestAuthorizationStatus(
+        using request: @escaping @Sendable (
+            @escaping @Sendable (SFSpeechRecognizerAuthorizationStatus) -> Void
+        ) -> Void = SFSpeechRecognizer.requestAuthorization
+    ) async -> SFSpeechRecognizerAuthorizationStatus {
+        await withCheckedContinuation { continuation in
+            request { status in
                 continuation.resume(returning: status)
             }
         }
+    }
+
+    static func requestAuthorization() async throws {
+        let status = await requestAuthorizationStatus()
         guard status == .authorized else {
             throw TranscriptionError.permissionDenied
         }
@@ -55,4 +65,3 @@ enum SpeechAssets {
         }
     }
 }
-

@@ -172,6 +172,9 @@ struct SettingsView: View {
 
                 HStack {
                     Spacer()
+                    Button("Review Nook Setup…") {
+                        AppModel.shared.openIntroduction()
+                    }
                     Button("Open Privacy & Security…") {
                         meeting.revealPermissions()
                     }

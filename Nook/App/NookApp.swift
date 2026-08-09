@@ -57,7 +57,7 @@ struct NookApp: App {
             }
 
             CommandGroup(replacing: .help) {
-                Button("Nook Introduction…") {
+                Button("Nook Setup…") {
                     appModel.openIntroduction()
                 }
 
@@ -69,12 +69,11 @@ struct NookApp: App {
         }
 
         Window("Welcome to Nook", id: "welcome") {
-            WelcomeView()
-                .environmentObject(appModel)
+            WelcomeView(appModel: appModel)
                 .background(NookWindowBridge(role: .welcome))
         }
-        .defaultSize(width: 560, height: 430)
-        .windowResizability(.contentSize)
+        .defaultSize(width: 680, height: 560)
+        .windowResizability(.contentMinSize)
         .windowToolbarStyle(.unifiedCompact(showsTitle: false))
 
         Window("My Notes", id: "live-notes") {

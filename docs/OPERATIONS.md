@@ -175,7 +175,9 @@ with the uploaded release-asset digest.
 
 Test official builds from `/Applications/Nook.app` and remove duplicate copies
 first. Confirm fresh grant, denial, revocation, and relaunch behavior for
-Microphone, Speech Recognition, and Screen & System Audio Recording.
+Microphone, Speech Recognition, Screen & System Audio Recording, and the
+separate direct-access/private-window-picker consent. Confirm both screen-access
+layers are completed in onboarding before starting a real recording.
 
 Do not make `tccutil reset` a normal update step. Correctly signed releases with
 the stable bundle identity and designated requirement should preserve grants.

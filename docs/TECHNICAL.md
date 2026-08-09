@@ -181,9 +181,13 @@ Nook may require:
 1. Microphone
 2. Speech Recognition
 3. Screen & System Audio Recording
+4. Direct ScreenCaptureKit access without the per-meeting private window picker
 
-Screen & System Audio Recording changes normally require an app relaunch. Nook
-persists a pending start request and resumes it after relaunch.
+The final two macOS consent layers are completed together in guided setup.
+Setup verifies direct access by fetching shareable-content metadata without
+starting or saving a capture. Screen & System Audio Recording changes normally
+require an app relaunch. Nook persists a pending start request and resumes it
+after relaunch.
 
 TCC grants attach to an application's designated code requirement. Distribution
 builds must keep the stable bundle identifier and Developer ID identity.

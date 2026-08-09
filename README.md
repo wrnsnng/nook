@@ -37,14 +37,17 @@ The generated Xcode project is committed, so a contributor can start with:
 open Nook.xcodeproj
 ```
 
-Select the **Nook** scheme and press Run. The first recording may request:
+Select the **Nook** scheme and press Run. Guided setup walks through:
 
 1. Microphone access.
 2. Speech Recognition access.
 3. Screen & System Audio Recording access.
+4. Direct screen and audio access without choosing a window for every meeting
+   (described by macOS as bypassing the private window picker).
 
 Changing Screen & System Audio Recording permission normally requires quitting
-and reopening Nook.
+and reopening Nook. The direct-access check reads only shareable-content
+metadata during setup; it does not start or save a test recording.
 
 ## Build and test
 
