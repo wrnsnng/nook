@@ -423,7 +423,12 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
 /// `AVAudioPCMBuffer` owns the copied sample memory and is never mutated after
 /// leaving the capture callback, so it is safe to hand to the main-actor speech
 /// pipeline.
-private struct CapturedAudioBuffer: @unchecked Sendable {
+/// Hands one audio buffer across an isolation boundary.
+///
+/// `AVAudioPCMBuffer` is a reference type Apple does not mark `Sendable`. Every
+/// buffer wrapped here is freshly allocated by its producer and handed over
+/// exactly once, so no two isolation domains ever hold the same one.
+struct CapturedAudioBuffer: @unchecked Sendable {
     let buffer: AVAudioPCMBuffer
 }
 

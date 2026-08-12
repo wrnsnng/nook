@@ -91,6 +91,8 @@ struct NookApp: App {
                 .environmentObject(appModel.detector)
                 .environmentObject(appModel.meeting)
                 .environmentObject(appModel.appearance)
+                .environmentObject(appModel.dictation)
+                .environmentObject(appModel.quickNote)
                 .environmentObject(updater)
                 .frame(width: 620, height: 540)
         }
@@ -102,22 +104,35 @@ private struct NookMenuBarLabel: View {
     @EnvironmentObject private var updater: NookUpdateController
 
     var body: some View {
-        Group {
-            if meeting.phase.isRecording {
-                HStack(spacing: 5) {
-                    Image(
-                        systemName: meeting.isPaused
-                            ? "pause.fill"
-                            : "record.circle.fill"
-                    )
-                    .frame(width: 13)
-                    Text(elapsedLabel)
-                        .font(.system(.caption, design: .monospaced))
-                        .monospacedDigit()
-                        .frame(width: 38, alignment: .leading)
+        HStack(spacing: 3) {
+            Group {
+                if meeting.phase.isRecording {
+                    HStack(spacing: 5) {
+                        Image(
+                            systemName: meeting.isPaused
+                                ? "pause.fill"
+                                : "record.circle.fill"
+                        )
+                        .frame(width: 13)
+                        Text(elapsedLabel)
+                            .font(.system(.caption, design: .monospaced))
+                            .monospacedDigit()
+                            .frame(width: 38, alignment: .leading)
+                    }
+                } else {
+                    Image(systemName: menuBarSymbol)
                 }
-            } else {
-                Image(systemName: menuBarSymbol)
+            }
+
+            // A build from source and an installed release are both called
+            // "Nook" and carry the same icon, so side by side in the menu bar
+            // they are indistinguishable — and acting on the wrong one is easy.
+            // The marker is derived from the existing official-build identity
+            // rather than a separate name, so a release cannot ever show it.
+            if !isOfficialBuild {
+                Text("DEV")
+                    .font(.system(size: 9, weight: .heavy, design: .rounded))
+                    .opacity(0.75)
             }
         }
         .foregroundStyle(
@@ -132,6 +147,10 @@ private struct NookMenuBarLabel: View {
         )
     }
 
+    private var isOfficialBuild: Bool {
+        NookBuildIdentity.permitsOfficialUpdates
+    }
+
     private var menuBarSymbol: String {
         if meeting.phase.isRecording {
             return meeting.phase.menuBarSymbol
@@ -143,16 +162,17 @@ private struct NookMenuBarLabel: View {
     }
 
     private var accessibilityLabel: String {
+        let name = isOfficialBuild ? "Nook" : "Nook, development build"
         if meeting.isPaused {
-            return "Nook, recording paused, \(elapsedSpokenLabel)"
+            return "\(name), recording paused, \(elapsedSpokenLabel)"
         }
         if meeting.phase.isRecording {
-            return "Nook, recording, \(elapsedSpokenLabel)"
+            return "\(name), recording, \(elapsedSpokenLabel)"
         }
         if let version = updater.availableVersion {
-            return "Nook, version \(version) is ready"
+            return "\(name), version \(version) is ready"
         }
-        return "Nook"
+        return name
     }
 
     private var elapsedLabel: String {

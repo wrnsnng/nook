@@ -6,13 +6,13 @@ contribute.
 
 ## Current release
 
-Nook 1.6.4 (build 12) is the current public release.
+Nook 1.7.0 (build 13) is the current public release.
 
 - Release builds use stable Xcode 26 and the macOS 26 SDK.
 - Distributed builds are Developer ID signed, notarized, stapled, and delivered
   through a signed Sparkle feed.
 - The release is available from the
-  [binary releases repository](https://github.com/wrnsnng/nook-releases/releases/tag/v1.6.4).
+  [binary releases repository](https://github.com/wrnsnng/nook-releases/releases/tag/v1.7.0).
 - User-facing changes are mapped in [CHANGELOG.md](../CHANGELOG.md).
 
 ## Durable constraints
@@ -36,6 +36,18 @@ Nook 1.6.4 (build 12) is the current public release.
    and non-notched external-display testing.
 9. **macOS 26 is the current minimum.** Older-system support requires an explicit
    compatibility design.
+10. **Dictation writes into other apps.** Only finalized speech may reach a text
+    field; volatile recognizer output is revised continuously and belongs in
+    Nook's own indicator. Any replacement of already-inserted text must verify
+    what it is about to overwrite and abandon the attempt when it does not
+    match.
+11. **A rewrite is never trusted on its own.** Dictated speech frequently reads
+    as an instruction, and a language model will act on it. Model output is
+    checked against the transcript and discarded in favour of the spoken words
+    when it drifts.
+12. **Accessibility access is dictation-only.** It is never requested during
+    first-run setup, never required for recording, and must remain absent from
+    the meeting permission set.
 
 ## Historical toolchain regression
 
@@ -59,6 +71,16 @@ live system audio, or an installed update. Before an official release, verify:
 - manual and detected starts, pause/resume, finish, cancellation, and failure
   cleanup;
 - live captions and saved-audio transcription with synthetic content;
+- dictation in hold and toggle modes, into a native Cocoa field (TextEdit,
+  Mail), a Chromium or Electron field (Slack, VS Code, a browser text area),
+  and a field that accepts neither, confirming the clipboard is restored;
+- dictation with Accessibility access absent, then granted without relaunch;
+- a dictated question, confirming it is typed rather than answered;
+- a spoken code with repeated characters ("the code is A A 7 3") in Clean up,
+  confirming nothing is dropped. A debug build logs `heard:` and `typed:` for
+  any chunk clean-up altered, which also settles whether the recognizer
+  capitalizes letters that were read out as letters — an assumption
+  `DisfluencyFilter` documents but has never been checked against real output;
 - Markdown save/edit/search and optional audio retention;
 - VoiceOver, keyboard navigation, motion, transparency, contrast, light, and
   dark appearance;

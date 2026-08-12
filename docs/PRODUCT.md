@@ -54,7 +54,42 @@ conversations, or reorganising their workflow around a new service.
 - Save the summary, structured outcomes, personal notes, and transcript into a
   local Markdown file.
 - Browse, search, edit, reveal, and review saved meetings in the native library.
+- Dictate into any text field on the Mac with a customisable global shortcut.
 - Receive signed and notarized updates through Sparkle.
+
+## Dictation
+
+Dictation extends the same promise — your voice, transcribed on this Mac — from
+meetings to everything else typed on it. It is off by default and adds no
+obligations for people who only want meeting notes.
+
+The interaction is: hold a shortcut, speak, let go. Words appear in the field
+that already has focus, as they are said. A small indicator follows the pointer
+showing what Nook is currently hearing.
+
+| Style | What reaches the field |
+| --- | --- |
+| Verbatim | Every word as spoken |
+| Clean up *(default)* | The same words, minus hesitations and stutters |
+| Polish | The same meaning, rewritten as prose |
+| Custom | The same meaning, following the user's own instruction |
+
+Three rules govern this surface:
+
+1. **Only settled text is typed.** The recognizer revises its guess constantly.
+   Revision is shown in Nook's indicator, where it costs nothing, and never in
+   the user's document, where it would mean deleting characters they are
+   watching.
+2. **A rewrite is proposed, not trusted.** Dictated speech often reads as a
+   request, and a language model will answer it. Every rewrite is checked
+   against what was said; when it drifts, the spoken words are typed instead. A
+   dictated question is written down, never answered.
+3. **Failure degrades to the user's own words.** No model, no Apple
+   Intelligence, a slow rewrite, or an app that refuses text insertion each cost
+   polish — never the sentence.
+
+Dictation is the only feature that asks for Accessibility access, and it asks
+only when switched on.
 
 ## Primary surfaces
 

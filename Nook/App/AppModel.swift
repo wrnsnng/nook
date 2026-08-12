@@ -25,6 +25,9 @@ final class AppModel: ObservableObject {
     let meeting: MeetingCoordinator
     let panel: NotchPanelCoordinator
     let notifications: MeetingNotificationService
+    let dictation: DictationCoordinator
+    let quickNote: QuickNoteController
+    private let dictationIndicator = DictationIndicatorController()
     private var openLibraryAction: (@MainActor () -> Void)?
     private var openWelcomeAction: (@MainActor () -> Void)?
     private var openLiveNotesAction: (@MainActor () -> Void)?
@@ -48,6 +51,13 @@ final class AppModel: ObservableObject {
         self.meeting = meeting
         self.panel = NotchPanelCoordinator(meeting: meeting)
         self.notifications = notifications
+        let dictation = DictationCoordinator(
+            localeIdentifier: meeting.localeIdentifier
+        )
+        let quickNote = QuickNoteController(store: store)
+        dictation.quickNote = quickNote
+        self.dictation = dictation
+        self.quickNote = quickNote
 
         meeting.onPresentationRequested = { [weak panel] in
             panel?.show()
@@ -74,6 +84,29 @@ final class AppModel: ObservableObject {
                 self?.closeLiveNotes()
             }
             .store(in: &cancellables)
+
+        // One "spoken language" choice covers both meetings and dictation.
+        meeting.$localeIdentifier
+            .removeDuplicates()
+            .sink { [weak dictation] identifier in
+                dictation?.updateLocale(identifier)
+            }
+            .store(in: &cancellables)
+
+        Publishers.CombineLatest3(
+            dictation.$phase.removeDuplicates(),
+            dictation.$audioLevel,
+            dictation.$volatileText.removeDuplicates()
+        )
+        .sink { [weak self] phase, level, volatileText in
+            self?.dictationIndicator.update(
+                phase: phase,
+                level: level,
+                volatileText: volatileText
+            )
+        }
+        .store(in: &cancellables)
+
         detector.start()
     }
 

@@ -6,6 +6,7 @@ enum WelcomeStep: Int, CaseIterable {
     case microphone
     case speechRecognition
     case screenRecording
+    case dictation
     case ready
 
     var permission: NookPermission? {
@@ -16,7 +17,7 @@ enum WelcomeStep: Int, CaseIterable {
             .microphone
         case .speechRecognition:
             .speechRecognition
-        case .introduction, .ready:
+        case .introduction, .dictation, .ready:
             nil
         }
     }
@@ -26,6 +27,9 @@ struct WelcomeView: View {
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject private var detector: MeetingDetector
+    /// Absent when onboarding is rendered outside the running app, such as in
+    /// the snapshot tool, where there is no coordinator to speak of.
+    private let dictation: DictationCoordinator?
     @StateObject private var permissions = PermissionSetupController()
     @State private var step = WelcomeStep.introduction
     @State private var previewStep = 0
@@ -39,6 +43,7 @@ struct WelcomeView: View {
     ) {
         _detector = ObservedObject(wrappedValue: appModel.detector)
         _step = State(initialValue: initialStep)
+        dictation = appModel.dictation
         completeWelcomeAction = { appModel.completeWelcome() }
         openLibraryAction = { appModel.openLibrary() }
     }
@@ -49,6 +54,7 @@ struct WelcomeView: View {
     ) {
         _detector = ObservedObject(wrappedValue: detector)
         _step = State(initialValue: initialStep)
+        dictation = nil
         completeWelcomeAction = {}
         openLibraryAction = {}
     }
@@ -68,6 +74,8 @@ struct WelcomeView: View {
                         if let permission = step.permission {
                             permissionSetup(permission)
                         }
+                    case .dictation:
+                        dictationIntroduction
                     case .ready:
                         ready
                     }
@@ -259,7 +267,7 @@ struct WelcomeView: View {
                 Text(
                     status == .allowed
                         ? "Both macOS access checks are complete. No test recording was created."
-                        : "You may see two macOS alerts. Nook only checks access here—nothing is recorded or saved."
+                        : "You may see two macOS alerts. Nook only checks access here, nothing is recorded or saved."
                 )
                     .font(NookType.micro)
                     .foregroundStyle(.secondary)
@@ -359,6 +367,116 @@ struct WelcomeView: View {
 
             Spacer()
         }
+    }
+
+    /// Introduces dictation and the spoken note.
+    ///
+    /// Placed after the recording permissions because it is a second thing
+    /// Nook does, not a condition of the first. Someone who only wants meeting
+    /// notes can pass straight through it, and nothing is requested here:
+    /// Accessibility is asked for the first time dictation actually runs.
+    private var dictationIntroduction: some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 9) {
+                Image(systemName: "keyboard.badge.waveform")
+                    .font(.system(size: 34, weight: .light))
+                    .foregroundStyle(NookPalette.accent)
+
+                Text("Speak anywhere on your Mac")
+                    .font(NookType.title)
+
+                Text("Hold a shortcut, say the thing, let go. Nook types it where you are already working.")
+                    .font(NookType.body)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 430)
+            }
+            .padding(.top, 27)
+
+            VStack(spacing: 0) {
+                dictationHighlight(
+                    symbol: "text.cursor",
+                    title: "Into any text field",
+                    detail: "A message, a search box, a document. Your words appear as you speak them."
+                )
+                SoftDivider()
+                dictationHighlight(
+                    symbol: "note.text",
+                    title: "Or into a quick note",
+                    detail: "With nothing selected, Nook opens a small note instead, so a thought can land without opening anything first."
+                )
+                SoftDivider()
+                dictationHighlight(
+                    symbol: "wand.and.sparkles",
+                    title: "Tidied as you like",
+                    detail: "Keep every word, drop the hesitations, or have rambling speech rewritten as clear prose."
+                )
+            }
+            .padding(.horizontal, 17)
+            .background(
+                NookPalette.paper,
+                in: RoundedRectangle(
+                    cornerRadius: NookRadius.surface,
+                    style: .continuous
+                )
+            )
+            .overlay {
+                RoundedRectangle(
+                    cornerRadius: NookRadius.surface,
+                    style: .continuous
+                )
+                .stroke(.primary.opacity(0.09), lineWidth: 0.7)
+            }
+            .padding(.horizontal, 80)
+            .padding(.top, 23)
+
+            if let dictation {
+                Toggle(
+                    isOn: Binding(
+                        get: { dictation.isEnabled },
+                        set: { dictation.isEnabled = $0 }
+                    )
+                ) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Turn on dictation")
+                            .font(NookType.control)
+                        Text("Uses \(dictation.shortcut.displayString). Nook will ask for Accessibility access the first time you use it, so it can type into other apps.")
+                            .font(NookType.micro)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+                .padding(.horizontal, 84)
+                .padding(.top, 18)
+            }
+
+            Spacer()
+        }
+    }
+
+    private func dictationHighlight(
+        symbol: String,
+        title: String,
+        detail: String
+    ) -> some View {
+        HStack(alignment: .top, spacing: 11) {
+            Image(systemName: symbol)
+                .foregroundStyle(NookPalette.accent)
+                .frame(width: 20)
+                .padding(.top, 1)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(NookType.bodyEmphasized)
+                Text(detail)
+                    .font(NookType.micro)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 11)
+        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder

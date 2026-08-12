@@ -359,7 +359,7 @@ private final class LiveTrack {
 
         let finished = await withDeadline(
             seconds: Self.finalizationTimeout
-        ) { [weak self] in
+        ) { [weak self] () -> Void in
             guard let self else { return }
             do {
                 let finalTime = try await self.analysisTask?.value
@@ -375,7 +375,7 @@ private final class LiveTrack {
             }
         }
 
-        guard !finished else { return }
+        guard finished == nil else { return }
         onError?("Nook will refine this transcript from the saved audio.")
         abandon()
     }
@@ -424,52 +424,54 @@ private final class LiveTrack {
     }
 }
 
-/// Runs `operation` with a deadline and reports whether it finished in time.
+/// Runs `operation` with a deadline, returning its value or `nil` on timeout.
 ///
 /// A task group is deliberately not used: it awaits every child before
 /// returning, so a stalled operation would still block the caller — which is
 /// exactly the failure this guards against. The losing task is abandoned.
 @MainActor
-private func withDeadline(
+func withDeadline<Value: Sendable>(
     seconds: Double,
-    operation: @escaping @MainActor () async -> Void
-) async -> Bool {
-    let signal = DeadlineSignal()
+    operation: @escaping @MainActor () async -> Value
+) async -> Value? {
+    let signal = DeadlineSignal<Value>()
     let work = Task { @MainActor in
-        await operation()
-        signal.signal(true)
+        let value = await operation()
+        signal.signal(value)
     }
     let timer = Task { @MainActor in
         try? await Task.sleep(for: .seconds(seconds))
         guard !Task.isCancelled else { return }
-        signal.signal(false)
+        signal.signal(nil)
     }
 
-    let finished = await signal.wait()
+    let result = await signal.wait()
     timer.cancel()
-    if !finished {
+    if result == nil {
         work.cancel()
     }
-    return finished
+    return result
 }
 
 /// A one-shot main-actor signal that tolerates being resolved before or after
-/// the waiter arrives.
+/// the waiter arrives. `nil` means the deadline won.
 @MainActor
-private final class DeadlineSignal {
-    private var continuation: CheckedContinuation<Bool, Never>?
-    private var resolved: Bool?
+final class DeadlineSignal<Value: Sendable> {
+    private var continuation: CheckedContinuation<Value?, Never>?
+    private var hasResolved = false
+    private var resolvedValue: Value?
 
-    func wait() async -> Bool {
-        if let resolved { return resolved }
+    func wait() async -> Value? {
+        if hasResolved { return resolvedValue }
         return await withCheckedContinuation { continuation in
             self.continuation = continuation
         }
     }
 
-    func signal(_ value: Bool) {
-        guard resolved == nil else { return }
-        resolved = value
+    func signal(_ value: Value?) {
+        guard !hasResolved else { return }
+        hasResolved = true
+        resolvedValue = value
         continuation?.resume(returning: value)
         continuation = nil
     }

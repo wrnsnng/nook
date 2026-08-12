@@ -162,7 +162,7 @@ final class MeetingCoordinator: ObservableObject {
         let formatter = DateFormatter()
         formatter.dateFormat = "EEE h:mm a"
         startRecording(
-            title: "Meeting — \(formatter.string(from: Date()))",
+            title: "Meeting \(formatter.string(from: Date()))",
             sourceApp: "Manual"
         )
     }
@@ -279,7 +279,7 @@ final class MeetingCoordinator: ObservableObject {
             }
             do {
                 try await capture.pause()
-                liveCaptionNotice = "Paused — Nook is not saving or transcribing audio."
+                liveCaptionNotice = "Paused. Nook is not saving or transcribing audio."
             } catch {
                 isPaused = false
                 activeElapsedStartedAt = Date()

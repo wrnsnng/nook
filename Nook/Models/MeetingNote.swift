@@ -1,7 +1,35 @@
 import Foundation
 
+/// What a note in the library came from.
+///
+/// Both kinds are ordinary Markdown in the same folder, so search, editing, and
+/// the raw view work identically. The distinction only changes how a note is
+/// presented and which sections are meaningful for it.
+enum NoteKind: String, Codable, Sendable {
+    case meeting
+    case spoken
+
+    /// Notes written before this distinction existed are meetings.
+    static let `default` = NoteKind.meeting
+
+    var label: String {
+        switch self {
+        case .meeting: "Meeting"
+        case .spoken: "Note"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .meeting: "quote.bubble.fill"
+        case .spoken: "waveform.badge.mic"
+        }
+    }
+}
+
 struct MeetingNote: Identifiable, Hashable, Sendable {
     let id: UUID
+    var kind: NoteKind = .default
     var title: String
     var startedAt: Date
     var endedAt: Date
@@ -16,6 +44,7 @@ struct MeetingNote: Identifiable, Hashable, Sendable {
 
     init(
         id: UUID = UUID(),
+        kind: NoteKind = .default,
         title: String,
         startedAt: Date,
         endedAt: Date,
@@ -29,6 +58,7 @@ struct MeetingNote: Identifiable, Hashable, Sendable {
         fileURL: URL? = nil
     ) {
         self.id = id
+        self.kind = kind
         self.title = title
         self.startedAt = startedAt
         self.endedAt = endedAt
