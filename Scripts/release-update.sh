@@ -132,8 +132,23 @@ if [[ "$PUBLIC_KEY" != "$BUNDLE_PUBLIC_KEY" ]]; then
 fi
 
 if [[ -n "$RELEASE_NOTES_PATH" ]]; then
-  /usr/bin/ditto "$RELEASE_NOTES_PATH" "$FEED_DIR/Nook-$VERSION.md"
+  # generate_appcast reads release notes from a file named after the archive
+  # and accepts .html, .md, or .txt. Only HTML without a DOCTYPE or body tags
+  # is embedded into the feed itself; anything else becomes a link that needs
+  # hosting, which is why the update dialog used to come up empty. Only the
+  # HTML is written, so there is no second candidate to be chosen instead.
+  rm -f "$FEED_DIR/Nook-$VERSION.md" "$FEED_DIR/Nook-$VERSION.txt"
+  if ! /usr/bin/python3 "$SCRIPT_DIR/release-notes-html.py" \
+    "$RELEASE_NOTES_PATH" "$FEED_DIR/Nook-$VERSION.html"; then
+    echo "Could not build the HTML release notes." >&2
+    exit 74
+  fi
 fi
+
+# Release notes attach only to items the generator creates, so an appcast that
+# already lists this version would keep its empty description. Rebuilding from
+# the archives present restores every item with its notes.
+rm -f "$FEED_DIR/appcast.xml"
 
 DOWNLOAD_PREFIX="https://github.com/$RELEASE_REPOSITORY/releases/download/updates/"
 "$GENERATE_APPCAST" \

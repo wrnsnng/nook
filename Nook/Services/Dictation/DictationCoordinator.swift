@@ -71,6 +71,16 @@ final class DictationCoordinator: ObservableObject {
     /// up when its session is abandoned cannot tell from `phase` alone whether
     /// a later `.preparing` belongs to it or to a newer run.
     private var sessionID = 0
+    /// Polls for Accessibility access while a registration is waiting on it.
+    private var trustWatch: Task<Void, Never>?
+    /// Loudest input seen this dictation, used to tell a silent microphone
+    /// apart from speech that simply was not recognised.
+    private var peakLevel: Float = 0
+
+    /// Below this the input is silence rather than quiet speech. The level is
+    /// already scaled for voice in `DictationAudioSource`, where ordinary
+    /// speech sits well above it.
+    private static let silenceThreshold: Float = 0.02
     private var localeIdentifier: String
     /// Set by `AppModel` once the store exists. Dictation works without it;
     /// only the no-text-field path needs it.
@@ -103,6 +113,7 @@ final class DictationCoordinator: ObservableObject {
 
         audio.onLevel = { [weak self] level in
             self?.audioLevel = level
+            self?.peakLevel = max(self?.peakLevel ?? 0, level)
         }
         recognizer.onVolatile = { [weak self] text in
             self?.volatileText = text
@@ -167,6 +178,9 @@ final class DictationCoordinator: ObservableObject {
 
     private func applyShortcutRegistration() {
         shortcutError = nil
+        trustWatch?.cancel()
+        trustWatch = nil
+
         guard isEnabled else {
             monitor.unregister()
             return
@@ -175,8 +189,41 @@ final class DictationCoordinator: ObservableObject {
             try monitor.register(shortcut)
         } catch {
             shortcutError = error.localizedDescription
+            watchForAccessibilityGrant()
         }
     }
+
+    /// Waits for Accessibility access to appear, then claims the shortcut.
+    ///
+    /// A modifier-only shortcut cannot be registered until macOS trusts Nook,
+    /// and granting happens in System Settings. Retrying when Nook next becomes
+    /// active is not enough: the user grants access and returns to whatever they
+    /// were doing, so a menu-bar app may not be activated for hours. The
+    /// shortcut would appear configured and quietly do nothing, which is exactly
+    /// how this looked in testing.
+    private func watchForAccessibilityGrant() {
+        guard shortcut.isModifierOnly, !TextInsertionService.isTrusted else {
+            return
+        }
+        trustWatch?.cancel()
+        trustWatch = Task { @MainActor [weak self] in
+            // Bounded, because this covers the minutes around a visit to System
+            // Settings. Anything later is picked up when Nook next becomes
+            // active, which is a fine backstop once the urgency has passed.
+            for _ in 0..<Self.trustWatchAttempts {
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else { return }
+                guard let self, self.isEnabled else { return }
+                guard TextInsertionService.isTrusted else { continue }
+                self.trustWatch = nil
+                self.applyShortcutRegistration()
+                return
+            }
+        }
+    }
+
+    /// Two seconds apart, so about five minutes in total.
+    private static let trustWatchAttempts = 150
 
     private func shortcutPressed() {
         switch activation {
@@ -371,6 +418,7 @@ final class DictationCoordinator: ObservableObject {
     /// Clears everything scoped to a single dictation. Kept in one place so a
     /// new piece of per-run state cannot be added to one reset and not another.
     private func resetRunState() {
+        peakLevel = 0
         spokenChunks = []
         insertedAnything = false
         streamingFailed = false
@@ -398,10 +446,20 @@ final class DictationCoordinator: ObservableObject {
 
         let spoken = spokenText
         #if DEBUG
-        DictationDebugLog.write("[dictation] deliver — capability: \(capability), streamingFailed: \(streamingFailed), chunks: \(spokenChunks.count), spoken: \"\(spoken)\"")
+        DictationDebugLog.write("[dictation] deliver — capability: \(capability), streamingFailed: \(streamingFailed), chunks: \(spokenChunks.count), peak: \(peakLevel), spoken: \"\(spoken)\"")
         #endif
         guard !spoken.isEmpty else {
-            phase = .idle
+            // Nothing was recognised. Silence at the microphone and speech that
+            // merely failed to recognise are different problems with different
+            // fixes, and the difference is invisible from the outside: the
+            // indicator says "Listening" either way, then closes with nothing.
+            // A muted or switched-off input is by far the more common of the
+            // two, and the only one the user can act on.
+            fail(
+                peakLevel < Self.silenceThreshold
+                    ? "Nook didn’t hear anything. Check that your microphone is on."
+                    : "Nook couldn’t make out any words."
+            )
             return
         }
 
