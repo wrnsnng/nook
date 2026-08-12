@@ -18,6 +18,9 @@ transcribes and summarizes on-device, and saves a portable Markdown note.
   deterministic summary fallback.
 - Saves summaries, decisions, action items, personal notes, and a timestamped
   transcript as ordinary Markdown.
+- Dictates into any text field on the Mac: hold a shortcut, speak, and your
+  words appear where you were already typing — verbatim, tidied, or rewritten
+  as prose, all on-device.
 - Includes a searchable native library, editable notes, raw Markdown editing,
   Shortcuts actions, and signed automatic updates.
 - Supports VoiceOver, keyboard navigation, Reduce Motion, Reduce Transparency,
@@ -102,6 +105,9 @@ Issues and pull requests are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.
 and follow the [Code of Conduct](CODE_OF_CONDUCT.md). Security vulnerabilities
 should be reported privately as described in [SECURITY.md](SECURITY.md), not in
 a public issue.
+
+Working with an AI coding agent? [AGENTS.md](AGENTS.md) holds the rules this
+codebase enforces, in one tool-agnostic file.
 
 The most useful contributions include:
 

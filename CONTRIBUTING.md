@@ -40,6 +40,17 @@ bundle identity with automatic updates disabled.
 Open `Nook.xcodeproj` and run the `Nook` scheme for interactive work. Local
 capture testing requires granting macOS permissions to that local build.
 
+## Using an AI coding agent
+
+Agents are welcome here. Point yours at [AGENTS.md](AGENTS.md), which records
+the constraints this codebase enforces that a model will otherwise miss:
+regenerating the project after adding files, Swift 6 isolation at runtime,
+toolchain-dependent behaviour, the copy rules, and the local-first boundary.
+
+You remain responsible for what you submit. Say in the pull request what you
+verified yourself, particularly for anything touching capture, permissions, or
+updates, which CI cannot test.
+
 ## Making a change
 
 - Keep each pull request focused on one coherent problem.

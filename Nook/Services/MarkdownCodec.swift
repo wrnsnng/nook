@@ -12,14 +12,40 @@ enum MarkdownCodec {
             return "- **[\($0.timestamp)]** \(speaker)\($0.text.trimmingCharacters(in: .whitespacesAndNewlines))"
         }.joined(separator: "\n")
 
-        return """
+        let frontmatter = """
         ---
         id: \(note.id.uuidString)
+        kind: \(note.kind.rawValue)
         title: "\(escape(note.title))"
         started: \(isoString(from: note.startedAt))
         ended: \(isoString(from: note.endedAt))
         source: "\(escape(note.sourceApp))"
         ---
+        """
+
+        // A spoken note is a title and then prose, with nothing after it.
+        //
+        // This is a correctness requirement, not a layout preference. The body
+        // is free text: the speaker can dictate a heading, and an assistant
+        // action appends its result under one. Any section that followed the
+        // body would be found by whichever "## " appeared first, so a heading
+        // inside the note would swallow everything written after it. Ending the
+        // file with the body makes that impossible rather than unlikely.
+        //
+        // Nothing is lost by it. Action items and personal notes for a spoken
+        // note live in the prose, which is where they were spoken or written.
+        if note.kind == .spoken {
+            return """
+            \(frontmatter)
+
+            # \(headingText(note.title))
+
+            \(note.summary.trimmingCharacters(in: .whitespacesAndNewlines))
+            """
+        }
+
+        return """
+        \(frontmatter)
 
         # \(headingText(note.title))
 
@@ -62,7 +88,32 @@ enum MarkdownCodec {
 
         let title = unquote(metadata["title"] ?? bodyTitle ?? "Untitled meeting")
         let source = unquote(metadata["source"] ?? "Unknown")
-        let summary = section("Summary", in: markdown).trimmingCharacters(in: .whitespacesAndNewlines)
+        // Absent in every note written before spoken notes existed, which are
+        // all meetings.
+        let kind = metadata["kind"]
+            .flatMap { NoteKind(rawValue: unquote($0)) } ?? .default
+        // A spoken note carries its text under the heading rather than under a
+        // "## Summary" marker, so it is read back from the body.
+        let summary = kind == .spoken
+            ? bodyText(in: markdown)
+            : section("Summary", in: markdown)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Everything in a spoken note is its prose. Parsing sections out of it
+        // would pull fragments of the body into fields that then get written
+        // back a second time, duplicating what the user wrote.
+        if kind == .spoken {
+            return MeetingNote(
+                id: id,
+                kind: .spoken,
+                title: title,
+                startedAt: startedAt,
+                endedAt: endedAt,
+                sourceApp: source,
+                summary: summary,
+                fileURL: fileURL
+            )
+        }
         let keyPoints = NoteContentSanitizer.meaningfulItems(
             listItems(in: section("Key points", in: markdown))
         )
@@ -83,6 +134,7 @@ enum MarkdownCodec {
 
         return MeetingNote(
             id: id,
+            kind: kind,
             title: title,
             startedAt: startedAt,
             endedAt: endedAt,
@@ -121,6 +173,74 @@ enum MarkdownCodec {
                 let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
                 values[key] = value
             }
+    }
+
+    /// Everything after the first heading, to the end of the file.
+    ///
+    /// A spoken note keeps its text here: it is one piece of prose, not a set
+    /// of meeting sections, and burying it under a "Summary" heading would
+    /// misdescribe it in every editor that opens the file.
+    ///
+    /// Reading to the end is deliberate. Stopping at the first "## " lost
+    /// everything past any heading the prose itself contained, which an
+    /// assistant action produced every single time it ran.
+    private static func bodyText(in markdown: String) -> String {
+        guard let headingRange = markdown.range(
+            of: "\n# ",
+            options: []
+        ) else {
+            return ""
+        }
+        let afterHeading = markdown[headingRange.upperBound...]
+        guard let lineBreak = afterHeading.firstIndex(of: "\n") else {
+            return ""
+        }
+        let body = String(afterHeading[afterHeading.index(after: lineBreak)...])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return withoutLegacySpokenSections(body)
+    }
+
+    /// Removes the empty sections an earlier spoken-note layout wrote.
+    ///
+    /// That layout put "## Action items" and "## My notes" after the body,
+    /// which is what made a heading in the prose truncate the file. Now that
+    /// the body runs to the end, those trailing sections would otherwise
+    /// reappear as literal text inside somebody's note.
+    ///
+    /// Only the exact placeholders the old encoder produced are removed, so a
+    /// note that genuinely says "## My notes" keeps it. This can be deleted
+    /// once no files in that layout remain; it never reached a release.
+    private static func withoutLegacySpokenSections(_ body: String) -> String {
+        let placeholders = [
+            "\n## Action items\n\n_None captured._",
+            "\n## My notes\n\n_No personal notes._"
+        ]
+        var result = body
+
+        // Repeated rather than one pass: the sections were written in a fixed
+        // order, so removing the last one exposes the one before it.
+        var removedSomething = true
+        while removedSomething {
+            removedSomething = false
+            for placeholder in placeholders {
+                guard let range = result.range(
+                    of: placeholder,
+                    options: [.backwards]
+                ) else {
+                    continue
+                }
+                // Only when nothing but whitespace follows: text mid-note that
+                // happens to match is the user's own writing.
+                guard result[range.upperBound...].trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                ).isEmpty else {
+                    continue
+                }
+                result.removeSubrange(range.lowerBound..<result.endIndex)
+                removedSomething = true
+            }
+        }
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func firstHeading(in markdown: String) -> String? {

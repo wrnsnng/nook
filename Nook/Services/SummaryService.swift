@@ -202,9 +202,19 @@ enum MeetingTitleGenerator {
         let normalizedFallback = cleanedTitle(fallbackTitle).lowercased()
         guard !normalized.isEmpty else { return true }
         if normalized == normalizedFallback { return true }
+        // Timestamp fallbacks in every shape Nook has generated. The dashed
+        // forms are still recognised so notes saved by older versions are not
+        // suddenly treated as having a real title.
         return genericTitles.contains(normalized)
             || normalized.hasPrefix("meeting —")
             || normalized.hasPrefix("meeting -")
+            // The generated form is "Meeting Wed 2:03 PM". Requiring the time
+            // as well keeps a title somebody actually typed, such as
+            // "Meeting Mon Standup", from being mistaken for a placeholder.
+            || normalized.range(
+                of: #"^meeting\s+(mon|tue|wed|thu|fri|sat|sun)\s+\d{1,2}:\d{2}"#,
+                options: [.regularExpression]
+            ) != nil
     }
 
     static func heuristicTitle(

@@ -16,8 +16,18 @@ local meeting metadata (optional detection)
   → temporary recording deleted unless audio retention is enabled
 ```
 
+Dictation is a separate path with the same property:
+
+```text
+user holds the dictation shortcut
+  → microphone audio via AVAudioEngine
+  → on-device Speech transcription
+  → deterministic clean-up, or an on-device Foundation Models rewrite
+  → text inserted into the focused text field
+```
+
 There is no Nook account, meeting bot, sync service, advertising SDK, analytics
-SDK, or application server in this path.
+SDK, or application server in either path.
 
 ## Meeting detection
 
@@ -59,6 +69,43 @@ screen video and its temporary container is deleted after processing.
 
 Pausing removes the recording output and stops forwarding audio to live
 transcription until the user resumes.
+
+## Dictation and Accessibility access
+
+Dictation is off by default. Turning it on requires one additional
+macOS-controlled permission:
+
+- **Accessibility**, so Nook can place text into the field that has focus.
+
+This is the broadest permission Nook asks for, and it deserves to be understood
+rather than clicked through. Granting it lets an app read and control other
+apps' interfaces. Nook uses it for exactly two operations: reading which element
+currently has keyboard focus, and writing text into that element. It does not
+read the surrounding document, observe other applications, or record keystrokes.
+
+Nook never requests Accessibility access during first-run setup or for meeting
+recording. It is requested only when a user first switches dictation on, and
+dictation is the only feature that stops working if it is revoked.
+
+Dictation captures the microphone through `AVAudioEngine` rather than
+ScreenCaptureKit, so it needs no screen-recording access and captures no system
+audio — only the user's own voice, only while the shortcut is held or a toggled
+session is running. The macOS microphone indicator is active throughout.
+
+Some applications do not accept direct text insertion. For those, Nook falls
+back to placing the text on the clipboard and synthesising a paste, then
+restoring the previous clipboard contents. During that brief window the dictated
+text is on the system clipboard and readable by other software.
+
+Rewrites for the **Polish** and **Custom** styles use the on-device Foundation
+Models framework, the same as meeting summaries. Dictated speech is not sent to
+a hosted model. **Verbatim** and **Clean up** use no model at all; clean-up is a
+fixed list of hesitation words removed by ordinary string handling.
+
+Every rewrite is compared against what was actually said before it is inserted.
+If the wording has drifted too far — which is what happens when a model answers
+dictated speech instead of transcribing it — the user's own words are inserted
+instead.
 
 ## Transcription and summaries
 
@@ -121,6 +168,8 @@ framework output can identify a meeting or user.
 Users can:
 
 - disable automatic meeting detection;
+- leave dictation off, or turn it off and revoke Accessibility access;
+- choose whether dictated speech is rewritten at all;
 - decline any detected recording;
 - pause, finish, or cancel a recording;
 - choose the notes folder;

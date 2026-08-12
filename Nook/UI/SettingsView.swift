@@ -3,6 +3,7 @@ import SwiftUI
 
 enum SettingsPane: Hashable {
     case listening
+    case dictation
     case privacy
     case updates
     case about
@@ -14,9 +15,12 @@ struct SettingsView: View {
     @EnvironmentObject private var meeting: MeetingCoordinator
     @EnvironmentObject private var appearance: NookAppearanceController
     @EnvironmentObject private var updater: NookUpdateController
+    @EnvironmentObject private var dictation: DictationCoordinator
+    @EnvironmentObject private var quickNote: QuickNoteController
     @State private var pendingStorageURL: URL?
     @State private var storageMessage: String?
     @State private var selectedPane: SettingsPane
+    @State private var accessibilityGranted = TextInsertionService.isTrusted
 
     init(initialPane: SettingsPane = .listening) {
         _selectedPane = State(initialValue: initialPane)
@@ -29,6 +33,12 @@ struct SettingsView: View {
                     Label("Listening", systemImage: "waveform.and.mic")
                 }
                 .tag(SettingsPane.listening)
+
+            dictationPane
+                .tabItem {
+                    Label("Dictation", systemImage: "mic.and.signal.meter")
+                }
+                .tag(SettingsPane.dictation)
 
             privacyPane
                 .tabItem {
@@ -118,6 +128,193 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private var dictationPane: some View {
+        Form {
+            Section {
+                Toggle("Dictate into any text field", isOn: $dictation.isEnabled)
+
+                if dictation.isEnabled {
+                    LabeledContent("Shortcut") {
+                        ShortcutRecorderView(shortcut: dictation.shortcut) {
+                            dictation.setShortcut($0)
+                        }
+                    }
+
+                    Picker("Behaviour", selection: $dictation.activation) {
+                        ForEach(DictationActivation.allCases) { option in
+                            Text(option.title).tag(option)
+                        }
+                    }
+
+                    if let error = dictation.shortcutError {
+                        Label(error, systemImage: "exclamationmark.triangle.fill")
+                            .font(NookType.caption)
+                            .foregroundStyle(NookPalette.warning)
+                    }
+                }
+            } header: {
+                Label("Voice typing", systemImage: "keyboard.badge.waveform")
+            } footer: {
+                Text(
+                    dictation.isEnabled
+                        ? "\(dictation.activation.detail) Your words appear as you speak, then land in whichever text field has focus."
+                        : "Hold a shortcut anywhere on your Mac, speak, and Nook types it into the field you are already in."
+                )
+            }
+
+            if dictation.isEnabled {
+                Section {
+                    Picker("Style", selection: $dictation.style) {
+                        ForEach(DictationStyle.allCases) { option in
+                            Label(option.title, systemImage: option.symbol)
+                                .tag(option)
+                        }
+                    }
+
+                    Text(dictation.style.detail)
+                        .font(NookType.caption)
+                        .foregroundStyle(.secondary)
+
+                    if dictation.style == .custom {
+                        TextEditor(text: $dictation.customPrompt)
+                            .font(NookType.caption)
+                            .frame(minHeight: 68)
+                            .scrollContentBackground(.hidden)
+                            .padding(NookSpacing.small)
+                            .background(NookPalette.paper, in: .rect(cornerRadius: NookRadius.control))
+                            .accessibilityLabel("Custom dictation instruction")
+                    }
+
+                    if dictation.style.usesLanguageModel, !isAppleIntelligenceAvailable {
+                        Label(
+                            "Apple Intelligence is unavailable, so Nook will type your words unchanged.",
+                            systemImage: "info.circle"
+                        )
+                        .font(NookType.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Label("How Nook writes it", systemImage: "wand.and.stars")
+                } footer: {
+                    Text("Nook checks every rewrite against what you actually said. If the wording drifts too far, your own words are typed instead. A dictated question is never answered, only written down.")
+                }
+
+                Section {
+                    Picker("Note actions run", selection: engineSelection) {
+                        ForEach(quickNote.availableEngines) { engine in
+                            Text(
+                                engine.provider.map {
+                                    "\(engine.title) (sends to \($0))"
+                                } ?? engine.title
+                            )
+                            .tag(engine)
+                        }
+                    }
+                    .disabled(quickNote.availableEngines.count < 2)
+
+                    if let provider = quickNote.engine.provider {
+                        HStack(alignment: .top, spacing: NookSpacing.small) {
+                            Image(systemName: "arrow.up.forward.app.fill")
+                                .foregroundStyle(NookPalette.warning)
+                                .accessibilityHidden(true)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Notes are sent to \(provider)")
+                                    .font(NookType.caption.weight(.semibold))
+                                Text("Every note you run an action on leaves this Mac. Nothing else does, and nothing is sent until you use an action.")
+                                    .font(NookType.caption)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer(minLength: 0)
+                            Button("Keep Local") {
+                                quickNote.revokeConsent(for: quickNote.engine)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                } header: {
+                    Label("Spoken notes", systemImage: "note.text")
+                } footer: {
+                    Text(
+                        quickNote.availableEngines.count < 2
+                            ? "Tidy up, summarise, and find actions run with Apple Intelligence on this Mac. Install and sign into Claude Code or the Codex CLI to use those instead, with the subscription you already have."
+                            : "This is the default for every new note. You can still change it for a single note in the note window."
+                    )
+                }
+
+                Section {
+                    HStack(alignment: .top, spacing: NookSpacing.medium) {
+                        Image(
+                            systemName: accessibilityGranted
+                                ? "checkmark.circle.fill"
+                                : "exclamationmark.circle.fill"
+                        )
+                        .foregroundStyle(
+                            accessibilityGranted
+                                ? NookPalette.success
+                                : NookPalette.warning
+                        )
+                        .accessibilityHidden(true)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(
+                                accessibilityGranted
+                                    ? "Accessibility access allowed"
+                                    : "Accessibility access required"
+                            )
+                            .font(NookType.caption.weight(.semibold))
+                            Text("Typing into another app is something only macOS can permit. Nook uses it to place your dictated text and nothing else.")
+                                .font(NookType.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        Spacer(minLength: 0)
+
+                        if !accessibilityGranted {
+                            Button("Allow…") {
+                                dictation.requestAccessibilityPermission()
+                                dictation.openAccessibilitySettings()
+                            }
+                        }
+                    }
+                    .padding(.vertical, 2)
+                } header: {
+                    Label("Permission", systemImage: "hand.raised.fill")
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: NSApplication.didBecomeActiveNotification
+            )
+        ) { _ in
+            // The grant happens in System Settings, so the only reliable moment
+            // to re-check is when the user comes back to Nook.
+            accessibilityGranted = TextInsertionService.isTrusted
+            quickNote.refreshEngines()
+        }
+        .onAppear {
+            quickNote.refreshEngines()
+        }
+    }
+
+    private var isAppleIntelligenceAvailable: Bool {
+        DictationRefiner.isModelAvailable
+    }
+
+    /// Routed through `selectEngine` so choosing an off-device engine here asks
+    /// for agreement exactly as it does in the note window. A picker that
+    /// quietly wrote the preference would be the easiest place in the app to
+    /// turn off the privacy promise by accident.
+    private var engineSelection: Binding<NoteAssistantEngine> {
+        Binding(
+            get: { quickNote.engine },
+            set: { quickNote.selectEngine($0) }
+        )
     }
 
     private var privacyPane: some View {
