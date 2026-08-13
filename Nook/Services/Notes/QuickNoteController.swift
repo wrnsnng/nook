@@ -87,6 +87,16 @@ final class QuickNoteController: ObservableObject {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
+    /// Whether the note window is the one the user is actually typing in.
+    ///
+    /// Distinct from `isPresenting`, which only says the window exists. The
+    /// note floats and deliberately stays open when you switch apps, so a note
+    /// left open in the corner must not keep claiming dictation that belongs to
+    /// whatever text field now has focus.
+    var isFrontmost: Bool {
+        panel?.isKeyWindow == true
+    }
+
     private let store: MarkdownStore
     private let assistant = NoteAssistant()
     private var panel: NSPanel?

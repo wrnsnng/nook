@@ -254,9 +254,14 @@ final class DictationCoordinator: ObservableObject {
         isFinishing = false
 
         capability = insertion.beginRun()
-        // Already capturing into a note: keep going there rather than
-        // re-inspecting focus, which is now the note's own text view.
-        if quickNote?.isPresenting == true {
+        // Keep dictating into the note only while the user is actually in it.
+        //
+        // Testing for the window merely existing meant that a note left open
+        // in a corner captured every dictation from then on, including ones
+        // aimed at a text field in another app entirely. The note floats and
+        // stays open across app switches by design, so its presence says
+        // nothing about where the words are meant to go. Focus does.
+        if quickNote?.isFrontmost == true {
             capability = .noTextField
         }
         #if DEBUG
@@ -270,12 +275,15 @@ final class DictationCoordinator: ObservableObject {
             return
         }
 
-        // Nothing can take the words, so they get somewhere of their own. This
-        // is the path that lets a thought be captured without opening an app, a
-        // file, or a window first.
-        if capability == .noTextField {
-            quickNote?.present()
-        }
+        // A note is deliberately not opened yet.
+        //
+        // Where the words belong is decided when they are ready, not when the
+        // shortcut goes down. Opening a window the instant someone starts
+        // speaking tells them the feature has failed before they have finished
+        // their sentence, and it is a guess made at the worst possible moment:
+        // an accessibility tree that a web view has not built yet looks
+        // identical to no text field at all. Waiting costs nothing and gives
+        // that tree the length of the sentence to appear.
 
         sessionID += 1
         let session = sessionID
@@ -385,11 +393,13 @@ final class DictationCoordinator: ObservableObject {
         // which reads as the feature misbehaving rather than working. The
         // indicator carries the live words instead, and the field receives the
         // finished sentence once.
-        // A note is Nook's own surface, so there is no reason to hold text
-        // back: it streams whatever the style produces and the rewrite, when
-        // there is one, replaces the whole note at the end.
+        // Already in the note: it is Nook's own surface, so the words go
+        // straight in. Otherwise nothing is delivered mid-sentence, and the
+        // destination is settled once the user stops talking.
         if capability == .noTextField {
-            quickNote?.append(cleaned)
+            if quickNote?.isFrontmost == true {
+                quickNote?.append(cleaned)
+            }
             return
         }
 
@@ -529,17 +539,60 @@ final class DictationCoordinator: ObservableObject {
                 return
             }
         case .noTextField:
-            // Already streamed into the note. A rewrite replaces it wholesale,
-            // since the note holds only this dictation.
-            if finalText != spoken {
-                quickNote?.replaceLastDictation(with: finalText, spoken: spoken)
-            }
-            quickNote?.saveIfNeeded()
+            deliverWithoutAKnownField(finalText, spoken: spoken)
         case .unavailable:
             break
         }
 
         phase = .idle
+    }
+
+    /// Places a finished dictation when no text field was found at the start.
+    ///
+    /// Focus is looked up a second time here. By now the user has spoken for a
+    /// few seconds, which is far longer than a web view needs to build the
+    /// accessibility tree it had not built when they pressed the shortcut, so a
+    /// field that was invisible then is usually available now. Only when there
+    /// is still nowhere to put the words does a note open, which is the case
+    /// the note was meant for.
+    private func deliverWithoutAKnownField(_ finalText: String, spoken: String) {
+        if quickNote?.isFrontmost == true {
+            if finalText != spoken {
+                quickNote?.replaceLastDictation(with: finalText, spoken: spoken)
+            }
+            quickNote?.saveIfNeeded()
+            return
+        }
+
+        let second = insertion.beginRun()
+        #if DEBUG
+        DictationDebugLog.write(
+            "[dictation] second look, capability: \(second), \(insertion.lastInspection)"
+        )
+        #endif
+        switch second {
+        case .streaming:
+            guard insertion.append(finalText) else { break }
+            return
+        case .pasteOnly:
+            // Handled on the next turn so the paste can wait for the shortcut
+            // modifiers to be released.
+            Task { @MainActor [insertion, quickNote] in
+                guard await insertion.pasteOnce(finalText) else {
+                    quickNote?.present()
+                    quickNote?.append(finalText)
+                    quickNote?.saveIfNeeded()
+                    return
+                }
+            }
+            return
+        case .noTextField, .unavailable:
+            break
+        }
+
+        quickNote?.present()
+        quickNote?.append(finalText)
+        quickNote?.saveIfNeeded()
     }
 
     private var isFailed: Bool {

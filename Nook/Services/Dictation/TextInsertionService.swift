@@ -220,10 +220,21 @@ final class TextInsertionService {
     // MARK: - Accessibility
 
     private func focusedElement() -> AXUIElement? {
-        let system = AXUIElementCreateSystemWide()
+        if let element = focusedElement(of: AXUIElementCreateSystemWide()) {
+            return element
+        }
+        // Chromium and WebKit do not build an accessibility tree until a client
+        // asks for one, so a web view reports no focused element at all. That
+        // covers Electron apps and every text field on a web page, which is
+        // most of the places someone wants to dictate. `AXManualAccessibility`
+        // is the request to build it; native apps neither need nor notice it.
+        return focusedElementAfterEnablingWebAccessibility()
+    }
+
+    private func focusedElement(of element: AXUIElement) -> AXUIElement? {
         var value: CFTypeRef?
         let status = AXUIElementCopyAttributeValue(
-            system,
+            element,
             kAXFocusedUIElementAttribute as CFString,
             &value
         )
@@ -232,6 +243,106 @@ final class TextInsertionService {
         // cast into one.
         guard CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
         return (value as! AXUIElement)
+    }
+
+    private func focusedElementAfterEnablingWebAccessibility() -> AXUIElement? {
+        guard let frontmost = NSWorkspace.shared.frontmostApplication else {
+            return nil
+        }
+        let pid = frontmost.processIdentifier
+        let application = AXUIElementCreateApplication(pid)
+
+        if !activatedApplications.contains(pid) {
+            requestAccessibilityTree(from: application, pid: pid)
+            activatedApplications.insert(pid)
+        }
+
+        // Asked for, but very likely not built yet. Nothing is waited on here:
+        // the words have not been spoken at this point, and the decision about
+        // where they go is taken again once they have been, which gives the
+        // tree the length of a sentence to appear rather than a few
+        // milliseconds of a blocked main thread.
+        return focusedElement(of: AXUIElementCreateSystemWide())
+            ?? focusedElement(of: application)
+    }
+
+    /// Asks an application to build the accessibility tree it has not built.
+    ///
+    /// Web content is not described until something asks. Two mechanisms exist
+    /// and neither covers everything:
+    ///
+    /// - `AXManualAccessibility` is Electron's own, added precisely so an app
+    ///   could opt in without the side effects of the one below. Chromium and
+    ///   WebKit do not implement it, and some Electron versions advertise it so
+    ///   poorly that setting it fails outright, which is why the result is
+    ///   checked rather than assumed.
+    /// - `AXEnhancedUserInterface` is the long-standing signal that an
+    ///   assistive client is present, and it is what Chromium documents as the
+    ///   trigger for building its tree. It is also reported to interfere with
+    ///   window management in the app it is set on, so it is used only when the
+    ///   first mechanism is unavailable, rather than on everything.
+    private func requestAccessibilityTree(
+        from application: AXUIElement,
+        pid: pid_t
+    ) {
+        let manual = AXUIElementSetAttributeValue(
+            application,
+            "AXManualAccessibility" as CFString,
+            kCFBooleanTrue
+        )
+        guard manual != .success else {
+            #if DEBUG
+            DictationDebugLog.write(
+                "[dictation] AXManualAccessibility accepted by pid \(pid)"
+            )
+            #endif
+            return
+        }
+
+        let enhanced = AXUIElementSetAttributeValue(
+            application,
+            "AXEnhancedUserInterface" as CFString,
+            kCFBooleanTrue
+        )
+        #if DEBUG
+        DictationDebugLog.write(
+            "[dictation] pid \(pid): AXManualAccessibility \(manual.rawValue), "
+                + "AXEnhancedUserInterface \(enhanced.rawValue)"
+        )
+        #endif
+    }
+
+    /// Applications already asked this launch. The request is per process and
+    /// does not need repeating, and `AXEnhancedUserInterface` in particular is
+    /// worth setting as few times as possible.
+    ///
+    /// Forgotten when a process exits, because macOS reuses process
+    /// identifiers: a remembered one would otherwise make a completely
+    /// different application look as though it had already been asked, and it
+    /// would never build its tree.
+    private var activatedApplications: Set<pid_t> = [] {
+        didSet { observeTerminationIfNeeded() }
+    }
+
+    private var terminationObserver: (any NSObjectProtocol)?
+
+    private func observeTerminationIfNeeded() {
+        guard terminationObserver == nil else { return }
+        terminationObserver = NSWorkspace.shared.notificationCenter
+            .addObserver(
+                forName: NSWorkspace.didTerminateApplicationNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let app = notification.userInfo?[
+                    NSWorkspace.applicationUserInfoKey
+                ] as? NSRunningApplication else {
+                    return
+                }
+                MainActor.assumeIsolated {
+                    self?.activatedApplications.remove(app.processIdentifier)
+                }
+            }
     }
 
     /// Whether the element will actually accept a write to its selected text.
@@ -343,11 +454,18 @@ final class TextInsertionService {
         return currentValue is String
     }
 
+    /// Roles that are a place to type, rather than a place that contains them.
+    ///
+    /// `AXWebArea` is deliberately absent. A focused web area means the page
+    /// has focus, not that a field does, so treating it as editable sent
+    /// dictation into any web page the user happened to be reading and stopped
+    /// a note from ever opening there. Chromium and WebKit describe genuine
+    /// fields with the roles below once their tree exists, and anything else
+    /// editable is caught by the settable-value test.
     private static let textRoles: Set<String> = [
         kAXTextFieldRole,
         kAXTextAreaRole,
-        kAXComboBoxRole,
-        "AXWebArea"
+        kAXComboBoxRole
     ]
 
     private func selectedRange(of element: AXUIElement) -> CFRange? {
