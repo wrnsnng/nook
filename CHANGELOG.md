@@ -8,6 +8,17 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 Nothing yet.
 
+## 1.7.1
+
+- Fixed dictation in Chrome, Safari, and Electron apps including Claude,
+  ChatGPT, Obsidian, and Proton Mail. Web content describes itself to macOS
+  only when asked, so Nook saw no text field and opened a note instead.
+- Nook now decides where dictated words belong when you stop speaking rather
+  than when you start, so a note no longer appears mid-sentence and a field
+  that takes a moment to become available still receives the text.
+- A quick note left open no longer captures dictation meant for another app.
+- Dictation reports when it heard nothing, instead of closing silently.
+
 ## 1.7.0
 
 - Added dictation. Hold a shortcut anywhere on the Mac, speak, and Nook types
@@ -36,10 +47,11 @@ Nothing yet.
 
 ## Current release
 
-- [1.7.0](Releases/Nook-1.7.0.md) — current stable release, build 13.
+- [1.7.1](Releases/Nook-1.7.1.md) — current stable release, build 14.
 
 ## Previous releases
 
+- [1.7.0](Releases/Nook-1.7.0.md)
 - [1.6.4](Releases/Nook-1.6.4.md)
 - [1.6.3](Releases/Nook-1.6.3.md)
 - [1.6.2](Releases/Nook-1.6.2.md)
