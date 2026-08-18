@@ -99,6 +99,14 @@ The latest signed and notarized build is published in the separate
 Move `Nook.app` to `/Applications` before opening it so macOS permissions and
 updates attach to a stable app location.
 
+Every release publishes a `Nook.zip.sha256` beside the download. Nook is signed
+with a Developer ID and notarized by Apple, so if macOS says it cannot verify
+the app, compare the checksum before anything else:
+
+```sh
+shasum -a 256 Nook.zip
+```
+
 ## Contributing
 
 Issues and pull requests are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md)

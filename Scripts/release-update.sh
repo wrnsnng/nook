@@ -193,9 +193,15 @@ if [[ "$VISIBILITY" != "PUBLIC" ]]; then
   exit 69
 fi
 
+# Published beside the download so anyone can check they received what was
+# built, without taking the download page's word for it.
+CHECKSUM_FILE="$DIST_DIR/Nook-$VERSION.zip.sha256"
+( cd "${STABLE_ARCHIVE:h}" && shasum -a 256 "${STABLE_ARCHIVE:t}" ) > "$CHECKSUM_FILE"
+
 VERSION_RELEASE_ASSETS=(
   "$UPDATE_ARCHIVE"
   "$STABLE_ARCHIVE"
+  "$CHECKSUM_FILE"
 )
 FEED_RELEASE_ASSETS=(
   "$FEED_DIR"/*.zip(N)
