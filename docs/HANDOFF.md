@@ -6,13 +6,13 @@ contribute.
 
 ## Current release
 
-Nook 1.7.1 (build 14) is the current public release.
+Nook 1.7.2 (build 15) is the current public release.
 
 - Release builds use stable Xcode 26 and the macOS 26 SDK.
 - Distributed builds are Developer ID signed, notarized, stapled, and delivered
   through a signed Sparkle feed.
 - The release is available from the
-  [binary releases repository](https://github.com/wrnsnng/nook-releases/releases/tag/v1.7.1).
+  [binary releases repository](https://github.com/wrnsnng/nook-releases/releases/tag/v1.7.2).
 - User-facing changes are mapped in [CHANGELOG.md](../CHANGELOG.md).
 
 ## Durable constraints
