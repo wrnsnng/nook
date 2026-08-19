@@ -151,6 +151,9 @@ final class MeetingCoordinator: ObservableObject {
             self?.liveCaptionNotice = message
             self?.liveTranscriptIsComplete = false
         }
+        capture.onUnexpectedStop = { [weak self] _ in
+            self?.finishAfterCaptureStopped()
+        }
     }
 
     func startDetectedMeeting() {
@@ -165,6 +168,19 @@ final class MeetingCoordinator: ObservableObject {
             title: "Meeting \(formatter.string(from: Date()))",
             sourceApp: "Manual"
         )
+    }
+
+    /// Closes out a meeting whose capture the system ended.
+    ///
+    /// The recording is over either way, so the choice is between saving what
+    /// was captured and losing it. Everything up to that moment is real audio
+    /// the user was relying on, so the meeting is finished normally and the
+    /// reason is shown, rather than leaving a meeting that looks live and
+    /// records nothing.
+    private func finishAfterCaptureStopped() {
+        guard phase.isRecording, processingTask == nil else { return }
+        liveCaptionNotice = "Recording stopped early. Nook is saving what it captured."
+        stopRecording()
     }
 
     func stopRecording() {

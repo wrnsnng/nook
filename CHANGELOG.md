@@ -8,6 +8,16 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 Nothing yet.
 
+## 1.7.2
+
+- Nook now keeps the Mac awake while recording. Idle sleep tore down the
+  capture stream and ended recordings with no warning, which is why meetings
+  the user was only listening to stopped after roughly twenty minutes. Display
+  sleep is deliberately left alone.
+- A capture stream that stops for any other reason now finishes the meeting and
+  saves what was recorded, rather than leaving a meeting that looks live.
+- Releases publish a `Nook.zip.sha256` beside the download.
+
 ## 1.7.1
 
 - Fixed dictation in Chrome, Safari, and Electron apps including Claude,
@@ -47,10 +57,11 @@ Nothing yet.
 
 ## Current release
 
-- [1.7.1](Releases/Nook-1.7.1.md) — current stable release, build 14.
+- [1.7.2](Releases/Nook-1.7.2.md) — current stable release, build 15.
 
 ## Previous releases
 
+- [1.7.1](Releases/Nook-1.7.1.md)
 - [1.7.0](Releases/Nook-1.7.0.md)
 - [1.6.4](Releases/Nook-1.6.4.md)
 - [1.6.3](Releases/Nook-1.6.3.md)

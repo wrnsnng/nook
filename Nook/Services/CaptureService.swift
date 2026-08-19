@@ -8,6 +8,15 @@ import Synchronization
 @MainActor
 final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegate, SCStreamOutput {
     private var stream: SCStream?
+    /// Called when the capture stream ends without Nook asking it to, so a
+    /// meeting cannot quietly stop recording while it still looks live.
+    var onUnexpectedStop: (@MainActor (any Error) -> Void)?
+    /// Set while Nook is deliberately winding the stream down, which is the
+    /// only way to tell a requested stop from one the system imposed.
+    private var isStopping = false
+
+    /// Held for as long as audio is being captured. See `holdSleepAtBay`.
+    private var sleepAssertion: (any NSObjectProtocol)?
     private var recordingOutput: SCRecordingOutput?
     private var recordingURL: URL?
     private var baseRecordingURL: URL?
@@ -143,6 +152,7 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
             clear()
             throw error
         }
+        holdSleepAtBay()
     }
 
     func pause() async throws {
@@ -163,6 +173,9 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
             preparesLiveInput.withLock { $0 = liveTranscription != nil }
             throw error
         }
+        // A paused meeting is not recording, so the Mac is free to sleep
+        // again until the user resumes.
+        releaseSleepAssertion()
     }
 
     func resume() throws {
@@ -192,6 +205,7 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         recordingURLs.append(segmentURL)
         recordingOutput = output
         isPaused = false
+        holdSleepAtBay()
         preparesLiveInput.withLock { $0 = liveTranscription != nil }
     }
 
@@ -199,6 +213,7 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         guard let stream, !recordingURLs.isEmpty else {
             throw CaptureError.notRecording
         }
+        isStopping = true
 
         let completedURLs = recordingURLs
         if isPaused {
@@ -251,6 +266,13 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         Task { @MainActor in
             self.lastError = error
             self.completeStop(with: error)
+            // The system can tear the stream down on its own: the Mac sleeps,
+            // displays are reconfigured, permission is revoked. Recording then
+            // ends while the meeting still shows as running, and the user finds
+            // out when the note is short. Reporting it lets the meeting be
+            // finished with whatever was captured rather than lost.
+            guard !self.isStopping else { return }
+            self.onUnexpectedStop?(error)
         }
     }
 
@@ -314,7 +336,36 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         }
     }
 
+    /// Stops the Mac dropping into idle sleep mid-meeting.
+    ///
+    /// A sleeping Mac tears down the ScreenCaptureKit stream, which ends the
+    /// recording with no error and no note. Nothing defers idle sleep during a
+    /// meeting the user is only listening to: they are not typing, so from the
+    /// system's point of view the machine is unused. Default idle sleep on a
+    /// laptop arrives around the twenty minute mark, which is exactly when
+    /// recordings were being cut short.
+    ///
+    /// Only system sleep is deferred. The display is left free to switch off,
+    /// because recording audio needs the Mac awake, not the screen lit, and
+    /// holding the display on would cost battery for nothing. Closing the lid
+    /// still sleeps the machine; no application can prevent that.
+    private func holdSleepAtBay() {
+        guard sleepAssertion == nil else { return }
+        sleepAssertion = ProcessInfo.processInfo.beginActivity(
+            options: [.idleSystemSleepDisabled, .automaticTerminationDisabled],
+            reason: "Recording a meeting"
+        )
+    }
+
+    private func releaseSleepAssertion() {
+        guard let sleepAssertion else { return }
+        ProcessInfo.processInfo.endActivity(sleepAssertion)
+        self.sleepAssertion = nil
+    }
+
     private func clear() {
+        releaseSleepAssertion()
+        isStopping = false
         stream = nil
         recordingOutput = nil
         recordingURL = nil
