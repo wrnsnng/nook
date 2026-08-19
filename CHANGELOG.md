@@ -8,6 +8,19 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 Nothing yet.
 
+## 1.7.3
+
+- Recordings are no longer deleted when processing fails. When processing
+  fails the recording is the only copy of the conversation, and Nook now names
+  the folder it was kept in.
+- Finalizing a recording is allowed the time a long meeting needs. The previous
+  limit was tuned on short tests and could time out on a real meeting, which
+  destroyed it.
+- Quitting uses a shorter finalization deadline than stopping, so Nook does not
+  appear wedged and invite a force quit mid-write.
+- Settings lists recordings that never became notes, and can turn one into a
+  note with the same on-device transcription and summary a meeting gets.
+
 ## 1.7.2
 
 - Nook now keeps the Mac awake while recording. Idle sleep tore down the
@@ -57,10 +70,11 @@ Nothing yet.
 
 ## Current release
 
-- [1.7.2](Releases/Nook-1.7.2.md) — current stable release, build 15.
+- [1.7.3](Releases/Nook-1.7.3.md) — current stable release, build 16.
 
 ## Previous releases
 
+- [1.7.2](Releases/Nook-1.7.2.md)
 - [1.7.1](Releases/Nook-1.7.1.md)
 - [1.7.0](Releases/Nook-1.7.0.md)
 - [1.6.4](Releases/Nook-1.6.4.md)

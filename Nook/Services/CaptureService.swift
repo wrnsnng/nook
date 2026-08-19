@@ -38,7 +38,12 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
     private(set) var lastError: Error?
 
     override convenience init() {
-        self.init(finalizationTimeout: .seconds(12))
+        // Finalizing writes the index for everything recorded so far, so a
+        // long meeting legitimately takes longer than a short one. Twelve
+        // seconds was enough for a quick test and not for a real meeting, and
+        // running out meant losing the recording. Waiting costs a moment;
+        // giving up costs the meeting.
+        self.init(finalizationTimeout: .seconds(120))
     }
 
     init(finalizationTimeout: Duration) {
@@ -155,7 +160,7 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         holdSleepAtBay()
     }
 
-    func pause() async throws {
+    func pause(finalizationTimeout: Duration? = nil) async throws {
         guard let stream, let recordingOutput, !isPaused else {
             throw isPaused ? CaptureError.alreadyPaused : CaptureError.notRecording
         }
@@ -163,7 +168,9 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         preparesLiveInput.withLock { $0 = false }
         isPaused = true
         do {
-            try await finalizationWaiter.wait {
+            try await finalizationWaiter.wait(
+                timeout: finalizationTimeout
+            ) {
                 try stream.removeRecordingOutput(recordingOutput)
             }
             self.recordingOutput = nil
@@ -209,7 +216,13 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         preparesLiveInput.withLock { $0 = liveTranscription != nil }
     }
 
-    func stop() async throws -> [URL] {
+    /// How long finalization is given when the user is quitting.
+    ///
+    /// Short enough that Nook does not look wedged and invite a force quit,
+    /// which would kill finalization mid-write.
+    static let quitFinalizationTimeout = Duration.seconds(20)
+
+    func stop(finalizationTimeout: Duration? = nil) async throws -> [URL] {
         guard let stream, !recordingURLs.isEmpty else {
             throw CaptureError.notRecording
         }
@@ -218,7 +231,9 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         let completedURLs = recordingURLs
         if isPaused {
             do {
-                try await finalizationWaiter.wait {
+                try await finalizationWaiter.wait(
+                    timeout: finalizationTimeout
+                ) {
                     Task { @MainActor in
                         do {
                             try await stream.stopCapture()
@@ -234,7 +249,9 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
             }
         } else {
             do {
-                try await finalizationWaiter.wait {
+                try await finalizationWaiter.wait(
+                    timeout: finalizationTimeout
+                ) {
                     Task { @MainActor in
                         do {
                             try await stream.stopCapture()
@@ -516,7 +533,7 @@ enum CaptureError: LocalizedError {
         case .finalizationInProgress:
             "Nook is already securing this recording."
         case .finalizationTimedOut:
-            "Nook timed out while securing the recording. Temporary files were cleaned up safely."
+            "Nook took too long to finish writing this recording. The audio was kept so nothing is lost."
         }
     }
 }
@@ -533,13 +550,29 @@ final class CaptureFinalizationWaiter {
         self.timeout = timeout
     }
 
+    /// Waits for finalization, optionally for less time than usual.
+    ///
+    /// Quitting cannot wait as patiently as stopping can: the user has already
+    /// asked the app to go away, and a menu-bar app that appears wedged invites
+    /// a force quit, which kills finalization mid-write and produces the very
+    /// corrupt file the wait exists to avoid.
     func wait(
+        timeout override: Duration? = nil,
         start: @escaping @MainActor () throws -> Void
     ) async throws {
+        // Resolved here and carried down rather than stored on the waiter. A
+        // second, overlapping call would otherwise overwrite a shared property
+        // before being rejected, and the first call's timer would then run to
+        // somebody else's deadline. Callers currently serialise these, but that
+        // is their discipline, not this class's guarantee.
+        let deadline = override ?? timeout
         try Task.checkCancellation()
         try await withTaskCancellationHandler(
             operation: {
-                try await self.suspendUntilResolved(start: start)
+                try await self.suspendUntilResolved(
+                    deadline: deadline,
+                    start: start
+                )
             },
             onCancel: { [weak self] in
                 Task { @MainActor in
@@ -550,6 +583,7 @@ final class CaptureFinalizationWaiter {
     }
 
     private func suspendUntilResolved(
+        deadline: Duration,
         start: @escaping @MainActor () throws -> Void
     ) async throws {
         try await withCheckedThrowingContinuation {
@@ -562,7 +596,7 @@ final class CaptureFinalizationWaiter {
             self.continuation = continuation
             timeoutTask = Task { [weak self] in
                 guard let self else { return }
-                try? await Task.sleep(for: timeout)
+                try? await Task.sleep(for: deadline)
                 guard !Task.isCancelled else { return }
                 resolve(.failure(CaptureError.finalizationTimedOut))
             }

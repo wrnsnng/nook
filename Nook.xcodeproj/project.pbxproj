@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		016D55C9599FD43EE09F9523 /* DictationDebugLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDF730D034FBE9A7E48491FA /* DictationDebugLog.swift */; };
 		0A33032F282F4E25C69ED2A5 /* MarkdownDraftController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E8AD6D39BBB6970C574F566 /* MarkdownDraftController.swift */; };
+		0ADB67F317BA07AC2DB93C9F /* RecordingRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8161483F1374BD8342076C40 /* RecordingRecovery.swift */; };
 		0C664A5C897DC87CE1B511FA /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AA003E269F1E0F3206F33F2 /* AppDelegate.swift */; };
 		0DE20A116EF0802BACEE8BAC /* SpeechAssets.swift in Sources */ = {isa = PBXBuildFile; fileRef = D588A6E65FB7C05B912F3220 /* SpeechAssets.swift */; };
 		1057F566FC726DB9FAD1A7C2 /* TranscriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 493BD99F4073897EF877E6B2 /* TranscriptionService.swift */; };
@@ -22,6 +23,7 @@
 		19884A251AE2475E5E2EF372 /* DictationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FA4268191B8994F04391D35 /* DictationCoordinator.swift */; };
 		1AA29AF013BC95AE5F69414D /* NotchPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DAAB582D0BEF7F53894D139 /* NotchPanelView.swift */; };
 		27FB9A4EFDACCDFCA0256BBD /* TextInsertionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B298E8C21A364A8857152A57 /* TextInsertionService.swift */; };
+		2975F188D341272B55A0F5C5 /* RecordingRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8161483F1374BD8342076C40 /* RecordingRecovery.swift */; };
 		2BB3602A4B19FC4C05F0C451 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 170212C508F45D65AB1B9513 /* Assets.xcassets */; };
 		2E211D5F1C8C6C04E71E4E7E /* MarkdownStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2308619C687A88102D0054B5 /* MarkdownStore.swift */; };
 		315744AB436DD64BB694F908 /* NookUpdateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE0257E326F8CB6F9CC6CCB4 /* NookUpdateController.swift */; };
@@ -188,6 +190,7 @@
 		79E8477180498A6A643E7DE9 /* TranscriptSegment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptSegment.swift; sourceTree = "<group>"; };
 		7CE7A4727C693BB0BDAED00D /* ShowcaseSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShowcaseSnapshotTests.swift; sourceTree = "<group>"; };
 		7E8AD6D39BBB6970C574F566 /* MarkdownDraftController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownDraftController.swift; sourceTree = "<group>"; };
+		8161483F1374BD8342076C40 /* RecordingRecovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingRecovery.swift; sourceTree = "<group>"; };
 		82F5D4466C034B90191F6217 /* MeetingNotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingNotificationService.swift; sourceTree = "<group>"; };
 		83933D3879F3DCE359A1FFF2 /* QuickNoteController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickNoteController.swift; sourceTree = "<group>"; };
 		83A5502CE70F9EA4C3BE8F69 /* PermissionSetupController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionSetupController.swift; sourceTree = "<group>"; };
@@ -265,6 +268,7 @@
 				493BD99F4073897EF877E6B2 /* TranscriptionService.swift */,
 				162E61C661C6D942724925B4 /* Dictation */,
 				BCFDC66E2917453D9A06A952 /* Notes */,
+				24511CC19641EB6DBC3769E1 /* Recovery */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -283,6 +287,14 @@
 				B298E8C21A364A8857152A57 /* TextInsertionService.swift */,
 			);
 			path = Dictation;
+			sourceTree = "<group>";
+		};
+		24511CC19641EB6DBC3769E1 /* Recovery */ = {
+			isa = PBXGroup;
+			children = (
+				8161483F1374BD8342076C40 /* RecordingRecovery.swift */,
+			);
+			path = Recovery;
 			sourceTree = "<group>";
 		};
 		3B0328E73DB78F0B95AD9373 /* Resources */ = {
@@ -600,6 +612,7 @@
 				EFBDEFBB4E4FF265020D1702 /* PermissionSetupController.swift in Sources */,
 				F80645C0AE9AE1C9AA19C513 /* QuickNoteController.swift in Sources */,
 				33117E5FB38554157F01B4E3 /* QuickNoteView.swift in Sources */,
+				0ADB67F317BA07AC2DB93C9F /* RecordingRecovery.swift in Sources */,
 				B01B73D6C92F79AC5556F004 /* SettingsView.swift in Sources */,
 				15E244E9782298B52E9E6DB6 /* ShortcutRecorderView.swift in Sources */,
 				0DE20A116EF0802BACEE8BAC /* SpeechAssets.swift in Sources */,
@@ -658,6 +671,7 @@
 				5355D715EE1FF8F42B9489B1 /* PermissionSetupController.swift in Sources */,
 				5937BD5AEFDA720E632C2033 /* QuickNoteController.swift in Sources */,
 				D804D64E5D450C381A292987 /* QuickNoteView.swift in Sources */,
+				2975F188D341272B55A0F5C5 /* RecordingRecovery.swift in Sources */,
 				1697FF15C2FE7F3425EAF7A0 /* SettingsView.swift in Sources */,
 				570ABE50DDCC6103608C52F0 /* ShortcutRecorderView.swift in Sources */,
 				8D65B14D1E3F0D8DB95C455D /* SnapshotRenderer.swift in Sources */,
@@ -753,7 +767,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 15;
+				CURRENT_PROJECT_VERSION = 16;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -766,7 +780,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.7.2;
+				MARKETING_VERSION = 1.7.3;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -845,7 +859,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 15;
+				CURRENT_PROJECT_VERSION = 16;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -864,7 +878,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.7.2;
+				MARKETING_VERSION = 1.7.3;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;

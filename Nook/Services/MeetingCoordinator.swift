@@ -215,6 +215,13 @@ final class MeetingCoordinator: ObservableObject {
     /// that is still waiting on permissions is cancelled and discarded; a real
     /// recording is allowed to finish its local note pipeline.
     func prepareForApplicationTermination() async -> Bool {
+        // Cleared again if the app ends up staying open. Leaving it set would
+        // hold every later recording to the quit deadline, which is far shorter
+        // than an interactive stop is allowed, and would reintroduce the
+        // timeout that lost a meeting in the first place.
+        isTerminating = true
+        var willTerminate = false
+        defer { isTerminating = willTerminate }
         if let pauseTask {
             await pauseTask.value
         }
@@ -241,6 +248,7 @@ final class MeetingCoordinator: ObservableObject {
         if case .failed = phase {
             return false
         }
+        willTerminate = true
         return true
     }
 
@@ -294,7 +302,11 @@ final class MeetingCoordinator: ObservableObject {
                 pauseTask = nil
             }
             do {
-                try await capture.pause()
+                try await capture.pause(
+                    finalizationTimeout: isTerminating
+                        ? CaptureService.quitFinalizationTimeout
+                        : nil
+                )
                 liveCaptionNotice = "Paused. Nook is not saving or transcribing audio."
             } catch {
                 isPaused = false
@@ -593,6 +605,10 @@ final class MeetingCoordinator: ObservableObject {
         return nil
     }
 
+    /// Set while the application is quitting, so finalization is given a
+    /// shorter deadline than it gets during ordinary use.
+    private var isTerminating = false
+
     private func finishRecording() async {
         guard let draft = activeDraft else {
             phase = .failed("Nook lost track of the active meeting.")
@@ -613,7 +629,11 @@ final class MeetingCoordinator: ObservableObject {
             liveSummaryTask?.cancel()
             liveSummaryTask = nil
             liveSummaryIsRefreshing = false
-            recordingURLs = try await capture.stop()
+            recordingURLs = try await capture.stop(
+                finalizationTimeout: isTerminating
+                    ? CaptureService.quitFinalizationTimeout
+                    : nil
+            )
             let liveSegments = await liveTranscriber.stop()
             try Task.checkCancellation()
             phase = .processing(.preparing)
@@ -704,10 +724,14 @@ final class MeetingCoordinator: ObservableObject {
             liveSummaryTask = nil
             liveSummaryIsRefreshing = false
             await liveTranscriber.cancel()
-            let cleanupFailures = RecordingArtifactCleanup.removeArtifacts(
-                for: draft,
-                additionalURLs: recordingURLs + [audioURL]
-            )
+            // The recording is deliberately kept.
+            //
+            // Deleting it here treated every failure as though the audio were
+            // worthless, when the opposite is true: processing failed, so the
+            // recording is the only copy of the meeting that exists. Somebody
+            // whose Mac took a moment too long to finish writing a file lost an
+            // hour of conversation for it. Cancelling a meeting still discards
+            // everything, because that is the user asking.
             activeDraft = nil
             processingTask = nil
             elapsed = 0
@@ -719,10 +743,34 @@ final class MeetingCoordinator: ObservableObject {
             processingCancellationRequested = false
             phase = .failed(
                 error.localizedDescription
-                    + Self.cleanupNotice(for: cleanupFailures)
+                    + Self.preservedRecordingNotice(
+                        for: recordingURLs.isEmpty
+                            ? Array(RecordingArtifactCleanup.artifactURLs(for: draft))
+                            : recordingURLs
+                    )
             )
             onPresentationRequested?()
         }
+    }
+
+    /// Tells the user where the audio went when processing could not finish.
+    ///
+    /// A failure the user cannot act on is only frightening. Naming the folder
+    /// turns a lost meeting into one they still have.
+    ///
+    /// The caller must not pass the result of the call that failed. When
+    /// `capture.stop()` is what threw, it returned nothing, and that is exactly
+    /// the case this message exists for: the recording is on disk and the user
+    /// has no way to know where. Discovery has to look at the disk instead.
+    static func preservedRecordingNotice(for urls: [URL]) -> String {
+        guard let first = urls.first(where: {
+            FileManager.default.fileExists(atPath: $0.path)
+        }) else {
+            return ""
+        }
+        let folder = first.deletingLastPathComponent()
+            .path(percentEncoded: false)
+        return " Your recording was kept in \(folder) so you can try again."
     }
 
     private func startElapsedClock() {

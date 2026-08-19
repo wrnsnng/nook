@@ -128,6 +128,10 @@ Temporary capture and extracted-audio files live in a hidden `.recordings`
 folder inside the selected notes folder while Nook processes a meeting.
 
 - Temporary MP4 containers are deleted after successful processing.
+- A recording is kept when processing fails, because at that point it is the
+  only copy of the conversation. Settings lists anything kept this way with its
+  date and size, so it can be turned into a note or deleted rather than sitting
+  on disk unnoticed.
 - Extracted M4A audio is deleted unless **Keep extracted meeting audio** is on.
 - Cancelling processing discards the meeting's temporary files.
 - Nook attempts to clean up partial files after processing failures. Cleanup

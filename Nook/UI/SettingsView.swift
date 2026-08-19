@@ -17,6 +17,7 @@ struct SettingsView: View {
     @EnvironmentObject private var updater: NookUpdateController
     @EnvironmentObject private var dictation: DictationCoordinator
     @EnvironmentObject private var quickNote: QuickNoteController
+    @EnvironmentObject private var recovery: RecordingRecovery
     @State private var pendingStorageURL: URL?
     @State private var storageMessage: String?
     @State private var selectedPane: SettingsPane
@@ -299,6 +300,7 @@ struct SettingsView: View {
         }
         .onAppear {
             quickNote.refreshEngines()
+            recovery.scan()
         }
     }
 
@@ -348,6 +350,60 @@ struct SettingsView: View {
                 Label("Storage", systemImage: "externaldrive")
             } footer: {
                 Text("Every note is an ordinary Markdown file. When audio retention is off, the temporary recording is removed as soon as the note is safely written.")
+            }
+
+            if !recovery.orphans.isEmpty {
+                Section {
+                    ForEach(recovery.orphans) { orphan in
+                        HStack(spacing: NookSpacing.small) {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(orphan.dateLabel)
+                                    .font(NookType.caption.weight(.medium))
+                                Text(orphan.sizeLabel)
+                                    .font(NookType.micro)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 0)
+                            Button("Save as Note") {
+                                recovery.recover(
+                                    orphan,
+                                    localeIdentifier: meeting.localeIdentifier
+                                )
+                            }
+                            .controlSize(.small)
+                            .disabled(recovery.isWorking)
+                            Button("Reveal") { recovery.reveal(orphan) }
+                                .controlSize(.small)
+                            Button("Delete", role: .destructive) {
+                                recovery.delete(orphan)
+                            }
+                            .controlSize(.small)
+                            .disabled(recovery.isWorking)
+                        }
+                        .padding(.vertical, 1)
+                    }
+
+                    if let message = recovery.message {
+                        Text(message)
+                            .font(NookType.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if recovery.isWorking {
+                        HStack(spacing: NookSpacing.small) {
+                            ProgressView().controlSize(.small).scaleEffect(0.7)
+                            Text("Working through that recording locally. This can take a while.")
+                                .font(NookType.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } header: {
+                    Label(
+                        "Recordings without a note (\(recovery.totalSizeLabel))",
+                        systemImage: "waveform.badge.exclamationmark"
+                    )
+                } footer: {
+                    Text("These are meetings Nook recorded but could not finish writing up, usually because processing was interrupted. The audio was kept so nothing was lost. Save one as a note, or delete it once you are done with it.")
+                }
             }
 
             Section {

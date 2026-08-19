@@ -93,6 +93,7 @@ struct NookApp: App {
                 .environmentObject(appModel.appearance)
                 .environmentObject(appModel.dictation)
                 .environmentObject(appModel.quickNote)
+                .environmentObject(appModel.recovery)
                 .environmentObject(updater)
                 .frame(width: 620, height: 540)
         }
