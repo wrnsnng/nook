@@ -27,6 +27,7 @@ final class AppModel: ObservableObject {
     let notifications: MeetingNotificationService
     let dictation: DictationCoordinator
     let quickNote: QuickNoteController
+    let recovery: RecordingRecovery
     private let dictationIndicator = DictationIndicatorController()
     private var openLibraryAction: (@MainActor () -> Void)?
     private var openWelcomeAction: (@MainActor () -> Void)?
@@ -55,6 +56,7 @@ final class AppModel: ObservableObject {
             localeIdentifier: meeting.localeIdentifier
         )
         let quickNote = QuickNoteController(store: store)
+        self.recovery = RecordingRecovery(store: store)
         dictation.quickNote = quickNote
         self.dictation = dictation
         self.quickNote = quickNote

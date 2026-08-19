@@ -345,7 +345,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Nook couldn’t finish the meeting before quitting"
-        alert.informativeText = "Nook will stay open so you can review the error. It removed temporary recording files where possible and will identify any file that needs manual cleanup."
+        alert.informativeText = "Nook will stay open so you can review the error. Your recording was kept so nothing is lost."
         alert.addButton(withTitle: "Keep Nook Open")
         alert.runModal()
     }

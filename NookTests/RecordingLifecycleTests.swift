@@ -148,3 +148,158 @@ struct RecordingLifecycleTests {
         #expect(coordinator.terminationState == .processing)
     }
 }
+
+/// Processing failures used to delete the recording, so a Mac that took a
+/// moment too long to finish writing a file cost the user the meeting. The
+/// recording is now the one thing that must survive a failure, because when
+/// processing fails it is the only copy of the conversation that exists.
+@MainActor
+struct PreservedRecordingTests {
+    @Test
+    func aFailureNamesTheFolderTheRecordingWasKeptIn() throws {
+        let directory = URL.temporaryDirectory
+            .appendingPathComponent("nook-preserved-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let recording = directory.appendingPathComponent("meeting.mp4")
+        try Data("audio".utf8).write(to: recording)
+
+        let notice = MeetingCoordinator.preservedRecordingNotice(
+            for: [recording]
+        )
+
+        #expect(notice.contains(directory.path(percentEncoded: false)))
+        #expect(notice.contains("kept"))
+    }
+
+    /// Nothing on disk means nothing to promise. Telling someone their audio
+    /// was preserved when it was not is worse than saying nothing.
+    @Test
+    func nothingIsPromisedWhenNoRecordingSurvived() {
+        let missing = URL.temporaryDirectory
+            .appendingPathComponent("nook-missing-\(UUID().uuidString).mp4")
+
+        #expect(MeetingCoordinator.preservedRecordingNotice(for: [missing]).isEmpty)
+        #expect(MeetingCoordinator.preservedRecordingNotice(for: []).isEmpty)
+    }
+}
+
+/// The failure notice depends on finding the recording on disk rather than on
+/// the return value of the call that failed. When `capture.stop()` is what
+/// threw, it returned nothing, and that is exactly when the user most needs to
+/// be told where their meeting went.
+@MainActor
+struct FailedStopDiscoveryTests {
+    private func draft(in directory: URL) -> MeetingDraft {
+        MeetingDraft(
+            id: UUID(),
+            title: "Pricing review",
+            sourceApp: "Manual",
+            startedAt: Date(timeIntervalSince1970: 1_000_000),
+            recordingURL: directory
+                .appendingPathComponent("\(UUID().uuidString).mp4")
+        )
+    }
+
+    @Test
+    func theRecordingIsFoundWhenTheStopCallReturnedNothing() throws {
+        let directory = URL.temporaryDirectory
+            .appendingPathComponent("nook-discovery-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let draft = draft(in: directory)
+        // What ScreenCaptureKit leaves behind when finalization never finishes:
+        // the audio is written, the file was simply never closed out.
+        try Data("audio".utf8).write(to: draft.recordingURL)
+
+        let found = RecordingArtifactCleanup.artifactURLs(for: draft)
+        #expect(found.contains(draft.recordingURL))
+
+        let notice = MeetingCoordinator.preservedRecordingNotice(
+            for: Array(found)
+        )
+        #expect(notice.contains(directory.path(percentEncoded: false)))
+    }
+
+    /// Naming somebody else's meeting would be worse than naming none.
+    @Test
+    func anotherMeetingsRecordingIsNeverNamed() throws {
+        let directory = URL.temporaryDirectory
+            .appendingPathComponent("nook-discovery-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let mine = draft(in: directory)
+        let theirs = draft(in: directory)
+        try Data("mine".utf8).write(to: mine.recordingURL)
+        try Data("theirs".utf8).write(to: theirs.recordingURL)
+
+        let found = RecordingArtifactCleanup.artifactURLs(for: mine)
+
+        #expect(found.contains(mine.recordingURL))
+        #expect(!found.contains(theirs.recordingURL))
+    }
+}
+
+/// Recordings kept after a failure must be findable again. Keeping audio the
+/// user can never see would trade a rare catastrophe for a quiet one.
+@MainActor
+struct OrphanedRecordingTests {
+    @Test
+    func aRecordingGroupsWithItsPausedSegments() {
+        let id = UUID()
+        let directory = URL.temporaryDirectory
+        let orphan = OrphanedRecording(
+            id: id,
+            urls: [
+                directory.appendingPathComponent("\(id.uuidString).mp4"),
+                directory.appendingPathComponent("\(id.uuidString).part-2.mp4"),
+                directory.appendingPathComponent("\(id.uuidString).m4a")
+            ],
+            recordedAt: Date(timeIntervalSince1970: 1_000_000),
+            byteSize: 3_000_000
+        )
+
+        #expect(orphan.captures.count == 2)
+        #expect(orphan.extractedAudio?.pathExtension == "m4a")
+        #expect(orphan.sizeLabel.contains("MB"))
+    }
+
+    /// Already-extracted audio is reused, because re-extracting is the slowest
+    /// part of recovering a note and produces the same result.
+    @Test
+    func extractedAudioIsPreferredWhenItExists() {
+        let id = UUID()
+        let directory = URL.temporaryDirectory
+        let withAudio = OrphanedRecording(
+            id: id,
+            urls: [
+                directory.appendingPathComponent("\(id.uuidString).mp4"),
+                directory.appendingPathComponent("\(id.uuidString).m4a")
+            ],
+            recordedAt: .distantPast,
+            byteSize: 1
+        )
+        let captureOnly = OrphanedRecording(
+            id: id,
+            urls: [directory.appendingPathComponent("\(id.uuidString).mp4")],
+            recordedAt: .distantPast,
+            byteSize: 1
+        )
+
+        #expect(withAudio.extractedAudio != nil)
+        #expect(captureOnly.extractedAudio == nil)
+        #expect(captureOnly.captures.count == 1)
+    }
+}
