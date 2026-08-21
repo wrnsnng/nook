@@ -43,4 +43,40 @@ struct PrivacyStorageTests {
         #expect(noteAttributes[.posixPermissions] as? Int == 0o600)
         #expect(directoryAttributes[.posixPermissions] as? Int == 0o700)
     }
+
+    @Test
+    @MainActor
+    func anOlderReloadSnapshotCannotHideANewlySavedNote() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "NookReloadFreshness-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = MarkdownStore(noteLoader: { _ in
+            .success((notes: [], issues: []))
+        })
+        store.storageURL = directory
+        let saved = try store.save(
+            MeetingNote(
+                title: "Fresh note",
+                startedAt: .now,
+                endedAt: .now,
+                sourceApp: "Manual",
+                summary: "Saved while the old folder snapshot was loading."
+            )
+        )
+
+        for _ in 0..<4 {
+            await Task.yield()
+        }
+
+        #expect(store.notes.contains { $0.id == saved.id })
+        #expect(!store.isLoading)
+    }
 }

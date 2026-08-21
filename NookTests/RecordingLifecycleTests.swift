@@ -40,6 +40,47 @@ struct RecordingLifecycleTests {
     }
 
     @Test
+    func requestedStopWaitsForTheStreamAndRecordingFile() throws {
+        var state = CaptureStopState(waitsForRecordingFinalization: true)
+
+        state.receiveRecordingFinalization(.success(()))
+        #expect(state.resolution == nil)
+
+        state.receiveStreamStop(.success(()))
+        try #require(state.resolution).get()
+    }
+
+    @Test
+    func stoppingWhilePausedNeedsOnlyTheStreamToFinish() throws {
+        var state = CaptureStopState(waitsForRecordingFinalization: false)
+
+        state.receiveStreamStop(.success(()))
+
+        try #require(state.resolution).get()
+    }
+
+    @Test
+    func recordingFailureWaitsForTheStreamThenFailsTheStop() {
+        var state = CaptureStopState(waitsForRecordingFinalization: true)
+
+        state.receiveRecordingFinalization(
+            .failure(CaptureError.recordingMissing)
+        )
+        #expect(state.resolution == nil)
+
+        state.receiveStreamStop(.success(()))
+
+        do {
+            try #require(state.resolution).get()
+            Issue.record("Expected the recording failure to fail the stop")
+        } catch CaptureError.recordingMissing {
+            // Expected.
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
+    @Test
     func artifactCleanupRemovesOnlyTheCurrentMeetingsSensitiveFiles() throws {
         let fileManager = FileManager.default
         let directory = fileManager.temporaryDirectory
@@ -146,6 +187,35 @@ struct RecordingLifecycleTests {
             audioLevel: 0
         )
         #expect(coordinator.terminationState == .processing)
+    }
+
+    @Test
+    @MainActor
+    func stopRequestedDuringPauseRunsWhenTheTransitionCompletes() {
+        let coordinator = MeetingCoordinator(
+            store: MarkdownStore(),
+            detector: MeetingDetector()
+        )
+        coordinator.setPreviewState(
+            phase: .recording(title: "Review", startedAt: .now),
+            elapsed: 10,
+            liveTranscript: .empty,
+            audioLevel: 0.2
+        )
+        coordinator.setPauseTransitionForTesting(true)
+
+        coordinator.stopRecording()
+
+        #expect(coordinator.hasDeferredStopForTesting)
+        #expect(coordinator.phase.isRecording)
+
+        coordinator.completePauseTransitionForTesting()
+
+        #expect(!coordinator.hasDeferredStopForTesting)
+        guard case .processing = coordinator.phase else {
+            Issue.record("Expected the deferred stop to enter processing")
+            return
+        }
     }
 }
 

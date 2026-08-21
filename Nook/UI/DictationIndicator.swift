@@ -8,6 +8,7 @@ import SwiftUI
 /// words correct themselves here is reassuring; watching them correct
 /// themselves inside a Slack message is not.
 struct DictationIndicatorView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let phase: DictationPhase
     /// Most recent first. A short history rather than a single value, so the
     /// meter reads as a travelling waveform instead of a symmetric pulse.
@@ -26,7 +27,7 @@ struct DictationIndicatorView: View {
                     .truncationMode(.head)
                     .frame(maxWidth: 280, alignment: .leading)
                     .fixedSize(horizontal: true, vertical: false)
-                    .animation(.default, value: label)
+                    .animation(reduceMotion ? nil : .default, value: label)
             }
         }
         .padding(.leading, NookSpacing.medium)
@@ -113,6 +114,7 @@ struct DictationIndicatorView: View {
 /// travel rather than every bar moving as one — which is what made the earlier
 /// version read as a loading spinner rather than a microphone.
 private struct DictationLevelMeter: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let levels: [Float]
 
     private static let barCount = 5
@@ -128,7 +130,12 @@ private struct DictationLevelMeter: View {
             }
         }
         .frame(height: Self.maximumHeight)
-        .animation(.spring(response: 0.22, dampingFraction: 0.62), value: levels)
+        .animation(
+            reduceMotion
+                ? nil
+                : .spring(response: 0.22, dampingFraction: 0.62),
+            value: levels
+        )
     }
 
     /// Bar 0 is the oldest sample, so it sits at the left and fades out.
@@ -152,6 +159,7 @@ private struct DictationLevelMeter: View {
 /// The wait is short but not instant, and an indicator that simply froze would
 /// read as the feature having failed.
 private struct DictationPolishingIndicator: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var phase: CGFloat = 0
 
     var body: some View {
@@ -165,6 +173,7 @@ private struct DictationPolishingIndicator: View {
         }
         .frame(height: 15)
         .onAppear {
+            guard !reduceMotion else { return }
             withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: false)) {
                 phase = 3
             }
@@ -273,7 +282,9 @@ final class DictationIndicatorController {
             context.duration = 0.14
             panel.animator().alphaValue = 0
         } completionHandler: {
-            panel.orderOut(nil)
+            Task { @MainActor in
+                panel.orderOut(nil)
+            }
         }
     }
 

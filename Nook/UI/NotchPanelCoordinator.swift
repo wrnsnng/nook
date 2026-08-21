@@ -267,6 +267,20 @@ final class NotchPanelCoordinator {
                 scale: scale
             )
         )
+        #if DEBUG
+        if resolvedHidden, resolvedPhase.isRecording {
+            NookDebugLog.write(
+                "[panel] hidden indicator: screen=\(screen.frame) "
+                    + "safeTop=\(screen.safeAreaInsets.top) "
+                    + "topInset=\(geometry.topInset) "
+                    + "housing=\(geometry.cameraHousingWidth) "
+                    + "size=\(size) "
+                    + "auxLeft=\(String(describing: screen.auxiliaryTopLeftArea)) "
+                    + "auxRight=\(String(describing: screen.auxiliaryTopRightArea))"
+            )
+        }
+        #endif
+
         let frame = NSRect(
             x: pixelAligned(
                 hiddenIndicatorOriginX(
@@ -292,6 +306,11 @@ final class NotchPanelCoordinator {
             shouldAnimate
         else {
             panel.setFrame(frame, display: true)
+        #if DEBUG
+        if resolvedHidden, resolvedPhase.isRecording {
+            NookDebugLog.write("[panel] applied frame: \(panel.frame) visible=\(panel.isVisible)")
+        }
+        #endif
             return
         }
 

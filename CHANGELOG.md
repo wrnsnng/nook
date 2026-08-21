@@ -8,6 +8,24 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 Nothing yet.
 
+## 1.7.4
+
+- Structured summaries now use a typed on-device response and validate each
+  key point, decision, and action against the transcript. A failed generation
+  can no longer put transcript passages into action items.
+- Meeting capture now waits for both the stream and recording file to finish,
+  blocks overlapping captures, ignores stale callbacks, and keeps usable audio
+  when ScreenCaptureKit stops unexpectedly.
+- A stop requested while pause or resume is finishing is now carried out
+  instead of being silently discarded.
+- Dictation reliably releases its microphone and recognizer after every error,
+  cancellation, or disable action.
+- A background folder refresh can no longer make a newly saved note disappear.
+- Nook keeps the display awake during capture because display sleep terminates
+  its ScreenCaptureKit audio stream.
+- Added bounded, content-free local lifecycle diagnostics to make release
+  failures diagnosable without recording meeting text or sending telemetry.
+
 ## 1.7.3
 
 - Recordings are no longer deleted when processing fails. When processing
@@ -70,10 +88,11 @@ Nothing yet.
 
 ## Current release
 
-- [1.7.3](Releases/Nook-1.7.3.md) — current stable release, build 16.
+- [1.7.4](Releases/Nook-1.7.4.md), current stable release, build 17.
 
 ## Previous releases
 
+- [1.7.3](Releases/Nook-1.7.3.md)
 - [1.7.2](Releases/Nook-1.7.2.md)
 - [1.7.1](Releases/Nook-1.7.1.md)
 - [1.7.0](Releases/Nook-1.7.0.md)

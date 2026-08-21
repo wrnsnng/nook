@@ -292,7 +292,7 @@ final class TextInsertionService {
         )
         guard manual != .success else {
             #if DEBUG
-            DictationDebugLog.write(
+            NookDebugLog.write(
                 "[dictation] AXManualAccessibility accepted by pid \(pid)"
             )
             #endif
@@ -305,7 +305,7 @@ final class TextInsertionService {
             kCFBooleanTrue
         )
         #if DEBUG
-        DictationDebugLog.write(
+        NookDebugLog.write(
             "[dictation] pid \(pid): AXManualAccessibility \(manual.rawValue), "
                 + "AXEnhancedUserInterface \(enhanced.rawValue)"
         )
@@ -339,7 +339,7 @@ final class TextInsertionService {
                 ] as? NSRunningApplication else {
                     return
                 }
-                MainActor.assumeIsolated {
+                _ = MainActor.assumeIsolated {
                     self?.activatedApplications.remove(app.processIdentifier)
                 }
             }
