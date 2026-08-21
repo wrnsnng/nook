@@ -33,7 +33,7 @@ def convert(markdown: str) -> str:
     lines = markdown.splitlines()
     parts: list[str] = []
     paragraph: list[str] = []
-    in_list = False
+    list_items: list[list[str]] = []
 
     def flush_paragraph() -> None:
         if paragraph:
@@ -41,10 +41,14 @@ def convert(markdown: str) -> str:
             paragraph.clear()
 
     def close_list() -> None:
-        nonlocal in_list
-        if in_list:
-            parts.append("</ul>")
-            in_list = False
+        if not list_items:
+            return
+        parts.append("<ul>")
+        parts.extend(
+            f"<li>{inline(' '.join(item))}</li>" for item in list_items
+        )
+        parts.append("</ul>")
+        list_items.clear()
 
     for line in lines:
         stripped = line.strip()
@@ -67,14 +71,17 @@ def convert(markdown: str) -> str:
         bullet = re.match(r"^[-*]\s+(.*)$", stripped)
         if bullet:
             flush_paragraph()
-            if not in_list:
-                parts.append("<ul>")
-                in_list = True
-            parts.append(f"<li>{inline(bullet.group(1))}</li>")
+            list_items.append([bullet.group(1)])
             continue
 
-        close_list()
-        paragraph.append(stripped)
+        if list_items:
+            # Release notes wrap bullets to keep the Markdown readable. A
+            # continuation line belongs to the current item until a blank line
+            # ends the list; closing here split every bullet into a one-line
+            # item followed by an unrelated paragraph in Sparkle's dialog.
+            list_items[-1].append(stripped)
+        else:
+            paragraph.append(stripped)
 
     flush_paragraph()
     close_list()

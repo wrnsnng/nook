@@ -357,7 +357,7 @@ private final class LiveTrack {
         }
         continuation.finish()
 
-        let finished = await withDeadline(
+        let finished: Void? = await withDeadline(
             seconds: Self.finalizationTimeout
         ) { [weak self] () -> Void in
             guard let self else { return }

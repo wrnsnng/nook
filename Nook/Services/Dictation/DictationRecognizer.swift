@@ -3,6 +3,17 @@ import CoreMedia
 import Foundation
 import Speech
 
+@MainActor
+protocol DictationRecognizing: AnyObject {
+    var onVolatile: (@MainActor (String) -> Void)? { get set }
+    var onFinalized: (@MainActor (String) -> Void)? { get set }
+    var onError: (@MainActor (String) -> Void)? { get set }
+    func start(localeIdentifier: String) async throws
+    func ingest(_ buffer: AVAudioPCMBuffer)
+    func finish() async
+    func cancel()
+}
+
 /// Turns microphone audio into dictated text.
 ///
 /// The split between volatile and finalized output is the whole point of this
@@ -13,7 +24,7 @@ import Speech
 /// safe to put in someone's document, where a rewrite means deleting
 /// characters they are watching.
 @MainActor
-final class DictationRecognizer {
+final class DictationRecognizer: DictationRecognizing {
     /// The current in-progress guess. Replaces whatever was sent before.
     var onVolatile: (@MainActor (String) -> Void)?
     /// A span that will not change again. Append-only.
@@ -120,7 +131,7 @@ final class DictationRecognizer {
         }
         continuation?.finish()
 
-        let finished = await withDeadline(
+        let finished: Void? = await withDeadline(
             seconds: Self.finalizationTimeout
         ) { [weak self] () -> Void in
             guard let self, let analyzer = self.analyzer else { return }

@@ -1,5 +1,15 @@
 import AVFoundation
 
+@MainActor
+protocol DictationAudioCapturing: AnyObject {
+    var onLevel: (@MainActor (Float) -> Void)? { get set }
+    func start(
+        onBuffer: @escaping @MainActor (AVAudioPCMBuffer) -> Void
+    ) throws
+    func finishCapturing() async
+    func stop()
+}
+
 /// Microphone capture for dictation.
 ///
 /// Deliberately not `CaptureService`. That path reaches the microphone through
@@ -8,7 +18,7 @@ import AVFoundation
 /// sentence into a text field. `AVAudioEngine` needs only the microphone grant
 /// the user has already given.
 @MainActor
-final class DictationAudioSource {
+final class DictationAudioSource: DictationAudioCapturing {
     enum SourceError: LocalizedError {
         case noInputAvailable
 

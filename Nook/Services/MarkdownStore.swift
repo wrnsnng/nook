@@ -10,6 +10,12 @@ struct MarkdownLoadIssue: Identifiable, Hashable, Sendable {
 
 @MainActor
 final class MarkdownStore: ObservableObject {
+    typealias LoadPayload = (
+        notes: [MeetingNote],
+        issues: [MarkdownLoadIssue]
+    )
+    typealias NoteLoader = @Sendable (URL) -> Result<LoadPayload, Error>
+
     @Published private(set) var notes: [MeetingNote] = []
     @Published private(set) var loadIssues: [MarkdownLoadIssue] = []
     @Published private(set) var isLoading = false
@@ -17,10 +23,15 @@ final class MarkdownStore: ObservableObject {
     @Published var lastError: String?
 
     private let fileManager: FileManager
+    private let noteLoader: NoteLoader
     private var reloadGeneration = 0
 
-    init(fileManager: FileManager = .default) {
+    init(
+        fileManager: FileManager = .default,
+        noteLoader: @escaping NoteLoader = MarkdownStore.loadNotes
+    ) {
         self.fileManager = fileManager
+        self.noteLoader = noteLoader
         let configured = UserDefaults.standard.string(forKey: "storageDirectory")
         self.storageURL = configured.map(URL.init(fileURLWithPath:))
             ?? fileManager.homeDirectoryForCurrentUser
@@ -35,11 +46,12 @@ final class MarkdownStore: ObservableObject {
         reloadGeneration += 1
         let generation = reloadGeneration
         let directory = storageURL
+        let noteLoader = noteLoader
         isLoading = true
 
         Task {
             let result = await Task.detached(priority: .userInitiated) {
-                Self.loadNotes(in: directory)
+                noteLoader(directory)
             }.value
 
             guard generation == reloadGeneration, directory == storageURL else { return }
@@ -66,6 +78,7 @@ final class MarkdownStore: ObservableObject {
         try MarkdownCodec.encode(note).write(to: destination, atomically: true, encoding: .utf8)
         protectSensitiveFile(at: destination)
         saved.fileURL = destination
+        invalidateReloadSnapshot()
         upsert(saved)
         lastError = nil
         return saved
@@ -136,6 +149,7 @@ final class MarkdownStore: ObservableObject {
         try markdown.write(to: url, atomically: true, encoding: .utf8)
         protectSensitiveFile(at: url)
         decoded.fileURL = url
+        invalidateReloadSnapshot()
         upsert(decoded)
         loadIssues.removeAll { $0.fileURL == url }
         lastError = loadIssues.isEmpty
@@ -239,6 +253,14 @@ final class MarkdownStore: ObservableObject {
         notes.sort { $0.startedAt > $1.startedAt }
     }
 
+    /// A detached reload is a snapshot of the directory before this mutation.
+    /// Advancing the generation prevents that older snapshot from replacing the
+    /// note that was just saved, and clears a spinner whose task is now stale.
+    private func invalidateReloadSnapshot() {
+        reloadGeneration += 1
+        isLoading = false
+    }
+
     private func filename(for note: MeetingNote) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd_HHmm"
@@ -302,9 +324,9 @@ final class MarkdownStore: ObservableObject {
         }
     }
 
-    private nonisolated static func loadNotes(
+    nonisolated static func loadNotes(
         in directory: URL
-    ) -> Result<(notes: [MeetingNote], issues: [MarkdownLoadIssue]), Error> {
+    ) -> Result<LoadPayload, Error> {
         do {
             let urls = try FileManager.default.contentsOfDirectory(
                 at: directory,

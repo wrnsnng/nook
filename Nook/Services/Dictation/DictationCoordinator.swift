@@ -32,6 +32,9 @@ final class DictationCoordinator: ObservableObject {
     @Published var isEnabled: Bool {
         didSet {
             UserDefaults.standard.set(isEnabled, forKey: Keys.enabled)
+            if !isEnabled {
+                cancel()
+            }
             applyShortcutRegistration()
         }
     }
@@ -55,8 +58,8 @@ final class DictationCoordinator: ObservableObject {
     @Published private(set) var shortcut: DictationShortcut
 
     private let monitor = GlobalShortcutMonitor()
-    private let audio = DictationAudioSource()
-    private let recognizer = DictationRecognizer()
+    private let audio: any DictationAudioCapturing
+    private let recognizer: any DictationRecognizing
     private let insertion = TextInsertionService()
     private let refiner = DictationRefiner()
 
@@ -67,6 +70,7 @@ final class DictationCoordinator: ObservableObject {
     private var streamedChunkCount = 0
     private var isFinishing = false
     private var startTask: Task<Void, Never>?
+    private var finishTask: Task<Void, Never>?
     /// Distinguishes one dictation from the next. A start that is still setting
     /// up when its session is abandoned cannot tell from `phase` alone whether
     /// a later `.preparing` belongs to it or to a newer run.
@@ -94,7 +98,12 @@ final class DictationCoordinator: ObservableObject {
     /// audio pipeline cannot hold dictation open.
     private static let captureDrainTimeout: Double = 2
 
-    init(localeIdentifier: String) {
+    init(
+        localeIdentifier: String,
+        audio: any DictationAudioCapturing = DictationAudioSource(),
+        recognizer: any DictationRecognizing = DictationRecognizer(),
+        registersShortcut: Bool = true
+    ) {
         let defaults = UserDefaults.standard
         self.localeIdentifier = localeIdentifier
         self.isEnabled = defaults.bool(forKey: Keys.enabled)
@@ -107,6 +116,8 @@ final class DictationCoordinator: ObservableObject {
         self.shortcut = defaults.data(forKey: Keys.shortcut)
             .flatMap { try? JSONDecoder().decode(DictationShortcut.self, from: $0) }
             ?? .default
+        self.audio = audio
+        self.recognizer = recognizer
 
         monitor.onPress = { [weak self] in self?.shortcutPressed() }
         monitor.onRelease = { [weak self] in self?.shortcutReleased() }
@@ -125,7 +136,9 @@ final class DictationCoordinator: ObservableObject {
             self?.fail(message)
         }
 
-        applyShortcutRegistration()
+        if registersShortcut {
+            applyShortcutRegistration()
+        }
 
         // A modifier-only shortcut cannot register until Accessibility is
         // granted, and granting happens in System Settings — so the moment the
@@ -265,7 +278,7 @@ final class DictationCoordinator: ObservableObject {
             capability = .noTextField
         }
         #if DEBUG
-        DictationDebugLog.write("[dictation] begin — capability: \(capability), frontmost: \(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "?"), \(insertion.lastInspection)")
+        NookDebugLog.write("[dictation] begin — capability: \(capability), frontmost: \(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "?"), \(insertion.lastInspection)")
         #endif
 
         guard capability != .unavailable else {
@@ -287,6 +300,7 @@ final class DictationCoordinator: ObservableObject {
 
         sessionID += 1
         let session = sessionID
+        NookEventLog.write(.dictationStarted)
         startTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
@@ -297,9 +311,6 @@ final class DictationCoordinator: ObservableObject {
                     self?.recognizer.ingest(buffer)
                 }
             } catch {
-                self.audio.stop()
-                self.recognizer.cancel()
-                self.insertion.endRun()
                 self.fail(error.localizedDescription)
                 return
             }
@@ -325,15 +336,25 @@ final class DictationCoordinator: ObservableObject {
     private func finish() {
         guard phase.isActive, !isFinishing else { return }
         isFinishing = true
+        let session = sessionID
 
-        Task { @MainActor [weak self] in
+        finishTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            defer {
+                if self.sessionID == session {
+                    self.finishTask = nil
+                }
+            }
             // Starting and stopping must not interleave: a release during
             // setup would otherwise race the recognizer's own start.
             await self.startTask?.value
             self.startTask = nil
 
-            guard self.phase.isActive else {
+            guard
+                !Task.isCancelled,
+                self.sessionID == session,
+                self.phase.isActive
+            else {
                 self.isFinishing = false
                 return
             }
@@ -345,18 +366,26 @@ final class DictationCoordinator: ObservableObject {
                 [audio] () -> Void in
                 await audio.finishCapturing()
             }
+            guard !Task.isCancelled, self.sessionID == session else { return }
             self.audioLevel = 0
             await self.recognizer.finish()
+            guard !Task.isCancelled, self.sessionID == session else { return }
             self.volatileText = ""
             await self.deliver()
+            if self.phase == .idle {
+                NookEventLog.write(.dictationFinished)
+            }
         }
     }
 
     func cancel() {
-        guard phase.isActive else { return }
+        guard phase.isActive || isFinishing || isFailed else { return }
+        sessionID += 1
         isFinishing = false
         startTask?.cancel()
         startTask = nil
+        finishTask?.cancel()
+        finishTask = nil
         audio.stop()
         recognizer.cancel()
         insertion.endRun()
@@ -379,8 +408,8 @@ final class DictationCoordinator: ObservableObject {
         // "the code is A A 7 3" keeps both letters. Dictate a code with this
         // build and compare the two lines to settle it against real output.
         if text != cleaned {
-            DictationDebugLog.write("[dictation] heard: \(text)")
-            DictationDebugLog.write("[dictation] typed: \(cleaned)")
+            NookDebugLog.write("[dictation] heard: \(text)")
+            NookDebugLog.write("[dictation] typed: \(cleaned)")
         }
         #endif
 
@@ -410,7 +439,7 @@ final class DictationCoordinator: ObservableObject {
         let separator = insertedAnything ? " " : ""
         let appended = insertion.append(separator + cleaned)
         #if DEBUG
-        DictationDebugLog.write("[dictation] append \(appended ? "ok" : "FAILED"): \(cleaned)")
+        NookDebugLog.write("[dictation] append \(appended ? "ok" : "FAILED"): \(cleaned)")
         #endif
         guard appended else {
             // The field stopped accepting writes mid-sentence. Silently
@@ -456,7 +485,7 @@ final class DictationCoordinator: ObservableObject {
 
         let spoken = spokenText
         #if DEBUG
-        DictationDebugLog.write("[dictation] deliver — capability: \(capability), streamingFailed: \(streamingFailed), chunks: \(spokenChunks.count), peak: \(peakLevel), spoken: \"\(spoken)\"")
+        NookDebugLog.write("[dictation] deliver — capability: \(capability), streamingFailed: \(streamingFailed), chunks: \(spokenChunks.count), peak: \(peakLevel), spoken: \"\(spoken)\"")
         #endif
         guard !spoken.isEmpty else {
             // Nothing was recognised. Silence at the microphone and speech that
@@ -520,7 +549,7 @@ final class DictationCoordinator: ObservableObject {
             if !remainder.isEmpty {
                 let pasted = await insertion.pasteOnce(" " + remainder)
                 #if DEBUG
-                DictationDebugLog.write(
+                NookDebugLog.write(
                     "[dictation] remainder paste \(pasted ? "ok" : "FAILED")"
                 )
                 #endif
@@ -532,7 +561,7 @@ final class DictationCoordinator: ObservableObject {
         case .pasteOnly:
             let pasted = await insertion.pasteOnce(finalText)
             #if DEBUG
-            DictationDebugLog.write("[dictation] paste \(pasted ? "ok" : "FAILED")")
+            NookDebugLog.write("[dictation] paste \(pasted ? "ok" : "FAILED")")
             #endif
             guard pasted else {
                 fail("Nook couldn’t paste into that app.")
@@ -566,7 +595,7 @@ final class DictationCoordinator: ObservableObject {
 
         let second = insertion.beginRun()
         #if DEBUG
-        DictationDebugLog.write(
+        NookDebugLog.write(
             "[dictation] second look, capability: \(second), \(insertion.lastInspection)"
         )
         #endif
@@ -601,9 +630,24 @@ final class DictationCoordinator: ObservableObject {
     }
 
     private func fail(_ message: String) {
+        // Every failure is a terminal lifecycle path, including asynchronous
+        // recognizer errors. UI state alone is not cleanup: without this common
+        // teardown the audio tap can keep the microphone live after the
+        // indicator disappears, and the failed phase then rejects `cancel()`.
+        sessionID += 1
+        startTask?.cancel()
+        startTask = nil
+        finishTask?.cancel()
+        finishTask = nil
+        audio.stop()
+        recognizer.cancel()
+        insertion.endRun()
+        isFinishing = false
         phase = .failed(message)
         audioLevel = 0
         volatileText = ""
+        resetRunState()
+        NookEventLog.write(.dictationFailed)
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(4))
             guard let self, self.isFailed else { return }

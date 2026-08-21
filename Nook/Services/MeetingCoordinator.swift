@@ -126,6 +126,10 @@ final class MeetingCoordinator: ObservableObject {
     private var accumulatedElapsed: TimeInterval = 0
     private var activeElapsedStartedAt: Date?
     private var processingCancellationRequested = false
+    /// A meeting can end while ScreenCaptureKit is finalizing a pause or adding
+    /// the resumed output. Remember that stop request and run it as soon as the
+    /// transition becomes terminal instead of silently discarding it.
+    private var stopRequestedDuringPauseTransition = false
 
     init(store: MarkdownStore, detector: MeetingDetector) {
         self.store = store
@@ -184,17 +188,22 @@ final class MeetingCoordinator: ObservableObject {
     }
 
     func stopRecording() {
-        guard phase.isRecording, processingTask == nil,
-              !pauseTransitionInFlight
-        else {
+        guard phase.isRecording, processingTask == nil else {
             return
         }
+        guard !pauseTransitionInFlight else {
+            stopRequestedDuringPauseTransition = true
+            NookEventLog.write(.meetingStopDeferred)
+            return
+        }
+        stopRequestedDuringPauseTransition = false
         elapsedTask?.cancel()
         meterTask?.cancel()
         onRecordingStopped?()
         topPanelHidden = false
         processingCancellationRequested = false
         phase = .processing(.preparing)
+        NookEventLog.write(.meetingStopStarted)
         onPresentationRequested?()
         processingTask = Task { [weak self] in
             await self?.finishRecording()
@@ -298,8 +307,7 @@ final class MeetingCoordinator: ObservableObject {
         pauseTask = Task { [weak self] in
             guard let self else { return }
             defer {
-                pauseTransitionInFlight = false
-                pauseTask = nil
+                completePauseTransition()
             }
             do {
                 try await capture.pause(
@@ -325,8 +333,7 @@ final class MeetingCoordinator: ObservableObject {
         pauseTask = Task { [weak self] in
             guard let self else { return }
             defer {
-                pauseTransitionInFlight = false
-                pauseTask = nil
+                completePauseTransition()
             }
             do {
                 try capture.resume()
@@ -507,6 +514,7 @@ final class MeetingCoordinator: ObservableObject {
         pauseTransitionInFlight = false
         topPanelHidden = false
         processingCancellationRequested = false
+        stopRequestedDuringPauseTransition = false
         accumulatedElapsed = 0
         activeElapsedStartedAt = nil
         audioLevel = 0
@@ -701,8 +709,10 @@ final class MeetingCoordinator: ObservableObject {
             liveSummaryUpdatedAt = nil
             topPanelHidden = false
             processingCancellationRequested = false
+            stopRequestedDuringPauseTransition = false
             if cleanupFailures.isEmpty {
                 phase = .completed(saved.title)
+                NookEventLog.write(.meetingSaved)
             } else {
                 phase = .failed(
                     "Your meeting note was saved, but Nook could not remove every temporary recording file."
@@ -741,6 +751,7 @@ final class MeetingCoordinator: ObservableObject {
             pauseTransitionInFlight = false
             audioLevel = 0
             processingCancellationRequested = false
+            stopRequestedDuringPauseTransition = false
             phase = .failed(
                 error.localizedDescription
                     + Self.preservedRecordingNotice(
@@ -749,6 +760,7 @@ final class MeetingCoordinator: ObservableObject {
                             : recordingURLs
                     )
             )
+            NookEventLog.write(.meetingProcessingFailed)
             onPresentationRequested?()
         }
     }
@@ -797,6 +809,14 @@ final class MeetingCoordinator: ObservableObject {
                 try? await Task.sleep(for: .milliseconds(80))
             }
         }
+    }
+
+    private func completePauseTransition() {
+        pauseTransitionInFlight = false
+        pauseTask = nil
+        guard stopRequestedDuringPauseTransition else { return }
+        stopRequestedDuringPauseTransition = false
+        stopRecording()
     }
 
     private func startLiveCaptions() {
@@ -920,6 +940,7 @@ final class MeetingCoordinator: ObservableObject {
         pendingStartRequest = nil
         requiredPermission = nil
         processingCancellationRequested = false
+        stopRequestedDuringPauseTransition = false
         elapsed = 0
         accumulatedElapsed = 0
         activeElapsedStartedAt = nil
@@ -941,6 +962,20 @@ final class MeetingCoordinator: ObservableObject {
                     + Self.cleanupNotice(for: cleanupFailures)
             )
     }
+
+    #if DEBUG
+    var hasDeferredStopForTesting: Bool {
+        stopRequestedDuringPauseTransition
+    }
+
+    func setPauseTransitionForTesting(_ inFlight: Bool) {
+        pauseTransitionInFlight = inFlight
+    }
+
+    func completePauseTransitionForTesting() {
+        completePauseTransition()
+    }
+    #endif
 
     private static func cleanupNotice(for urls: [URL]) -> String {
         guard !urls.isEmpty else { return "" }

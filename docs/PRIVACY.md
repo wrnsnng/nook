@@ -167,6 +167,12 @@ and Apple frameworks may create local diagnostic or permission logs. Review and
 redact logs before sharing them: filenames, paths, window titles, errors, or
 framework output can identify a meeting or user.
 
+Nook also keeps a bounded local operational journal in `~/Library/Logs`. Its
+entries come from a fixed list of lifecycle events such as capture started,
+capture stopped, or processing failed. It contains no meeting titles, dictated
+words, transcript text, filenames, paths, or error descriptions, and it is never
+uploaded automatically. Each installed build identity uses its own journal.
+
 ## User control
 
 Users can:

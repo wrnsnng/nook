@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Carbon.HIToolbox
 import Testing
 @testable import Nook
@@ -172,5 +173,61 @@ struct DictationStyleTests {
             DictationStyle.custom.instructions(customPrompt: "   ")
                 == DictationStyle.polish.instructions(customPrompt: "")
         )
+    }
+}
+
+@MainActor
+struct DictationLifecycleTests {
+    @Test
+    func aRecognizerFailureAlwaysTearsDownAudioAndRecognition() {
+        let audio = TestDictationAudioSource()
+        let recognizer = TestDictationRecognizer()
+        let coordinator = DictationCoordinator(
+            localeIdentifier: "en_AU",
+            audio: audio,
+            recognizer: recognizer,
+            registersShortcut: false
+        )
+
+        recognizer.onError?("Synthetic recognition failure")
+
+        #expect(audio.stopCount == 1)
+        #expect(recognizer.cancelCount == 1)
+        guard case .failed = coordinator.phase else {
+            Issue.record("Expected the coordinator to expose the recognition failure")
+            return
+        }
+    }
+}
+
+@MainActor
+private final class TestDictationAudioSource: DictationAudioCapturing {
+    var onLevel: (@MainActor (Float) -> Void)?
+    private(set) var stopCount = 0
+
+    func start(
+        onBuffer: @escaping @MainActor (AVAudioPCMBuffer) -> Void
+    ) throws {}
+
+    func finishCapturing() async {}
+
+    func stop() {
+        stopCount += 1
+    }
+}
+
+@MainActor
+private final class TestDictationRecognizer: DictationRecognizing {
+    var onVolatile: (@MainActor (String) -> Void)?
+    var onFinalized: (@MainActor (String) -> Void)?
+    var onError: (@MainActor (String) -> Void)?
+    private(set) var cancelCount = 0
+
+    func start(localeIdentifier: String) async throws {}
+    func ingest(_ buffer: AVAudioPCMBuffer) {}
+    func finish() async {}
+
+    func cancel() {
+        cancelCount += 1
     }
 }

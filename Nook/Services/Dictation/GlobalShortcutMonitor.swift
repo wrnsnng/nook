@@ -138,18 +138,20 @@ final class GlobalShortcutMonitor {
         // Global monitors do not see events while Nook itself is frontmost, so
         // a local one covers Settings and the library window.
         if let global = NSEvent.addGlobalMonitorForEvents(
-            matching: [.flagsChanged, .keyDown]
-        ) { event in
-            MainActor.assumeIsolated { handle(event) }
-        } {
+            matching: [.flagsChanged, .keyDown],
+            handler: { event in
+                MainActor.assumeIsolated { handle(event) }
+            }
+        ) {
             flagMonitors.append(global)
         }
         if let local = NSEvent.addLocalMonitorForEvents(
-            matching: [.flagsChanged, .keyDown]
-        ) { event in
-            handle(event)
-            return event
-        } {
+            matching: [.flagsChanged, .keyDown],
+            handler: { event in
+                handle(event)
+                return event
+            }
+        ) {
             flagMonitors.append(local)
         }
 

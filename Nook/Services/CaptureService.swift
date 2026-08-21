@@ -8,16 +8,29 @@ import Synchronization
 @MainActor
 final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegate, SCStreamOutput {
     private var stream: SCStream?
+    private var streamID: ObjectIdentifier?
     /// Called when the capture stream ends without Nook asking it to, so a
     /// meeting cannot quietly stop recording while it still looks live.
     var onUnexpectedStop: (@MainActor (any Error) -> Void)?
     /// Set while Nook is deliberately winding the stream down, which is the
     /// only way to tell a requested stop from one the system imposed.
     private var isStopping = false
+    /// The asynchronous `stopCapture()` operation is kept alive and owned until
+    /// it actually returns. A timeout may stop the UI waiting, but it must not
+    /// make a still-running capture look idle and allow another one to start.
+    private var streamStopTask: Task<Void, Never>?
+    private var stopState: CaptureStopState?
+    /// A recording-output callback can precede the stream's stop callback when
+    /// ScreenCaptureKit fails on its own. Carry it into the stop barrier that
+    /// recovery creates on the next main-actor turn.
+    private var unmatchedRecordingFinalization: Result<Void, Error>?
+    private var clearWhenStreamStops = false
+    private var streamEndedUnexpectedly = false
 
     /// Held for as long as audio is being captured. See `holdSleepAtBay`.
     private var sleepAssertion: (any NSObjectProtocol)?
     private var recordingOutput: SCRecordingOutput?
+    private var recordingOutputID: ObjectIdentifier?
     private var recordingURL: URL?
     private var baseRecordingURL: URL?
     private var recordingURLs: [URL] = []
@@ -87,7 +100,9 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         permissionsAreReady: Bool = false,
         onAudioLevel: ((Double, TranscriptSegment.Source) -> Void)? = nil
     ) async throws {
-        guard stream == nil else { throw CaptureError.alreadyRecording }
+        guard stream == nil, streamStopTask == nil else {
+            throw CaptureError.alreadyRecording
+        }
         if !permissionsAreReady {
             try await requestPermissions()
         }
@@ -141,12 +156,18 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         )
 
         self.lastError = nil
+        self.streamEndedUnexpectedly = false
+        self.stopState = nil
+        self.unmatchedRecordingFinalization = nil
+        self.clearWhenStreamStops = false
         self.recordingURL = url
         self.baseRecordingURL = url
         self.recordingURLs = [url]
         self.nextSegmentNumber = 2
         self.recordingOutput = recordingOutput
+        self.recordingOutputID = ObjectIdentifier(recordingOutput)
         self.stream = stream
+        self.streamID = ObjectIdentifier(stream)
         self.isPaused = false
         self.liveTranscription = nil
         self.audioLevelHandler = onAudioLevel
@@ -158,6 +179,7 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
             throw error
         }
         holdSleepAtBay()
+        NookEventLog.write(.captureStarted)
     }
 
     func pause(finalizationTimeout: Duration? = nil) async throws {
@@ -174,6 +196,7 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
                 try stream.removeRecordingOutput(recordingOutput)
             }
             self.recordingOutput = nil
+            recordingOutputID = nil
             recordingURL = nil
         } catch {
             isPaused = false
@@ -211,6 +234,7 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         recordingURL = segmentURL
         recordingURLs.append(segmentURL)
         recordingOutput = output
+        recordingOutputID = ObjectIdentifier(output)
         isPaused = false
         holdSleepAtBay()
         preparesLiveInput.withLock { $0 = liveTranscription != nil }
@@ -227,24 +251,61 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
             throw CaptureError.notRecording
         }
         isStopping = true
+        preparesLiveInput.withLock { $0 = false }
 
         let completedURLs = recordingURLs
+        if streamEndedUnexpectedly {
+            // The stream is already terminal, so asking ScreenCaptureKit to stop
+            // it again only turns a recoverable partial recording into an error.
+            // Its recording output may still be closing the file; wait for that
+            // callback when one exists, then let extraction decide whether the
+            // resulting file contains usable audio.
+            if recordingOutput != nil {
+                if let unmatchedRecordingFinalization {
+                    self.unmatchedRecordingFinalization = nil
+                    if case .failure(let error) = unmatchedRecordingFinalization {
+                        lastError = error
+                    }
+                } else {
+                    do {
+                        try await finalizationWaiter.wait(
+                            timeout: finalizationTimeout
+                        ) {}
+                    } catch {
+                        lastError = error
+                    }
+                }
+            }
+            let existingURLs = completedURLs.filter {
+                FileManager.default.fileExists(atPath: $0.path)
+            }
+            let terminalError = lastError
+            clear()
+            guard !existingURLs.isEmpty else {
+                throw terminalError ?? CaptureError.recordingMissing
+            }
+            NookEventLog.write(.captureRecoveredAfterUnexpectedStop)
+            return existingURLs
+        }
+
+        stopState = CaptureStopState(
+            waitsForRecordingFinalization: !isPaused
+        )
+        if let unmatchedRecordingFinalization {
+            stopState?.receiveRecordingFinalization(
+                unmatchedRecordingFinalization
+            )
+            self.unmatchedRecordingFinalization = nil
+        }
         if isPaused {
             do {
                 try await finalizationWaiter.wait(
                     timeout: finalizationTimeout
                 ) {
-                    Task { @MainActor in
-                        do {
-                            try await stream.stopCapture()
-                            self.completeStop()
-                        } catch {
-                            self.completeStop(with: error)
-                        }
-                    }
+                    try self.beginStoppingStream(stream)
                 }
             } catch {
-                clear()
+                preserveStopOwnershipAfterFailure()
                 throw error
             }
         } else {
@@ -252,43 +313,42 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
                 try await finalizationWaiter.wait(
                     timeout: finalizationTimeout
                 ) {
-                    Task { @MainActor in
-                        do {
-                            try await stream.stopCapture()
-                        } catch {
-                            self.completeStop(with: error)
-                        }
-                    }
+                    try self.beginStoppingStream(stream)
                 }
             } catch {
-                clear()
+                preserveStopOwnershipAfterFailure()
                 throw error
             }
         }
         clear()
 
-        if let lastError {
-            throw lastError
-        }
         let existingURLs = completedURLs.filter {
             FileManager.default.fileExists(atPath: $0.path)
         }
         guard !existingURLs.isEmpty else {
             throw CaptureError.recordingMissing
         }
+        NookEventLog.write(.captureStopped)
         return existingURLs
     }
 
     nonisolated func stream(_ stream: SCStream, didStopWithError error: any Error) {
+        let stoppedStreamID = ObjectIdentifier(stream)
         Task { @MainActor in
+            guard stoppedStreamID == self.streamID else { return }
             self.lastError = error
-            self.completeStop(with: error)
+            if self.isStopping, self.stopState != nil {
+                self.streamStopTask?.cancel()
+                self.receiveStreamStop(.failure(error))
+                return
+            }
+            self.streamEndedUnexpectedly = true
+            NookEventLog.write(.captureStoppedUnexpectedly)
             // The system can tear the stream down on its own: the Mac sleeps,
             // displays are reconfigured, permission is revoked. Recording then
             // ends while the meeting still shows as running, and the user finds
             // out when the note is short. Reporting it lets the meeting be
             // finished with whatever was captured rather than lost.
-            guard !self.isStopping else { return }
             self.onUnexpectedStop?(error)
         }
     }
@@ -298,6 +358,7 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
         of outputType: SCStreamOutputType
     ) {
+        let outputStreamID = ObjectIdentifier(stream)
         guard sampleBuffer.isValid, sampleBuffer.dataReadiness == .ready else { return }
         let source: TranscriptSegment.Source
         switch outputType {
@@ -318,9 +379,10 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         }
 
         Task { @MainActor [weak self] in
-            self?.audioLevelHandler?(level, source)
+            guard let self, outputStreamID == self.streamID else { return }
+            self.audioLevelHandler?(level, source)
             guard let liveInput else { return }
-            self?.liveTranscription?.ingest(
+            self.liveTranscription?.ingest(
                 liveInput.buffer,
                 source: source
             )
@@ -333,23 +395,101 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         _ recordingOutput: SCRecordingOutput,
         didFailWithError error: any Error
     ) {
+        let outputID = ObjectIdentifier(recordingOutput)
         Task { @MainActor in
-            self.lastError = error
-            self.completeStop(with: error)
+            self.receiveRecordingFinalization(
+                .failure(error),
+                from: outputID
+            )
         }
     }
 
     nonisolated func recordingOutputDidFinishRecording(_ recordingOutput: SCRecordingOutput) {
+        let outputID = ObjectIdentifier(recordingOutput)
         Task { @MainActor in
-            self.completeStop()
+            self.receiveRecordingFinalization(
+                .success(()),
+                from: outputID
+            )
         }
     }
 
-    private func completeStop(with error: Error? = nil) {
-        if let error {
-            finalizationWaiter.resolve(.failure(error))
+    private func beginStoppingStream(_ stream: SCStream) throws {
+        guard streamStopTask == nil else {
+            throw CaptureError.finalizationInProgress
+        }
+        streamStopTask = Task { @MainActor [weak self] in
+            do {
+                try await stream.stopCapture()
+                self?.receiveStreamStop(.success(()))
+            } catch {
+                self?.receiveStreamStop(.failure(error))
+            }
+        }
+    }
+
+    private func receiveStreamStop(_ result: Result<Void, Error>) {
+        streamStopTask = nil
+        if case .failure(let error) = result {
+            lastError = error
+        }
+        stopState?.receiveStreamStop(result)
+        resolveRequestedStopIfReady()
+
+        if clearWhenStreamStops {
+            clear()
+        }
+    }
+
+    private func receiveRecordingFinalization(
+        _ result: Result<Void, Error>,
+        from outputID: ObjectIdentifier
+    ) {
+        // A timed-out output can finish after another meeting has started. Its
+        // delegate must never resolve or fail the newer meeting's waiter.
+        guard outputID == recordingOutputID else { return }
+        if case .failure(let error) = result {
+            lastError = error
+        }
+
+        if stopState != nil {
+            stopState?.receiveRecordingFinalization(result)
+            resolveRequestedStopIfReady()
+        } else if isPaused || streamEndedUnexpectedly {
+            // Pause and an unexpected stream stop can already be waiting for
+            // this callback without a requested stream-stop barrier.
+            if finalizationWaiter.isWaiting {
+                finalizationWaiter.resolve(result)
+            } else {
+                unmatchedRecordingFinalization = result
+            }
         } else {
-            finalizationWaiter.resolve(.success(()))
+            unmatchedRecordingFinalization = result
+            guard case .failure(let error) = result else { return }
+            preparesLiveInput.withLock { $0 = false }
+            NookEventLog.write(.captureStoppedUnexpectedly)
+            onUnexpectedStop?(error)
+        }
+    }
+
+    private func resolveRequestedStopIfReady() {
+        guard let result = stopState?.resolution else { return }
+        finalizationWaiter.resolve(result)
+    }
+
+    private func preserveStopOwnershipAfterFailure() {
+        streamStopTask?.cancel()
+        preparesLiveInput.withLock { $0 = false }
+        liveTranscription = nil
+        audioLevelHandler = nil
+        releaseSleepAssertion()
+
+        if stopState?.streamHasStopped == true || streamStopTask == nil {
+            clear()
+        } else {
+            // `stopCapture()` has not returned. Keep `stream` and the task until
+            // it does, which prevents a second capture from overlapping it.
+            clearWhenStreamStops = true
         }
     }
 
@@ -362,14 +502,23 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
     /// laptop arrives around the twenty minute mark, which is exactly when
     /// recordings were being cut short.
     ///
-    /// Only system sleep is deferred. The display is left free to switch off,
-    /// because recording audio needs the Mac awake, not the screen lit, and
-    /// holding the display on would cost battery for nothing. Closing the lid
-    /// still sleeps the machine; no application can prevent that.
+    /// The display is held awake as well, which is not what an audio recorder
+    /// would normally need. Nook captures sound through ScreenCaptureKit, a
+    /// screen API: the two-by-two video stream exists only because capturing
+    /// system audio requires a stream at all. When the display sleeps that
+    /// stream stops, and the audio stops with it. Keeping the screen lit costs
+    /// battery; losing the meeting costs more.
+    ///
+    /// Closing the lid still sleeps the machine; no application can prevent
+    /// that.
     private func holdSleepAtBay() {
         guard sleepAssertion == nil else { return }
         sleepAssertion = ProcessInfo.processInfo.beginActivity(
-            options: [.idleSystemSleepDisabled, .automaticTerminationDisabled],
+            options: [
+                .idleSystemSleepDisabled,
+                .idleDisplaySleepDisabled,
+                .automaticTerminationDisabled
+            ],
             reason: "Recording a meeting"
         )
     }
@@ -383,8 +532,15 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
     private func clear() {
         releaseSleepAssertion()
         isStopping = false
+        streamStopTask = nil
+        stopState = nil
+        unmatchedRecordingFinalization = nil
+        clearWhenStreamStops = false
+        streamEndedUnexpectedly = false
         stream = nil
+        streamID = nil
         recordingOutput = nil
+        recordingOutputID = nil
         recordingURL = nil
         baseRecordingURL = nil
         recordingURLs = []
@@ -394,6 +550,7 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         liveTranscription = nil
         audioLevelHandler = nil
         preparesLiveInput.withLock { $0 = false }
+        lastError = nil
     }
 
     nonisolated private static func normalizedAudioLevel(
@@ -538,6 +695,50 @@ enum CaptureError: LocalizedError {
     }
 }
 
+/// Joins the two independent events that make a requested stop complete.
+///
+/// `SCStream.stopCapture()` returning only proves that capture stopped. The
+/// recording-output delegate separately proves that its container finished
+/// writing. Resuming the caller on either event alone can expose a partial file
+/// or discard ownership of a stream that is still running.
+struct CaptureStopState {
+    let waitsForRecordingFinalization: Bool
+    private var streamResult: Result<Void, Error>?
+    private var recordingResult: Result<Void, Error>?
+
+    init(waitsForRecordingFinalization: Bool) {
+        self.waitsForRecordingFinalization = waitsForRecordingFinalization
+        if !waitsForRecordingFinalization {
+            recordingResult = .success(())
+        }
+    }
+
+    var streamHasStopped: Bool { streamResult != nil }
+
+    var resolution: Result<Void, Error>? {
+        guard let streamResult, let recordingResult else { return nil }
+        do {
+            try streamResult.get()
+            try recordingResult.get()
+            return .success(())
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    mutating func receiveStreamStop(_ result: Result<Void, Error>) {
+        guard streamResult == nil else { return }
+        streamResult = result
+    }
+
+    mutating func receiveRecordingFinalization(
+        _ result: Result<Void, Error>
+    ) {
+        guard recordingResult == nil else { return }
+        recordingResult = result
+    }
+}
+
 /// Waits for ScreenCaptureKit's recording-output delegate without allowing a
 /// missing callback to wedge pause, stop, cancellation, or application quit.
 @MainActor
@@ -549,6 +750,8 @@ final class CaptureFinalizationWaiter {
     init(timeout: Duration) {
         self.timeout = timeout
     }
+
+    var isWaiting: Bool { continuation != nil }
 
     /// Waits for finalization, optionally for less time than usual.
     ///
@@ -621,6 +824,11 @@ final class CaptureFinalizationWaiter {
     }
 
     func cancel() {
+        guard continuation != nil else {
+            timeoutTask?.cancel()
+            timeoutTask = nil
+            return
+        }
         resolve(.failure(CancellationError()))
     }
 }

@@ -1152,6 +1152,82 @@ struct MarkdownCodecTests {
     }
 
     @Test
+    func summaryFallbackNeverReclassifiesTranscriptAsStructuredItems() {
+        let transcript = [
+            TranscriptSegment(
+                startTime: 0,
+                duration: 8,
+                text: "I will explain how the application will render every transcript sentence in the review panel."
+            ),
+            TranscriptSegment(
+                startTime: 9,
+                duration: 6,
+                text: "We need to follow up on why that behavior is confusing."
+            ),
+        ]
+
+        let fallback = SummaryService.fallbackInsights(
+            transcript: transcript,
+            fallbackTitle: "Manual meeting"
+        )
+
+        #expect(fallback.keyPoints.isEmpty)
+        #expect(fallback.decisions.isEmpty)
+        #expect(fallback.actionItems.isEmpty)
+        #expect(fallback.summary.contains("Transcript highlights:"))
+        #expect(fallback.summary.count < transcript.map(\.text).joined().count + 100)
+    }
+
+    @Test
+    func groundingValidatesEveryActionAgainstACommitment() {
+        let validAction = "Sam — publish the checklist by Friday."
+        let proposed = MeetingInsights(
+            title: "Launch review",
+            summary: "The launch checklist was reviewed.",
+            keyPoints: [],
+            decisions: [],
+            actionItems: [
+                validAction,
+                "The dashboard currently shows every transcript sentence.",
+            ]
+        )
+        let transcript = [
+            TranscriptSegment(
+                startTime: 0,
+                duration: 4,
+                text: "Sam, can you publish the checklist by Friday?"
+            ),
+            TranscriptSegment(
+                startTime: 5,
+                duration: 4,
+                text: "The dashboard currently shows every transcript sentence."
+            ),
+        ]
+
+        let grounded = MeetingInsightGrounder.ground(proposed, in: transcript)
+
+        #expect(grounded.actionItems == [validAction])
+    }
+
+    @Test
+    func summaryValidationDropsTranscriptShapedListItems() throws {
+        let proposed = MeetingInsights(
+            title: "Launch review",
+            summary: "The team reviewed launch readiness and the publication checklist.",
+            keyPoints: ["[00:12] System: This is a transcript line."],
+            decisions: [],
+            actionItems: ["Microphone: I will send the checklist.\nSystem: Thanks." ]
+        )
+
+        let validated = try #require(
+            MeetingInsightValidator.validate(proposed, against: [])
+        )
+
+        #expect(validated.keyPoints.isEmpty)
+        #expect(validated.actionItems.isEmpty)
+    }
+
+    @Test
     @MainActor
     func openingAnotherNoteCannotReplaceAnUnsavedDraft() throws {
         let fileManager = FileManager.default

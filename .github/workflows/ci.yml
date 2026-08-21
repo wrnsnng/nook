@@ -66,6 +66,9 @@ jobs:
           xcodegen generate
           git diff --exit-code -- Nook.xcodeproj
 
+      - name: Test release tooling
+        run: python3 -m unittest discover -s Scripts/Tests
+
       - name: Test contributor configuration
         run: |
           xcodebuild test -quiet \

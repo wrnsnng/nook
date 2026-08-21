@@ -34,7 +34,7 @@ struct InterfaceCopyTests {
                 let trimmed = text.trimmingCharacters(in: .whitespaces)
                 guard !trimmed.hasPrefix("//") else { continue }
                 // Diagnostics are not shown to anyone in a release build.
-                guard !text.contains("DictationDebugLog") else { continue }
+                guard !text.contains("NookDebugLog") else { continue }
                 guard containsEmDashInsideAStringLiteral(text) else { continue }
                 offenders.append("\(name):\(index + 1): \(trimmed)")
             }
