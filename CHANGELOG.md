@@ -8,6 +8,35 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 Nothing yet.
 
+## 1.8.0
+
+- A live transcript whose recognizer stops mid-meeting is no longer trusted as
+  complete. Sequence end during an active session is reported, and transcript
+  coverage is checked against the recorded duration before the live pass is
+  preferred over saved-audio refinement.
+- A pause whose recording-output finalization times out keeps its paused state
+  instead of restoring "recording" while nothing writes to disk.
+- Cancelling during processing asks for confirmation, with the safe choice on
+  Return, across the panel, meeting window, and menu bar.
+- The meeting-detected prompt takes focus when it appears so its Return and
+  Esc shortcuts work; recording surfaces remain non-activating.
+- Quick-note Tidy up and Expand rewrites go through the same drift guard as
+  dictation, with a wider growth allowance for Expand.
+- The Markdown source editor records a file's modification date at load,
+  refuses to save over external changes, and no longer falls back to an
+  in-memory reconstruction when the file cannot be read.
+- Markdown section parsing is anchored to whole heading lines, and My notes
+  ends only at headings Nook writes, so user sub-headings survive re-saving.
+- Live captions are assembled incrementally (`LiveSegmentMerger`) instead of
+  rebuilding merged, deduplicated, coalesced state per partial revision, and
+  the merge sort comparator is now a strict ordering.
+- The audio meter publishes level changes only when they are perceptible,
+  instead of republishing every observer at 12.5 Hz through silence.
+- Capture audio reaches live transcription through one ordered buffered
+  stream rather than one unstructured task per buffer.
+- Recordings kept after processing failure are scanned for at launch once the
+  library first loads, not only from Settings.
+
 ## 1.7.4
 
 - Structured summaries now use a typed on-device response and validate each
