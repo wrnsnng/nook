@@ -133,6 +133,7 @@
 		FA3471E1EEE85B275762100A /* DictationOutputGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8472D687C88E2ABF8BDF9FA5 /* DictationOutputGuard.swift */; };
 		FC9BD88C918371A57325EF51 /* NoteAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D6E63AD605382CDFAEBF56E /* NoteAssistant.swift */; };
 		FCB8D6CEEC082C7B55C99110 /* NookPresence.swift in Sources */ = {isa = PBXBuildFile; fileRef = C710DCF39272E4901FF787C9 /* NookPresence.swift */; };
+		FDD52D95AC87BE4049161921 /* LiveSegmentMergerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C798B7121A65925D6161CA7E /* LiveSegmentMergerTests.swift */; };
 		FF0B0192F606798DB78C8A44 /* CommandLineAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157605DDE56F2A45C3EB48F1 /* CommandLineAssistant.swift */; };
 /* End PBXBuildFile section */
 
@@ -214,6 +215,7 @@
 		B7B3DAE041B75121309D9055 /* ReleaseSecurityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReleaseSecurityTests.swift; sourceTree = "<group>"; };
 		C10C52E64E22A80179251010 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		C710DCF39272E4901FF787C9 /* NookPresence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookPresence.swift; sourceTree = "<group>"; };
+		C798B7121A65925D6161CA7E /* LiveSegmentMergerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveSegmentMergerTests.swift; sourceTree = "<group>"; };
 		CD921CC11A139E1721BD0361 /* NookTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NookTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CE0257E326F8CB6F9CC6CCB4 /* NookUpdateController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookUpdateController.swift; sourceTree = "<group>"; };
 		D190DD1E42E7B8A2C319B54D /* AudioExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioExtractor.swift; sourceTree = "<group>"; };
@@ -400,6 +402,7 @@
 				64E89E9B358F9219563BE4F9 /* DisfluencyFilterTests.swift */,
 				14AEB8FABBA49A9275352D7E /* InterfaceCopyTests.swift */,
 				F0DA313E3B4EB1C1104D8D92 /* LiveAnalyzerInputTests.swift */,
+				C798B7121A65925D6161CA7E /* LiveSegmentMergerTests.swift */,
 				A701190651FDA38F39E3ACF3 /* MarkdownCodecTests.swift */,
 				40C568E6906587FA1D689E5F /* PrivacyStorageTests.swift */,
 				B45B67065E78F2C7EF8F403B /* RecordingLifecycleTests.swift */,
@@ -695,6 +698,7 @@
 				5DC75A7BFD2240D9EC41E4A9 /* DisfluencyFilterTests.swift in Sources */,
 				D70159FD08573AB5AFD40683 /* InterfaceCopyTests.swift in Sources */,
 				8C146B75382DB7970B460916 /* LiveAnalyzerInputTests.swift in Sources */,
+				FDD52D95AC87BE4049161921 /* LiveSegmentMergerTests.swift in Sources */,
 				7F2F9591EA3404AB6C4A9320 /* MarkdownCodecTests.swift in Sources */,
 				1478E8EB0F7B98D770E0FCF5 /* PrivacyStorageTests.swift in Sources */,
 				57437246B9E90D1A4BDE1082 /* RecordingLifecycleTests.swift in Sources */,

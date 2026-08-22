@@ -207,6 +207,15 @@ final class NotchPanelCoordinator {
             isHidden: isHidden
         )
 
+        if case .detected = phase {
+            // The consent prompt is the one decision the user must be able to
+            // answer without reaching for the pointer, and its Return and Esc
+            // shortcuts only fire while Nook is active. Taking focus for this
+            // moment matches what a macOS dialog does; recording surfaces
+            // stay non-activating.
+            makeInteractive()
+        }
+
         if case .detected = phase, panel.isVisible {
             scheduleDetectionHide()
         } else if case .idle = phase {

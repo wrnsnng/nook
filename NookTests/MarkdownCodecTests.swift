@@ -589,7 +589,7 @@ struct MarkdownCodecTests {
         let store = MarkdownStore()
         store.storageURL = directory
         let note = try store.createBlankNote()
-        let markdown = store.rawMarkdown(for: note)
+        let markdown = try store.rawMarkdown(for: note)
         let decoded = try #require(
             MarkdownCodec.decode(markdown, fileURL: note.fileURL)
         )
@@ -1266,5 +1266,120 @@ struct MarkdownCodecTests {
         #expect(draft.noteID == first.id)
         #expect(draft.rawMarkdown.contains("Protected edit"))
         #expect(draft.hasChanges)
+    }
+}
+
+/// "My notes" is user-authored free text. People write their own sub-headings
+/// in it, and treating those as section boundaries used to cut the field
+/// short on decode, then delete the tail permanently when the truncated
+/// model was saved back.
+struct PersonalNotesSectionTests {
+    private func note(withBody body: String) -> MeetingNote? {
+        let markdown = """
+        ---
+        id: 3B9C2A5E-1F4D-4E7A-9C11-8D2F6A0B4E33
+        title: "Pricing review"
+        started: 2026-07-30T02:00:00Z
+        ended: 2026-07-30T03:00:00Z
+        source: "Zoom"
+        ---
+
+        # Pricing review
+
+        ## Summary
+
+        The team reviewed pricing.
+
+        ## My notes
+
+        \(body)
+
+        ## Transcript
+
+        - **[00:01]** **Meeting:** Shall we start?
+        """
+        return MarkdownCodec.decode(markdown)
+    }
+
+    @Test
+    func aUserSubheadingInsideMyNotesSurvivesDecodeAndReEncoding() throws {
+        let body = """
+        Follow-ups for next time.
+
+        ## Enterprise leads
+
+        Ask about the discount.
+
+        ## Smaller items
+
+        Send the recap.
+        """
+        let decoded = try #require(note(withBody: body))
+
+        #expect(decoded.personalNotes == body)
+
+        let reDecoded = try #require(
+            MarkdownCodec.decode(MarkdownCodec.encode(decoded))
+        )
+        #expect(reDecoded.personalNotes == body)
+    }
+
+    /// The real sections still end the field, so a transcript is never
+    /// swallowed into somebody's notes.
+    @Test
+    func theTranscriptHeadingStillEndsMyNotes() throws {
+        let decoded = try #require(note(
+            withBody: "Remember to send notes after the call."
+        ))
+
+        #expect(decoded.personalNotes == "Remember to send notes after the call.")
+    }
+}
+
+/// Section markers are boundaries only when they are the whole line. A
+/// sentence that quotes a heading is content, and finding it mid-line used
+/// to start or end the wrong section.
+struct AnchoredSectionTests {
+    private let markdown = """
+    ---
+    id: 3B9C2A5E-1F4D-4E7A-9C11-8D2F6A0B4E33
+    title: "Review"
+    started: 2026-07-30T02:00:00Z
+    ended: 2026-07-30T03:00:00Z
+    source: "Zoom"
+    ---
+
+    # Review
+
+    ## Summary
+
+    The summary mentioned ## Key points twice in prose.
+
+    ## Key points
+
+    - An actual point
+
+    ## Action items
+
+    - [ ] One action
+    """
+
+    @Test
+    func aMidLineMentionOfASectionDoesNotBecomeThatSection() {
+        #expect(MarkdownCodec.section("Key points", in: markdown)
+            .contains("An actual point"))
+        #expect(!MarkdownCodec.section("Key points", in: markdown)
+            .contains("mentioned"))
+    }
+
+    @Test
+    func summaryContentQuotingOtherHeadingsStaysIntact() throws {
+        let decoded = try #require(MarkdownCodec.decode(markdown))
+
+        #expect(
+            decoded.summary
+                == "The summary mentioned ## Key points twice in prose."
+        )
+        #expect(decoded.keyPoints == ["An actual point"])
     }
 }

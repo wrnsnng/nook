@@ -630,9 +630,13 @@ struct MeetingDetailView: View {
 
     private func copyMarkdown() {
         NSPasteboard.general.clearContents()
-        let markdown = markdownDraft.noteID == note.id
-            ? markdownDraft.rawMarkdown
-            : store.rawMarkdown(for: note)
+        let markdown = if markdownDraft.noteID == note.id {
+            markdownDraft.rawMarkdown
+        } else {
+            // A clipboard copy may fall back to the in-memory form; only
+            // something that can be saved back needs the file to be readable.
+            (try? store.rawMarkdown(for: note)) ?? MarkdownCodec.encode(note)
+        }
         NSPasteboard.general.setString(markdown, forType: .string)
         showCopyNotice("Markdown copied")
     }

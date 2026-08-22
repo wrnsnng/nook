@@ -299,7 +299,8 @@ struct LibraryView: View {
                             Button("Copy Markdown") {
                                 NSPasteboard.general.clearContents()
                                 NSPasteboard.general.setString(
-                                    store.rawMarkdown(for: note),
+                                    (try? store.rawMarkdown(for: note))
+                                        ?? MarkdownCodec.encode(note),
                                     forType: .string
                                 )
                                 showCopyNotice("Markdown copied")

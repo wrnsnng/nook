@@ -55,7 +55,9 @@ final class MarkdownStore: ObservableObject {
             }.value
 
             guard generation == reloadGeneration, directory == storageURL else { return }
-            isLoading = false
+            // Notes land before the loading flag clears. Observers that wait
+            // for the end of loading must never see an empty library that is
+            // merely mid-publish.
             switch result {
             case .success(let payload):
                 notes = payload.notes
@@ -67,6 +69,7 @@ final class MarkdownStore: ObservableObject {
                 lastError = error.localizedDescription
                 loadIssues = []
             }
+            isLoading = false
         }
     }
 
@@ -129,14 +132,18 @@ final class MarkdownStore: ObservableObject {
         )
     }
 
-    func rawMarkdown(for note: MeetingNote) -> String {
-        guard let url = note.fileURL else { return MarkdownCodec.encode(note) }
-        do {
-            return try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            lastError = "Couldn’t read \(url.lastPathComponent): \(error.localizedDescription)"
+    /// Reads the file as it exists right now, or fails visibly.
+    ///
+    /// This deliberately does not fall back to an in-memory reconstruction
+    /// when the read fails. A fallback handed stale text to the Markdown
+    /// source editor, and saving from it replaced whatever was really on disk
+    /// with content Nook had merely remembered. Clipboard copies may fall
+    /// back; anything that can be saved back must not.
+    func rawMarkdown(for note: MeetingNote) throws -> String {
+        guard let url = note.fileURL else {
             return MarkdownCodec.encode(note)
         }
+        return try String(contentsOf: url, encoding: .utf8)
     }
 
     func saveRawMarkdown(_ markdown: String, for note: MeetingNote) throws {

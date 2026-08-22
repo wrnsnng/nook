@@ -93,6 +93,11 @@ final class LiveTranscriptionService {
 
     private var tracks: [TranscriptSegment.Source: LiveTrack] = [:]
     private var trackStates: [TranscriptSegment.Source: TrackSnapshot] = [:]
+    /// How many finalized results of each track have been folded into the
+    /// published transcript. A snapshot whose count has not moved carries only
+    /// partial revisions, which never change finalized text.
+    private var consumedFinalCounts: [TranscriptSegment.Source: Int] = [:]
+    private var merger = LiveSegmentMerger()
     private(set) var isRunning = false
 
     func start(localeIdentifier: String) async throws {
@@ -146,6 +151,8 @@ final class LiveTranscriptionService {
             .system: TrackSnapshot(source: .system),
             .microphone: TrackSnapshot(source: .microphone)
         ]
+        consumedFinalCounts = [:]
+        merger.reset()
         isRunning = true
         meetingTrack.start()
         microphoneTrack.start()
@@ -174,6 +181,8 @@ final class LiveTranscriptionService {
             deduplicated(mergedSegments())
         )
         tracks.removeAll()
+        consumedFinalCounts = [:]
+        merger.reset()
         publish()
         return result
     }
@@ -185,11 +194,22 @@ final class LiveTranscriptionService {
         }
         tracks.removeAll()
         trackStates.removeAll()
+        consumedFinalCounts = [:]
+        merger.reset()
         publish()
     }
 
     private func receive(_ snapshot: TrackSnapshot) {
+        let consumed = consumedFinalCounts[snapshot.source] ?? 0
         trackStates[snapshot.source] = snapshot
+        guard consumed < snapshot.segments.count else {
+            // A partial revision. Finalized text is unchanged, so the cached
+            // transcript is republished as-is instead of being recomputed.
+            publish()
+            return
+        }
+        consumedFinalCounts[snapshot.source] = snapshot.segments.count
+        merger.consume(snapshot.segments[consumed...])
         publish()
     }
 
@@ -201,9 +221,7 @@ final class LiveTranscriptionService {
         }
 
         var state = LiveTranscriptState(
-            segments: TranscriptAssembler.coalesce(
-                deduplicated(mergedSegments())
-            ),
+            segments: merger.coalesced,
             meetingPartial: meeting.partial,
             microphonePartial: microphone.partial,
             latestSource: newest?.source ?? .system,
@@ -219,38 +237,36 @@ final class LiveTranscriptionService {
     private func mergedSegments() -> [TranscriptSegment] {
         trackStates.values
             .flatMap(\.segments)
-            .sorted {
-                if abs($0.startTime - $1.startTime) < 0.08 {
-                    return $0.source == .microphone
-                }
-                return $0.startTime < $1.startTime
-            }
+            .sorted { LiveSegmentMerger.ordersBefore($0, $1) }
     }
 
     private func deduplicated(_ segments: [TranscriptSegment]) -> [TranscriptSegment] {
         var result: [TranscriptSegment] = []
         for segment in segments {
-            let duplicateIndex = result.lastIndex { existing in
-                abs(existing.startTime - segment.startTime) < 4
-                    && similarity(existing.text, segment.text) > 0.72
-            }
-            if let duplicateIndex {
-                if result[duplicateIndex].source == .microphone, segment.source == .system {
-                    result[duplicateIndex] = segment
+            // The input is time-sorted, so any duplicate sits within the
+            // window immediately behind the candidate; walking past it would
+            // rescan the whole meeting for every line.
+            var mergedWithDuplicate = false
+            var scanIndex = result.count - 1
+            while scanIndex >= 0,
+                  abs(result[scanIndex].startTime - segment.startTime) < 4 {
+                if LiveSegmentMerger.similarity(
+                    result[scanIndex].text,
+                    segment.text
+                ) > 0.72 {
+                    if result[scanIndex].source == .microphone,
+                       segment.source == .system {
+                        result[scanIndex] = segment
+                    }
+                    mergedWithDuplicate = true
+                    break
                 }
-            } else {
-                result.append(segment)
+                scanIndex -= 1
             }
+            guard !mergedWithDuplicate else { continue }
+            result.append(segment)
         }
         return result.sorted { $0.startTime < $1.startTime }
-    }
-
-    private func similarity(_ lhs: String, _ rhs: String) -> Double {
-        let left = Set(lhs.lowercased().split { !$0.isLetter && !$0.isNumber })
-        let right = Set(rhs.lowercased().split { !$0.isLetter && !$0.isNumber })
-        guard !left.isEmpty, !right.isEmpty else { return 0 }
-        let overlap = left.intersection(right).count
-        return Double(overlap) / Double(max(left.count, right.count))
     }
 }
 
@@ -260,6 +276,175 @@ private struct TrackSnapshot: Sendable {
     var partial = ""
     var revision = 0
     var lastChangedAt = Date.distantPast
+}
+
+/// Maintains the published live transcript incrementally.
+///
+/// Every partial revision used to rebuild the entire transcript: merge-sort
+/// every segment, rescan duplicates across the whole history, regex-clean all
+/// of it again. Partials arrive continuously during speech, so the cost grew
+/// with meeting length exactly while captions needed to stay cheap. Finals
+/// are folded in as they arrive instead; a partial-only update republishes
+/// cached segments untouched.
+///
+/// The fold mirrors one step of `TranscriptAssembler.coalesce`, so appending
+/// at the end is exact. Anything that lands elsewhere (a late out-of-order
+/// final, or a system-audio duplicate replacing a microphone line) reports it,
+/// and the caller falls back to one full rebuild using the same coalesce pass
+/// `stop()` uses. What reaches the saved note is therefore always computed by
+/// the authoritative pipeline; this type only shapes what captions show live.
+struct LiveSegmentMerger {
+    /// All finalized segments so far, time-sorted and duplicate-free.
+    private(set) var interleaved: [TranscriptSegment] = []
+    /// The coalesced form of `interleaved` that caption surfaces render.
+    private(set) var coalesced: [TranscriptSegment] = []
+
+    /// Duplicates land within seconds of their twin, so scanning back past
+    /// this window cannot miss one.
+    private static let duplicateWindow: TimeInterval = 4
+
+    static func sourceRank(_ source: TranscriptSegment.Source) -> Int {
+        switch source {
+        case .microphone: 0
+        case .mixed: 1
+        case .system: 2
+        }
+    }
+
+    static func ordersBefore(
+        _ lhs: TranscriptSegment,
+        _ rhs: TranscriptSegment
+    ) -> Bool {
+        if lhs.startTime != rhs.startTime {
+            return lhs.startTime < rhs.startTime
+        }
+        return sourceRank(lhs.source) < sourceRank(rhs.source)
+    }
+
+    /// Shared vocabulary over the longer text, the same echo test both this
+    /// fold and the full saved-audio pass use.
+    static func similarity(_ lhs: String, _ rhs: String) -> Double {
+        let left = Set(lhs.lowercased().split { !$0.isLetter && !$0.isNumber })
+        let right = Set(rhs.lowercased().split { !$0.isLetter && !$0.isNumber })
+        guard !left.isEmpty, !right.isEmpty else { return 0 }
+        let overlap = left.intersection(right).count
+        return Double(overlap) / Double(max(left.count, right.count))
+    }
+
+    mutating func reset() {
+        interleaved = []
+        coalesced = []
+    }
+
+    /// Folds freshly finalized segments in, returning whether any of them
+    /// landed somewhere other than the end of the stream.
+    @discardableResult
+    mutating func consume(_ fresh: ArraySlice<TranscriptSegment>) -> Bool {
+        var needsFullRebuild = false
+        for segment in fresh {
+            if foldIn(segment) {
+                needsFullRebuild = true
+            }
+        }
+        if needsFullRebuild {
+            // Out-of-order arrivals are rare. One full pass through the same
+            // coalesce `stop()` uses costs far less than keeping an
+            // insertion-capable fold correct for a case that mostly never
+            // happens.
+            coalesced = TranscriptAssembler.coalesce(interleaved)
+        }
+        return needsFullRebuild
+    }
+
+    private mutating func foldIn(_ segment: TranscriptSegment) -> Bool {
+        // The same sentence recognised on both tracks within seconds. System
+        // audio wins, matching the full-pass dedupe preference.
+        var index = interleaved.count - 1
+        while index >= 0,
+              interleaved[index].startTime >= segment.startTime - Self.duplicateWindow {
+            let existing = interleaved[index]
+            if abs(existing.startTime - segment.startTime) < Self.duplicateWindow,
+               Self.similarity(existing.text, segment.text) > 0.72 {
+                guard existing.source == .microphone, segment.source == .system else {
+                    return false
+                }
+                interleaved[index] = segment
+                return true
+            }
+            index -= 1
+        }
+
+        let insertion = Self.insertionIndex(for: segment, in: interleaved)
+        interleaved.insert(segment, at: insertion)
+
+        guard insertion == interleaved.count - 1 else {
+            return true
+        }
+
+        // Appending at the end extends the running fold exactly as a full
+        // coalesce would.
+        let candidate = segment.normalized
+        if let last = coalesced.last,
+           let merged = Self.merged(last, next: candidate) {
+            coalesced[coalesced.count - 1] = merged
+        } else {
+            coalesced.append(candidate)
+        }
+        return false
+    }
+
+    private static func insertionIndex(
+        for segment: TranscriptSegment,
+        in sorted: [TranscriptSegment]
+    ) -> Int {
+        var low = 0
+        var high = sorted.count
+        while low < high {
+            let middle = (low + high) / 2
+            if ordersBefore(sorted[middle], segment) {
+                low = middle + 1
+            } else {
+                high = middle
+            }
+        }
+        return low
+    }
+
+    /// One step of the coalesce fold: whether `next` joins `current`, and the
+    /// joined result when it does.
+    static func merged(
+        _ current: TranscriptSegment,
+        next: TranscriptSegment
+    ) -> TranscriptSegment? {
+        let currentEnd = current.startTime + current.duration
+        let gap = max(0, next.startTime - currentEnd)
+        let currentWords = current.text.split(whereSeparator: \.isWhitespace).count
+        let nextWords = next.text.split(whereSeparator: \.isWhitespace).count
+        let hasNaturalEnding = current.text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .last
+            .map { ".!?".contains($0) }
+            ?? false
+        let shouldMerge = current.source == next.source
+            && gap <= TranscriptAssembler.maximumMergeGap
+            && currentWords + nextWords <= TranscriptAssembler.maximumMergeWords
+            && (!hasNaturalEnding || currentWords < 5)
+
+        guard shouldMerge else { return nil }
+
+        let nextEnd = next.startTime + next.duration
+        let joinedText = [current.text, next.text]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .joined(separator: " ")
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        return TranscriptSegment(
+            id: current.id,
+            startTime: current.startTime,
+            duration: max(current.duration, nextEnd - current.startTime),
+            text: joinedText,
+            source: current.source
+        )
+    }
 }
 
 @MainActor
@@ -278,6 +463,10 @@ private final class LiveTrack {
     private var snapshot: TrackSnapshot
     private var reportedConversionFailure = false
     private var didReceiveInput = false
+    /// Set once `finish()` begins draining results. A results sequence that
+    /// ends without this flag means the recognizer died mid-meeting rather
+    /// than completing, which must be reported instead of trusted as final.
+    private var isFinishing = false
 
     /// Finalizing a long meeting legitimately takes a few seconds. Beyond this
     /// the transcript is treated as unavailable and Nook refines from the saved
@@ -314,6 +503,19 @@ private final class LiveTrack {
                     guard !Task.isCancelled else { return }
                     self?.accept(result)
                 }
+                // A sequence that ends cleanly while the session is live is a
+                // recognizer that stopped without an error: no throw, no
+                // callback, and captions that quietly stop growing. Reporting
+                // it here clears the completeness flag so the meeting falls
+                // back to saved-audio refinement instead of saving the
+                // truncation as the finished transcript.
+                guard let self, !self.isFinishing, !Task.isCancelled else {
+                    return
+                }
+                self.onError?(
+                    "Live \(self.source.label.lowercased()) captions stopped unexpectedly. "
+                        + "Nook will refine this transcript from the saved audio."
+                )
             } catch {
                 self?.onError?("Live \(self?.source.label.lowercased() ?? "speech") captions paused. The final recording is safe.")
             }
@@ -337,6 +539,7 @@ private final class LiveTrack {
     }
 
     func finish() async {
+        isFinishing = true
         // An analyzer that never received a buffer has no session to finalize,
         // and asking it to finalize anyway never returns. This is the state a
         // failed input conversion leaves behind, so it must not block the

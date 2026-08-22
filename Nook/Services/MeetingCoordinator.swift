@@ -284,6 +284,32 @@ final class MeetingCoordinator: ObservableObject {
         processingTask?.cancel()
     }
 
+    /// Asks before cancelling destroys the recording.
+    ///
+    /// Cancel during processing permanently deletes audio that captured fine,
+    /// and the button sits next to transport controls people reach for while
+    /// distracted. One confirmation with a reflex-safe default keeps a
+    /// misclick meaningless instead of fatal.
+    func requestProcessingCancellation() {
+        guard canCancelProcessing else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Discard this meeting?"
+        alert.informativeText = """
+            Processing has not finished, so nothing has been saved yet. \
+            Discarding deletes the audio permanently.
+            """
+        alert.addButton(withTitle: "Discard Recording")
+        alert.addButton(withTitle: "Keep Processing")
+        // The safe option takes Return, so reflexive agreement preserves the
+        // recording rather than destroying it.
+        alert.buttons.first?.hasDestructiveAction = true
+        alert.buttons.first?.keyEquivalent = ""
+        alert.buttons.last?.keyEquivalent = "\r"
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        cancelProcessing()
+    }
+
     func togglePause() {
         if isPaused {
             resumeRecording()
@@ -631,6 +657,12 @@ final class MeetingCoordinator: ObservableObject {
             in: .whitespacesAndNewlines
         )
         var recordingURLs: [URL] = []
+        // Total unpaused seconds of captured audio, as of the moment stop was
+        // requested. The live transcript timeline only advances with delivered
+        // audio (ingest is gated off while paused), so this is the reference
+        // frame its coverage is judged against.
+        let recordedSeconds = accumulatedElapsed
+            + (activeElapsedStartedAt.map { Date().timeIntervalSince($0) } ?? 0)
         do {
             liveStartupTask?.cancel()
             liveStartupTask = nil
@@ -654,7 +686,11 @@ final class MeetingCoordinator: ObservableObject {
             phase = .processing(.refining)
             let rawTranscript: [TranscriptSegment]
             if liveTranscriptIsComplete,
-               liveSegments.reduce(0, { $0 + $1.text.count }) >= 40 {
+               liveSegments.reduce(0, { $0 + $1.text.count }) >= 40,
+               Self.liveSegmentsCoverRecording(
+                   liveSegments,
+                   recordedSeconds: recordedSeconds
+               ) {
                 rawTranscript = liveSegments
             } else {
                 phase = .processing(.transcribing)
@@ -767,6 +803,32 @@ final class MeetingCoordinator: ObservableObject {
 
     /// Tells the user where the audio went when processing could not finish.
     ///
+    /// Whether the live transcript plausibly spans the whole recording.
+    ///
+    /// A live track can lose its recognizer without any error reaching Nook,
+    /// leaving words that stop growing long before the audio does. Trusting
+    /// such a transcript would save a two-hour meeting as its first twenty
+    /// minutes, flagged complete. When any source's last words end well short
+    /// of the recording, the slower saved-audio pass runs instead. Trailing
+    /// silence can trip this needlessly; that costs processing time, while
+    /// missing it costs the meeting.
+    static func liveSegmentsCoverRecording(
+        _ segments: [TranscriptSegment],
+        recordedSeconds: TimeInterval
+    ) -> Bool {
+        // Very short meetings are cheaper to re-transcribe than to judge.
+        guard recordedSeconds > 30 else { return true }
+        let coverageEndBySource = Dictionary(grouping: segments, by: \.source)
+            .mapValues { values in
+                values.reduce(TimeInterval(0)) {
+                    max($0, $1.startTime + $1.duration)
+                }
+            }
+        return coverageEndBySource.values.allSatisfy {
+            $0 >= recordedSeconds * 0.75
+        }
+    }
+
     /// A failure the user cannot act on is only frightening. Naming the folder
     /// turns a lost meeting into one they still have.
     ///
@@ -803,9 +865,17 @@ final class MeetingCoordinator: ObservableObject {
             while !Task.isCancelled {
                 guard let self else { return }
                 let rise = targetAudioLevel > audioLevel ? 0.42 : 0.16
-                audioLevel += (targetAudioLevel - audioLevel) * rise
+                var level = audioLevel + (targetAudioLevel - audioLevel) * rise
                 targetAudioLevel *= 0.76
-                if audioLevel < 0.008 { audioLevel = 0 }
+                if level < 0.008 { level = 0 }
+                // Publishing writes objectWillChange for every observer of the
+                // coordinator, panel and menus included. Writing the settled
+                // value every 80 ms through hours of silence invalidated all
+                // of them for output that never changed; only real movement,
+                // or the drop to zero once it has finished easing, publishes.
+                if abs(level - audioLevel) >= 0.01 || (level == 0 && audioLevel != 0) {
+                    audioLevel = level
+                }
                 try? await Task.sleep(for: .milliseconds(80))
             }
         }

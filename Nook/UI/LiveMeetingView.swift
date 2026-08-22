@@ -476,11 +476,11 @@ struct LiveMeetingView: View {
 
                 if step != .discarding, meeting.canCancelProcessing {
                     Button("Cancel and discard recording") {
-                        meeting.cancelProcessing()
+                        meeting.requestProcessingCancellation()
                     }
                     .buttonStyle(NookButtonStyle())
                     .accessibilityHint(
-                        "Permanently discards this recording without saving a note"
+                        "Asks before permanently discarding this recording without saving a note"
                     )
                 }
 

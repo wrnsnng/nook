@@ -373,3 +373,130 @@ struct OrphanedRecordingTests {
         #expect(captureOnly.captures.count == 1)
     }
 }
+
+/// A live recognizer can stop mid-meeting without reporting an error, leaving
+/// a transcript that ends long before the audio does. Trusting it would save
+/// hours of missing conversation as if complete, so coverage against the
+/// recorded duration decides between the live transcript and a careful
+/// saved-audio pass.
+@MainActor
+struct LiveTranscriptCoverageTests {
+    private func segment(
+        start: TimeInterval,
+        duration: TimeInterval,
+        source: TranscriptSegment.Source
+    ) -> TranscriptSegment {
+        TranscriptSegment(
+            startTime: start,
+            duration: duration,
+            text: "Spoken words for coverage",
+            source: source
+        )
+    }
+
+    @Test
+    func wordsEndingLongBeforeTheRecordingEndsAreNotTrusted() {
+        let truncated = [
+            segment(start: 0, duration: 60, source: .system),
+            segment(start: 1_100, duration: 30, source: .system)
+        ]
+
+        // A two-hour meeting whose recognizer stopped around minute nineteen:
+        // the words end near 19 minutes into audio that ran to 120.
+        #expect(!MeetingCoordinator.liveSegmentsCoverRecording(
+            truncated,
+            recordedSeconds: 7_200
+        ))
+    }
+
+    @Test
+    func speechCoveringTheRecordingIsTrusted() {
+        let covered = [
+            segment(start: 0, duration: 60, source: .system),
+            segment(start: 1_170, duration: 25, source: .system)
+        ]
+
+        #expect(MeetingCoordinator.liveSegmentsCoverRecording(
+            covered,
+            recordedSeconds: 1_200
+        ))
+    }
+
+    /// Trailing silence after everyone stops talking must not by itself force
+    /// re-transcription of a meeting whose recognizer stayed healthy.
+    @Test
+    func trailingSilenceIsStillCovered() {
+        let trailingSilence = [segment(
+            start: 0,
+            duration: 2_700,
+            source: .microphone
+        )]
+
+        #expect(MeetingCoordinator.liveSegmentsCoverRecording(
+            trailingSilence,
+            recordedSeconds: 3_600
+        ))
+    }
+
+    /// The two tracks fail independently. A healthy microphone track must not
+    /// mask system audio dying at minute twenty of a two-hour meeting.
+    @Test
+    func oneHealthyTrackCannotHideAnotherTrackStoppingEarly() {
+        let mixedFate = [
+            segment(start: 0, duration: 60, source: .system),
+            segment(start: 7_100, duration: 40, source: .microphone)
+        ]
+
+        #expect(!MeetingCoordinator.liveSegmentsCoverRecording(
+            mixedFate,
+            recordedSeconds: 7_200
+        ))
+    }
+
+    /// Judging very short meetings produces more false alarms than protection,
+    /// so they always count as covered.
+    @Test
+    func veryShortRecordingsSkipTheCoverageJudgement() {
+        let brief = [segment(start: 0, duration: 10, source: .system)]
+
+        #expect(MeetingCoordinator.liveSegmentsCoverRecording(
+            brief,
+            recordedSeconds: 30
+        ))
+        #expect(MeetingCoordinator.liveSegmentsCoverRecording(
+            [],
+            recordedSeconds: 0
+        ))
+    }
+}
+
+/// Pausing removes the recording output before waiting for its file-close
+/// callback. A missing callback must never be read as a failed removal: the
+/// output was already detached, so no further audio reaches disk either way,
+/// and resurrecting "recording" state leaves a phantom meeting that writes
+/// nothing while its timer runs.
+@MainActor
+struct PauseRemovalErrorTests {
+    @Test
+    func aMissingCallbackDoesNotUndoThePause() {
+        #expect(CaptureService.waitErrorMeansRemovalLanded(
+            CaptureError.finalizationTimedOut
+        ))
+        #expect(CaptureService.waitErrorMeansRemovalLanded(
+            CancellationError()
+        ))
+    }
+
+    @Test
+    func aFailedRemovalLeavesCaptureActive() {
+        struct RemovalThrew: Error {}
+
+        #expect(!CaptureService.waitErrorMeansRemovalLanded(
+            CaptureError.notRecording
+        ))
+        #expect(!CaptureService.waitErrorMeansRemovalLanded(
+            CaptureError.alreadyPaused
+        ))
+        #expect(!CaptureService.waitErrorMeansRemovalLanded(RemovalThrew()))
+    }
+}

@@ -81,7 +81,7 @@ struct StatusMenuView: View {
         case .processing(let step):
             if step != .discarding {
                 Button {
-                    AppModel.shared.meeting.cancelProcessing()
+                    AppModel.shared.meeting.requestProcessingCancellation()
                 } label: {
                     Label(
                         "Cancel and discard recording",

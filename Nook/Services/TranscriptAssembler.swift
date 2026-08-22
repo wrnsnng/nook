@@ -1,10 +1,16 @@
 import Foundation
 
 enum TranscriptAssembler {
+    /// How far apart two segments may be and still merge into one paragraph.
+    /// `LiveSegmentMerger` folds against these limits, so changing them here
+    /// changes live captions and the saved pass together.
+    static let maximumMergeGap: TimeInterval = 1.8
+    static let maximumMergeWords = 42
+
     static func coalesce(
         _ segments: [TranscriptSegment],
-        maximumGap: TimeInterval = 1.8,
-        maximumWords: Int = 42
+        maximumGap: TimeInterval = maximumMergeGap,
+        maximumWords: Int = maximumMergeWords
     ) -> [TranscriptSegment] {
         let ordered = segments
             .enumerated()
@@ -89,8 +95,11 @@ enum NoteContentSanitizer {
     }
 }
 
-private extension TranscriptSegment {
-    var cleaned: TranscriptSegment {
+extension TranscriptSegment {
+    /// Whitespace-normalised text, the form every coalesced segment carries.
+    /// Internal so `LiveSegmentMerger` can prepare fresh finals exactly the
+    /// way a full `coalesce` pass would.
+    var normalized: TranscriptSegment {
         TranscriptSegment(
             id: id,
             startTime: startTime,
@@ -100,5 +109,11 @@ private extension TranscriptSegment {
                 .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression),
             source: source
         )
+    }
+}
+
+private extension TranscriptSegment {
+    var cleaned: TranscriptSegment {
+        normalized
     }
 }

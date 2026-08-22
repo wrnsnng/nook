@@ -24,19 +24,17 @@ struct InterfaceCopyTests {
             guard !Self.allowedFiles.contains(name) else { continue }
 
             let contents = try String(contentsOf: file, encoding: .utf8)
-            for (index, line) in contents.split(
+            let lines = contents.split(
                 separator: "\n",
                 omittingEmptySubsequences: false
-            ).enumerated() {
-                let text = String(line)
-                guard text.contains("—") else { continue }
-                // Comments and documentation are free to use them.
-                let trimmed = text.trimmingCharacters(in: .whitespaces)
-                guard !trimmed.hasPrefix("//") else { continue }
+            )
+            for lineNumber in emDashLineNumbers(in: contents) {
+                let text = lines[lineNumber - 1].trimmingCharacters(
+                    in: .whitespaces
+                )
                 // Diagnostics are not shown to anyone in a release build.
                 guard !text.contains("NookDebugLog") else { continue }
-                guard containsEmDashInsideAStringLiteral(text) else { continue }
-                offenders.append("\(name):\(index + 1): \(trimmed)")
+                offenders.append("\(name):\(lineNumber): \(text)")
             }
         }
 
@@ -51,23 +49,94 @@ struct InterfaceCopyTests {
         )
     }
 
-    /// Whether an em-dash on this line falls between quotes.
+    /// Line numbers whose string copy contains an em-dash.
     ///
-    /// Deliberately simple: it walks the line tracking whether it is inside a
-    /// string, which is enough for real source and cannot be fooled in a way
-    /// that produces a false failure.
-    private func containsEmDashInsideAStringLiteral(_ line: String) -> Bool {
-        var insideString = false
-        var previous: Character?
-        for character in line {
-            if character == "\"", previous != "\\" {
-                insideString.toggle()
-            } else if character == "—", insideString {
-                return true
+    /// Scans the file as one stream instead of line by line: a multi-line
+    /// string literal keeps its string context across physical lines, which
+    /// the previous per-line scan lost, and that gap is how alert copy shipped
+    /// an em-dash while this check stayed green. Comments are skipped wherever
+    /// they appear, because a quote inside one would otherwise corrupt the
+    /// scan's string tracking for everything after it.
+    private func emDashLineNumbers(in contents: String) -> [Int] {
+        var offenders: [Int] = []
+        var inMultilineString = false
+        var inString = false
+        var escaped = false
+        var blockCommentDepth = 0
+        var lineNumber = 1
+
+        let characters = Array(contents)
+        var i = 0
+
+        func hasPrefix(_ text: String, at offset: Int) -> Bool {
+            let prefix = Array(text)
+            guard i + offset + prefix.count <= characters.count else {
+                return false
             }
-            previous = character
+            for (index, expected) in prefix.enumerated()
+            where characters[i + offset + index] != expected {
+                return false
+            }
+            return true
         }
-        return false
+
+        while i < characters.count {
+            let character = characters[i]
+
+            if blockCommentDepth > 0 {
+                if character == "*", hasPrefix("*/", at: 0) {
+                    blockCommentDepth -= 1
+                    i += 2
+                    continue
+                }
+                if character == "/", hasPrefix("/*", at: 0) {
+                    blockCommentDepth += 1
+                    i += 2
+                    continue
+                }
+            } else if inMultilineString {
+                if character == "\"", hasPrefix("\"\"\"", at: 0) {
+                    inMultilineString = false
+                    i += 3
+                    continue
+                }
+                if character == "—" {
+                    offenders.append(lineNumber)
+                }
+            } else if inString {
+                if escaped {
+                    escaped = false
+                } else if character == "\\" {
+                    escaped = true
+                } else if character == "\"" {
+                    inString = false
+                } else if character == "—" {
+                    offenders.append(lineNumber)
+                }
+            } else if character == "/", hasPrefix("//", at: 0) {
+                while i < characters.count, characters[i] != "\n" {
+                    i += 1
+                }
+                continue
+            } else if character == "/", hasPrefix("/*", at: 0) {
+                blockCommentDepth = 1
+                i += 2
+                continue
+            } else if character == "\"", hasPrefix("\"\"\"", at: 0) {
+                inMultilineString = true
+                i += 3
+                continue
+            } else if character == "\"" {
+                inString = true
+            }
+
+            if character == "\n" {
+                lineNumber += 1
+            }
+            i += 1
+        }
+
+        return offenders
     }
 
     private func swiftFiles() throws -> [URL] {

@@ -123,11 +123,7 @@ enum MarkdownCodec {
         let actionItems = NoteContentSanitizer.meaningfulItems(
             listItems(in: section("Action items", in: markdown))
         )
-        let personalNotesSection = section("My notes", in: markdown)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let personalNotes = personalNotesSection == "_No personal notes._"
-            ? ""
-            : personalNotesSection
+        let personalNotes = personalNotesContent(in: markdown)
         let transcript = TranscriptAssembler.coalesce(
             transcriptItems(in: section("Transcript", in: markdown))
         )
@@ -149,16 +145,79 @@ enum MarkdownCodec {
         )
     }
 
+    /// The text between a "## Title" heading line and the next one.
+    ///
+    /// Anchored to whole lines deliberately. A substring search used to find
+    /// the marker anywhere, so heading-like fragments inside a transcript or
+    /// summary shifted where sections ended, and free text a user typed under
+    /// "My notes" was cut short by their own "## " line and then lost when the
+    /// field was saved back from the truncated model. Only a line whose entire
+    /// content is the marker counts as a boundary.
     static func section(_ title: String, in markdown: String) -> String {
         let marker = "## \(title)"
-        guard let markerRange = markdown.range(of: marker, options: [.caseInsensitive]) else {
+        let lines = markdown.split(
+            separator: "\n",
+            omittingEmptySubsequences: false
+        )
+        guard let start = lines.firstIndex(where: {
+            $0.trimmingCharacters(in: .whitespaces)
+                .caseInsensitiveCompare(marker) == .orderedSame
+        }) else {
             return ""
         }
-        let remainder = markdown[markerRange.upperBound...]
-        if let next = remainder.range(of: "\n## ") {
-            return String(remainder[..<next.lowerBound])
+
+        var collected: [Substring] = []
+        for line in lines[lines.index(after: start)...] {
+            if line.trimmingCharacters(in: .whitespaces).hasPrefix("## ") {
+                break
+            }
+            collected.append(line)
         }
-        return String(remainder)
+        return collected.joined(separator: "\n")
+    }
+
+    /// Everything under the "My notes" heading, to the next section Nook
+    /// itself writes.
+    ///
+    /// This field is user-authored free text, and people write their own
+    /// "## " sub-headings in it. Treating those as boundaries used to cut the
+    /// field short on decode, and saving from the truncated model then
+    /// deleted everything past the first one permanently. Only headings the
+    /// encoder produces act as boundaries here; anything else belongs to the
+    /// user's notes and survives the round-trip.
+    static func personalNotesContent(in markdown: String) -> String {
+        let recognizedHeadings: Set<String> = [
+            "## summary",
+            "## key points",
+            "## decisions",
+            "## action items",
+            "## my notes",
+            "## transcript"
+        ]
+
+        let lines = markdown.split(
+            separator: "\n",
+            omittingEmptySubsequences: false
+        )
+        guard let start = lines.firstIndex(where: {
+            $0.trimmingCharacters(in: .whitespaces)
+                .lowercased() == "## my notes"
+        }) else {
+            return ""
+        }
+
+        var collected: [Substring] = []
+        for line in lines[lines.index(after: start)...] {
+            let heading = line.trimmingCharacters(in: .whitespaces)
+                .lowercased()
+            if recognizedHeadings.contains(heading) {
+                break
+            }
+            collected.append(line)
+        }
+        let content = collected.joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return content == "_No personal notes._" ? "" : content
     }
 
     private static func parseFrontmatter(_ markdown: String) -> [String: String] {

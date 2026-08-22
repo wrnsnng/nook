@@ -34,8 +34,8 @@ enum DictationOutputGuard {
     /// repetition genuinely halves some sentences — but it should never expand
     /// much, and an answer to a dictated question is almost always either far
     /// shorter or far longer than the question.
-    private static let minimumLengthRatio = 0.35
-    private static let maximumLengthRatio = 1.6
+    static let minimumLengthRatio = 0.35
+    static let defaultMaximumLengthRatio = 1.6
 
     /// How much of the spoken vocabulary must survive. An answer to a question
     /// shares the topic words but drops the interrogative framing, which lands
@@ -46,9 +46,13 @@ enum DictationOutputGuard {
     /// and "ok thanks" have too few words for a ratio to mean anything.
     private static let overlapExemptionWordCount = 4
 
+    /// `maximumLengthRatio` lets a caller widen the growth ceiling for
+    /// rewrites that legitimately develop the text, without loosening the
+    /// overlap test that catches an answer replacing the words.
     static func evaluate(
         refined: String,
-        spoken: String
+        spoken: String,
+        maximumLengthRatio: Double = Self.defaultMaximumLengthRatio
     ) -> Decision {
         let candidate = refined.trimmingCharacters(in: .whitespacesAndNewlines)
         let source = spoken.trimmingCharacters(in: .whitespacesAndNewlines)

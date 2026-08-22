@@ -36,6 +36,22 @@ enum NoteAction: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    /// How far a replacing rewrite may grow before it counts as drift and is
+    /// refused in favour of the words already in the note.
+    ///
+    /// Expanding deliberately develops a rough note into structured prose, so
+    /// it may grow much further than tidying, which mostly removes filler.
+    /// Beyond the ceiling a result is the model writing its own piece rather
+    /// than working on this one. Appending actions never consult this: their
+    /// output sits beside the spoken words instead of replacing them.
+    var maximumRewriteGrowth: Double {
+        switch self {
+        case .tidy: DictationOutputGuard.defaultMaximumLengthRatio
+        case .expand: 4.0
+        case .summarize, .actionItems: 0
+        }
+    }
+
     var instruction: String {
         switch self {
         case .tidy:
@@ -60,7 +76,7 @@ enum NoteAction: String, CaseIterable, Identifiable, Sendable {
             """
             This is a rough spoken note. Rewrite it as a well-organised piece \
             of writing, adding structure and headings where they help. Develop \
-            only the ideas already present — never introduce new facts, names, \
+            only the ideas already present, never introducing new facts, names, \
             numbers, or claims. Output only the rewritten note.
             """
         }

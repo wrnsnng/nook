@@ -39,6 +39,9 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
     private let finalizationWaiter: CaptureFinalizationWaiter
     private let preparesLiveInput = Mutex(false)
     private weak var liveTranscription: LiveTranscriptionService?
+    /// One ordered channel for live speech input, drained by a single task.
+    private var liveIngestPump: Task<Void, Never>?
+    private let liveIngestPipe = Mutex<AsyncStream<LiveIngest>.Continuation?>(nil)
     private var audioLevelHandler: ((Double, TranscriptSegment.Source) -> Void)?
     private let systemAudioQueue = DispatchQueue(
         label: "com.localfirst.nook.capture.system-audio",
@@ -70,8 +73,41 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
 
     func attachLiveTranscription(_ service: LiveTranscriptionService) {
         guard stream != nil else { return }
+        closeLiveIngestPump()
         liveTranscription = service
         preparesLiveInput.withLock { $0 = !isPaused }
+
+        // Buffers reach the recognizer through one ordered stream drained by
+        // a single task. Spawning a `Task` per buffer instead would hand each
+        // one to the main actor independently, and unstructured tasks carry no
+        // ordering guarantee: the resampling converter feeding `SpeechAnalyzer`
+        // is stateful, so reordered audio corrupts recognition in ways that
+        // look like the recognizer simply mishearing. This is the same shape
+        // `DictationAudioSource` uses for its tap.
+        let pair = AsyncStream<LiveIngest>.makeStream(
+            bufferingPolicy: .bufferingNewest(240)
+        )
+        liveIngestPipe.withLock { $0 = pair.continuation }
+        liveIngestPump = Task { @MainActor [weak self] in
+            for await event in pair.stream {
+                self?.deliverLiveInput(event)
+            }
+        }
+    }
+
+    private func deliverLiveInput(_ event: LiveIngest) {
+        guard let liveTranscription else { return }
+        liveTranscription.ingest(event.buffer, source: event.source)
+    }
+
+    /// Ends the ingest stream and abandons anything still queued in it.
+    private func closeLiveIngestPump() {
+        liveIngestPipe.withLock {
+            $0?.finish()
+            $0 = nil
+        }
+        liveIngestPump?.cancel()
+        liveIngestPump = nil
     }
 
     func requestPermissions() async throws {
@@ -170,6 +206,7 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         self.streamID = ObjectIdentifier(stream)
         self.isPaused = false
         self.liveTranscription = nil
+        closeLiveIngestPump()
         self.audioLevelHandler = onAudioLevel
 
         do {
@@ -195,17 +232,40 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
             ) {
                 try stream.removeRecordingOutput(recordingOutput)
             }
-            self.recordingOutput = nil
-            recordingOutputID = nil
-            recordingURL = nil
         } catch {
-            isPaused = false
-            preparesLiveInput.withLock { $0 = liveTranscription != nil }
-            throw error
+            // The removal closure runs before the waiter can suspend, so a
+            // timeout or cancellation here means the output was already
+            // detached and no further audio reaches disk. Treating that as a
+            // failed pause resurrected a meeting that looked live while
+            // writing nothing for the rest of the recording, so the pause
+            // stands and only the file-close receipt goes missing. Any other
+            // error is the removal itself failing, which genuinely leaves
+            // capture active.
+            if Self.waitErrorMeansRemovalLanded(error) {
+                NookEventLog.write(.capturePauseFinalizationUnconfirmed)
+            } else {
+                isPaused = false
+                preparesLiveInput.withLock { $0 = liveTranscription != nil }
+                throw error
+            }
         }
-        // A paused meeting is not recording, so the Mac is free to sleep
-        // again until the user resumes.
+        self.recordingOutput = nil
+        recordingOutputID = nil
+        recordingURL = nil
         releaseSleepAssertion()
+    }
+
+    /// Whether a `finalizationWaiter.wait` failure around a completed removal
+    /// means the removal itself landed. The closure executes synchronously
+    /// before suspension, so only its own error reports a failed removal; a
+    /// deadline or task cancellation reports a missing callback instead.
+    static func waitErrorMeansRemovalLanded(_ error: Error) -> Bool {
+        switch error {
+        case CaptureError.finalizationTimedOut, is CancellationError:
+            true
+        default:
+            false
+        }
     }
 
     func resume() throws {
@@ -371,21 +431,27 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         }
 
         let level = Self.normalizedAudioLevel(in: sampleBuffer)
-        let liveInput: CapturedAudioBuffer? = if preparesLiveInput.withLock({ $0 }),
-           let buffer = Self.pcmBuffer(from: sampleBuffer) {
-            CapturedAudioBuffer(buffer: buffer)
+        let liveBuffer: AVAudioPCMBuffer? = if preparesLiveInput.withLock({ $0 }),
+            let buffer = Self.pcmBuffer(from: sampleBuffer) {
+            buffer
         } else {
             nil
         }
 
+        // Level smoothing downstream takes a running maximum, so delivery
+        // order is irrelevant and the hop costs nothing in correctness.
         Task { @MainActor [weak self] in
             guard let self, outputStreamID == self.streamID else { return }
             self.audioLevelHandler?(level, source)
-            guard let liveInput else { return }
-            self.liveTranscription?.ingest(
-                liveInput.buffer,
-                source: source
-            )
+        }
+
+        // Yield is thread-safe and order-preserving, so buffers produced by
+        // this callback reach the recognizer in the order they were spoken.
+        if let liveBuffer {
+            liveIngestPipe.withLock { pipe in
+                pipe?.yield(LiveIngest(buffer: liveBuffer, source: source))
+                return ()
+            }
         }
     }
 
@@ -480,6 +546,7 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
     private func preserveStopOwnershipAfterFailure() {
         streamStopTask?.cancel()
         preparesLiveInput.withLock { $0 = false }
+        closeLiveIngestPump()
         liveTranscription = nil
         audioLevelHandler = nil
         releaseSleepAssertion()
@@ -547,6 +614,7 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         nextSegmentNumber = 2
         isPaused = false
         finalizationWaiter.cancel()
+        closeLiveIngestPump()
         liveTranscription = nil
         audioLevelHandler = nil
         preparesLiveInput.withLock { $0 = false }
@@ -648,13 +716,15 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
 /// `AVAudioPCMBuffer` owns the copied sample memory and is never mutated after
 /// leaving the capture callback, so it is safe to hand to the main-actor speech
 /// pipeline.
-/// Hands one audio buffer across an isolation boundary.
+/// Hands one audio buffer across an isolation boundary, tagged with the track
+/// it belongs to.
 ///
 /// `AVAudioPCMBuffer` is a reference type Apple does not mark `Sendable`. Every
 /// buffer wrapped here is freshly allocated by its producer and handed over
 /// exactly once, so no two isolation domains ever hold the same one.
-struct CapturedAudioBuffer: @unchecked Sendable {
+struct LiveIngest: @unchecked Sendable {
     let buffer: AVAudioPCMBuffer
+    let source: TranscriptSegment.Source
 }
 
 enum CaptureError: LocalizedError {

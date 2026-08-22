@@ -359,3 +359,72 @@ struct NoteAssistantEngineTests {
         }
     }
 }
+
+/// Tidy up and Expand replace the note itself, so their output goes through
+/// the same drift guard dictation uses. A model handed a note that reads like
+/// a request will sometimes answer it instead of rewriting it, and the answer
+/// must never overwrite the words the user actually spoke.
+struct NoteRewriteTrustTests {
+    private let spoken =
+        "remember to ship the release on friday and tell the team "
+            + "about the pricing change"
+
+    /// An answer shares none of the note's meaning-bearing vocabulary, even
+    /// when its length happens to look plausible for a rewrite.
+    @Test
+    func anAnswerInsteadOfARewriteIsRejected() {
+        let answer = """
+            Here is a summary of Q3 revenue across regions with detailed \
+            breakdowns and forecasts for next quarter including headcount plans.
+            """
+
+        for action in [NoteAction.tidy, .expand] {
+            let decision = DictationOutputGuard.evaluate(
+                refined: answer,
+                spoken: spoken,
+                maximumLengthRatio: action.maximumRewriteGrowth
+            )
+            #expect(decision == .reject(.driftedFromSpeech), "\(action)")
+        }
+    }
+
+    /// Expanding legitimately develops a rough note into structured prose,
+    /// which grows well past the tidying ceiling without being drift.
+    @Test
+    func expandingMayGrowFarMoreThanTidyingAllows() {
+        let expanded = """
+            Plan for the release: ship it on Friday. Remember that the team \
+            needs to hear about the pricing change before then, so prepare a \
+            short message covering what changed and why it matters.
+            """
+
+        #expect(
+            DictationOutputGuard.evaluate(
+                refined: expanded,
+                spoken: spoken,
+                maximumLengthRatio: NoteAction.expand.maximumRewriteGrowth
+            ).text != nil
+        )
+        #expect(
+            DictationOutputGuard.evaluate(
+                refined: expanded,
+                spoken: spoken,
+                maximumLengthRatio: NoteAction.tidy.maximumRewriteGrowth
+            ) == .reject(.tooLong)
+        )
+    }
+
+    /// The ordinary case keeps working: a tidy that cleans up the same words.
+    @Test
+    func aFaithfulTidyIsAccepted() {
+        let tidy = "Ship the release Friday and tell the team about the pricing change."
+
+        #expect(
+            DictationOutputGuard.evaluate(
+                refined: tidy,
+                spoken: spoken,
+                maximumLengthRatio: NoteAction.tidy.maximumRewriteGrowth
+            ).text != nil
+        )
+    }
+}

@@ -676,11 +676,11 @@ struct NotchPanelView: View {
             Spacer()
             if step != .discarding, meeting.canCancelProcessing {
                 Button("Cancel") {
-                    meeting.cancelProcessing()
+                    meeting.requestProcessingCancellation()
                 }
                 .buttonStyle(PanelActionButtonStyle())
                 .help("Cancel processing and discard this recording")
-                .accessibilityHint("Permanently discards this recording")
+                .accessibilityHint("Asks before permanently discarding this recording")
             } else {
                 ProgressView()
                     .controlSize(.small)

@@ -72,7 +72,7 @@ final class QuickNoteController: ObservableObject {
         privacy policy, not Nook's.
 
         Nothing is sent until you run an action, and only the note you are \
-        working on is included — never your recordings, meetings, or other \
+        working on is included: never your recordings, meetings, or other \
         notes.
         """
         alert.addButton(withTitle: "Send Notes to \(provider)")
@@ -270,14 +270,29 @@ final class QuickNoteController: ObservableObject {
 
     private func apply(_ result: String, for action: NoteAction) {
         if action.replacesNote {
-            text = result
+            // A rewrite is proposed, not trusted. A spoken note routinely
+            // reads as a request, and tidy or expand hands it to a model that
+            // will happily answer it instead. When the result stops being
+            // recognisably the same note, the spoken words stay and the
+            // rewrite is dropped.
+            switch DictationOutputGuard.evaluate(
+                refined: result,
+                spoken: text,
+                maximumLengthRatio: action.maximumRewriteGrowth
+            ) {
+            case .accept(let rewritten):
+                text = rewritten
+                saveIfNeeded()
+            case .reject:
+                message = "The rewrite didn't stay close to your note, so your own words were kept."
+            }
         } else {
             // Appended under a heading so the note keeps the spoken words and
             // the derived material side by side, rather than one replacing the
             // other silently.
             text += "\n\n## \(action.title)\n\n\(result)"
+            saveIfNeeded()
         }
-        saveIfNeeded()
     }
 
     var wordCount: Int {

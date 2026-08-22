@@ -78,6 +78,20 @@ final class AppModel: ObservableObject {
         meeting.onRecordingStopped = { [weak self] in
             self?.closeLiveNotes()
         }
+
+        // A recording kept after a processing failure is discoverable only in
+        // Settings today. Scanning once the first library load has settled
+        // surfaces it at launch instead, which matters because a user who
+        // missed the failure message has no other reason to open that pane.
+        // Waiting for the load also gives the scan the saved-note
+        // identifiers it needs to leave finished meetings' audio alone.
+        store.$isLoading
+            .dropFirst()
+            .first { !$0 }
+            .sink { [weak self] _ in
+                self?.recovery.scan()
+            }
+            .store(in: &cancellables)
         meeting.$phase
             .removeDuplicates()
             .dropFirst()

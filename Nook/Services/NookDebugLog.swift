@@ -13,6 +13,7 @@ enum NookEventLog {
         case captureRecoveredAfterUnexpectedStop = "capture.recovered-after-unexpected-stop"
         case captureStopped = "capture.stopped"
         case captureStoppedUnexpectedly = "capture.stopped-unexpectedly"
+        case capturePauseFinalizationUnconfirmed = "capture.pause-finalization-unconfirmed"
         case dictationFailed = "dictation.failed"
         case dictationFinished = "dictation.finished"
         case dictationStarted = "dictation.started"
