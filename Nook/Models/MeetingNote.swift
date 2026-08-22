@@ -27,6 +27,25 @@ enum NoteKind: String, Codable, Sendable {
     }
 }
 
+/// A moment the user flagged while the meeting was live.
+///
+/// Stored as an offset into the recording, so it stays meaningful whether or
+/// not the audio was kept: against kept audio it is a playback position, and
+/// against a transcript it marks where to read.
+struct MeetingMoment: Hashable, Sendable {
+    let offset: TimeInterval
+
+    var timestamp: String {
+        let total = max(0, Int(offset))
+        let hours = total / 3_600
+        let minutes = (total % 3_600) / 60
+        let seconds = total % 60
+        return hours > 0
+            ? String(format: "%02d:%02d:%02d", hours, minutes, seconds)
+            : String(format: "%02d:%02d", minutes, seconds)
+    }
+}
+
 struct MeetingNote: Identifiable, Hashable, Sendable {
     let id: UUID
     var kind: NoteKind = .default
@@ -40,6 +59,8 @@ struct MeetingNote: Identifiable, Hashable, Sendable {
     var actionItems: [String]
     var personalNotes: String
     var transcript: [TranscriptSegment]
+    /// Offsets the user flagged during the recording, in the order flagged.
+    var moments: [MeetingMoment] = []
     var fileURL: URL?
 
     init(
@@ -55,6 +76,7 @@ struct MeetingNote: Identifiable, Hashable, Sendable {
         actionItems: [String] = [],
         personalNotes: String = "",
         transcript: [TranscriptSegment] = [],
+        moments: [MeetingMoment] = [],
         fileURL: URL? = nil
     ) {
         self.id = id
@@ -69,6 +91,7 @@ struct MeetingNote: Identifiable, Hashable, Sendable {
         self.actionItems = actionItems
         self.personalNotes = personalNotes
         self.transcript = transcript
+        self.moments = moments
         self.fileURL = fileURL
     }
 

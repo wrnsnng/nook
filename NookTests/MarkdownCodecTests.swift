@@ -1383,3 +1383,189 @@ struct AnchoredSectionTests {
         #expect(decoded.keyPoints == ["An actual point"])
     }
 }
+
+/// Moments are flagged offsets in frontmatter, so they survive every
+/// re-encoding the note goes through and never pollute portable body text.
+struct MomentRoundTripTests {
+    @Test
+    func flaggedMomentsSurviveDecodeAndReEncoding() throws {
+        let note = MeetingNote(
+            title: "Design review",
+            startedAt: Date(timeIntervalSince1970: 1_000_000),
+            endedAt: Date(timeIntervalSince1970: 1_000_600),
+            sourceApp: "Zoom",
+            summary: "The team reviewed the redesign.",
+            transcript: [
+                TranscriptSegment(startTime: 10, duration: 2, text: "Hello")
+            ],
+            moments: [
+                MeetingMoment(offset: 61.5),
+                MeetingMoment(offset: 3_725)
+            ]
+        )
+
+        let encoded = MarkdownCodec.encode(note)
+        #expect(encoded.contains("moments: 61.5,3725.0"))
+
+        let decoded = try #require(MarkdownCodec.decode(encoded))
+        #expect(decoded.moments.map(\.offset) == [61.5, 3_725])
+        #expect(MarkdownCodec.encode(decoded) == encoded)
+
+        // A moment near an hour renders with the hour included.
+        #expect(decoded.moments.last?.timestamp == "01:02:05")
+    }
+
+    /// Spoken notes have no recording timeline, so moments never apply.
+    @Test
+    func spokenNotesCarryNoMoments() throws {
+        var spoken = MeetingNote(
+            kind: .spoken,
+            title: "Remember the thing",
+            startedAt: Date(timeIntervalSince1970: 1_000_000),
+            endedAt: Date(timeIntervalSince1970: 1_000_030),
+            sourceApp: "Spoken note",
+            summary: "Remember to renew the parking permit."
+        )
+        spoken.moments = [MeetingMoment(offset: 5)]
+
+        let decoded = try #require(
+            MarkdownCodec.decode(MarkdownCodec.encode(spoken))
+        )
+        #expect(decoded.moments.isEmpty)
+    }
+
+    @Test
+    func notesWithoutAMomentsLineDecodeToEmpty() throws {
+        let markdown = """
+        ---
+        id: 3B9C2A5E-1F4D-4E7A-9C11-8D2F6A0B4E33
+        title: "Older meeting"
+        started: 2026-07-30T02:00:00Z
+        ended: 2026-07-30T03:00:00Z
+        source: "Zoom"
+        ---
+
+        # Older meeting
+
+        ## Summary
+
+        Before moments existed.
+
+        ## Transcript
+
+        - **[00:01]** **Meeting:** Hello everyone.
+        """
+
+        let decoded = try #require(MarkdownCodec.decode(markdown))
+        #expect(decoded.moments.isEmpty)
+    }
+}
+
+/// Toggling an action item must rewrite exactly one line of the file. The
+/// alternative, decoding and re-encoding everything, would normalise text the
+/// user may be editing by hand at the same time.
+struct ActionItemToggleTests {
+    private let markdown = """
+    ---
+    id: 3B9C2A5E-1F4D-4E7A-9C11-8D2F6A0B4E33
+    title: "Review"
+    started: 2026-07-30T02:00:00Z
+    ended: 2026-07-30T03:00:00Z
+    source: "Zoom"
+    ---
+
+    # Review
+
+    ## Summary
+
+    The team reviewed pricing.
+
+    ## Action items
+
+    - [ ] Draft the tier comparison
+    - [x] Book the follow-up
+      - [ ] Nested thought stays untouched
+
+    ## My notes
+
+    - [ ] This is a personal note, not an action item.
+    """
+
+    @Test
+    func checkboxItemsAreListedWithTheirState() {
+        let items = MarkdownCodec.actionItemLines(in: markdown)
+
+        #expect(items.count == 3)
+        #expect(items[0].text == "Draft the tier comparison")
+        #expect(!items[0].isChecked)
+        #expect(items[1].isChecked)
+        #expect(items[2].text == "Nested thought stays untouched")
+    }
+
+    @Test
+    func togglingRewritesOneLineAndPreservesEverythingElseByteForByte() throws {
+        let target = MarkdownCodec.actionItemLines(in: markdown)[0]
+        let rewritten = try #require(
+            MarkdownCodec.markdownBySettingActionItem(
+                target,
+                checked: true,
+                in: markdown
+            )
+        )
+
+        #expect(rewritten.contains("- [x] Draft the tier comparison"))
+        // Every other line survives exactly as it was.
+        let originalLines = Set(markdown.split(separator: "\n"))
+        let rewrittenLines = rewritten.split(separator: "\n")
+        #expect(
+            rewrittenLines.filter { !originalLines.contains($0) }.count == 1
+        )
+        #expect(rewritten.contains("  - [ ] Nested thought stays untouched"))
+        #expect(rewritten.contains("- [ ] This is a personal note"))
+        // Re-encode stability: nothing else moved.
+        #expect(
+            MarkdownCodec.actionItemLines(in: rewritten)[0].isChecked
+        )
+    }
+
+    @Test
+    func untogglingRestoresTheOpenBox() throws {
+        let checked = MarkdownCodec.actionItemLines(in: markdown)[1]
+        let rewritten = try #require(
+            MarkdownCodec.markdownBySettingActionItem(
+                checked,
+                checked: false,
+                in: markdown
+            )
+        )
+
+        #expect(rewritten.contains("- [ ] Book the follow-up"))
+    }
+
+    @Test
+    func aMovedOrMissingItemIsRefusedRatherThanGuessed() throws {
+        let items = MarkdownCodec.actionItemLines(in: markdown)
+        let stale = ActionItemLine(
+            index: items.count + 3,
+            text: "Ghost item",
+            isChecked: false
+        )
+
+        #expect(
+            MarkdownCodec.markdownBySettingActionItem(
+                stale, checked: true, in: markdown
+            ) == nil
+        )
+        // Same position but different words means the list changed underneath.
+        let drifted = ActionItemLine(
+            index: 0,
+            text: "No longer what it said",
+            isChecked: false
+        )
+        #expect(
+            MarkdownCodec.markdownBySettingActionItem(
+                drifted, checked: true, in: markdown
+            ) == nil
+        )
+    }
+}

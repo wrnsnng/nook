@@ -500,3 +500,53 @@ struct PauseRemovalErrorTests {
         #expect(!CaptureService.waitErrorMeansRemovalLanded(RemovalThrew()))
     }
 }
+
+/// Flagging marks an instant of the recording so it can be found later.
+/// The offset math has to match the elapsed clock exactly, including pauses,
+/// or a flag points at the wrong part of the conversation.
+@MainActor
+struct MomentFlaggingTests {
+    private func moment(
+        _ offset: TimeInterval
+    ) -> MeetingMoment {
+        MeetingMoment(offset: offset)
+    }
+
+    @Test
+    func theOffsetMatchesThePausedElapsedClock() {
+        // Five accumulated minutes, resumed twenty seconds ago.
+        #expect(
+            MeetingCoordinator.currentRecordingOffset(
+                accumulated: 300,
+                startedAt: Date(timeIntervalSinceNow: -20),
+                now: Date()
+            ) == 320
+        )
+        // Paused: no active start, so the flag freezes at the accumulation.
+        #expect(
+            MeetingCoordinator.currentRecordingOffset(
+                accumulated: 300,
+                startedAt: nil,
+                now: Date()
+            ) == 300
+        )
+    }
+
+    @Test
+    func doublePressesInsideASecondAreIgnored() {
+        let flagged = [
+            moment(10), moment(10.4), moment(11.9), moment(60)
+        ]
+
+        var moments: [MeetingMoment] = []
+        for candidate in flagged {
+            moments = MeetingCoordinator.appendingMoment(
+                moments,
+                at: candidate.offset
+            )
+        }
+
+        // 10.4 is a double-press; 11.9 and 60 are deliberate flags.
+        #expect(moments.map(\.offset) == [10, 11.9, 60])
+    }
+}

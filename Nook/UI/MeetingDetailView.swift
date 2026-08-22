@@ -25,6 +25,8 @@ struct MeetingDetailView: View {
 
     @State private var tab: DetailTab = .notes
     @State private var transcriptSearch = ""
+    /// A moment the user asked to see; consumed by the transcript scroll.
+    @State private var requestedMomentOffset: TimeInterval?
     @State private var copyNotice: String?
     @State private var titleDraft: String
     @State private var personalNotesDraft: String
@@ -192,6 +194,10 @@ struct MeetingDetailView: View {
                     summarySection
                 }
 
+                if !note.moments.isEmpty {
+                    momentsSection
+                }
+
                 personalNotesSection
 
                 if !note.keyPoints.isEmpty {
@@ -300,6 +306,47 @@ struct MeetingDetailView: View {
             .padding(.vertical, 42)
             .frame(maxWidth: 820, alignment: .leading)
             .frame(maxWidth: .infinity)
+        }
+    }
+
+    /// The instants the user flagged while recording, as jumps into the
+    /// transcript.
+    private var momentsSection: some View {
+        EditorialSection(
+            title: "Flagged moments",
+            symbol: "flag",
+            tint: NookPalette.accent
+        ) {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 110), spacing: 10)],
+                alignment: .leading,
+                spacing: 10
+            ) {
+                ForEach(note.moments, id: \.offset) { moment in
+                    Button {
+                        requestedMomentOffset = moment.offset
+                        transcriptSearch = ""
+                        tab = .transcript
+                    } label: {
+                        Label(moment.timestamp, systemImage: "flag.fill")
+                            .font(.system(
+                                size: 11,
+                                weight: .medium,
+                                design: .monospaced
+                            ))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(
+                        Capsule().fill(NookPalette.accent.opacity(0.14))
+                    )
+                    .help("Show this moment in the transcript")
+                    .accessibilityLabel(
+                        "Flagged moment at \(moment.timestamp)"
+                    )
+                }
+            }
         }
     }
 
@@ -418,6 +465,19 @@ struct MeetingDetailView: View {
         }
     }
 
+    /// Segments the user flagged. A moment belongs to the last line that had
+    /// begun when it was flagged, which also works for saved transcripts
+    /// whose durations are zero.
+    private var flaggedSegmentIDs: Set<UUID> {
+        Set(note.moments.compactMap { moment in
+            segmentCovering(offset: moment.offset)?.id
+        })
+    }
+
+    private func segmentCovering(offset: TimeInterval) -> TranscriptSegment? {
+        note.transcript.last { $0.startTime <= offset + 0.001 }
+    }
+
     private var transcriptView: some View {
         VStack(spacing: 0) {
             transcriptSearchBar
@@ -431,16 +491,32 @@ struct MeetingDetailView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(filteredTranscript) { segment in
-                            TranscriptRow(segment: segment)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(filteredTranscript) { segment in
+                                TranscriptRow(
+                                    segment: segment,
+                                    isFlagged: flaggedSegmentIDs.contains(
+                                        segment.id
+                                    )
+                                )
+                                .id(segment.id)
+                            }
+                        }
+                        .padding(.horizontal, 44)
+                        .padding(.vertical, 16)
+                        .frame(maxWidth: 880)
+                        .frame(maxWidth: .infinity)
+                    }
+                    .onChange(of: requestedMomentOffset) { _, newValue in
+                        guard let offset = newValue,
+                              let target = segmentCovering(offset: offset)
+                        else { return }
+                        withAnimation(.easeOut(duration: 0.25)) {
+                            proxy.scrollTo(target.id, anchor: .center)
                         }
                     }
-                    .padding(.horizontal, 44)
-                    .padding(.vertical, 16)
-                    .frame(maxWidth: 880)
-                    .frame(maxWidth: .infinity)
                 }
             }
         }
@@ -725,6 +801,7 @@ private struct EditorialSection<Content: View>: View {
 
 private struct TranscriptRow: View {
     let segment: TranscriptSegment
+    var isFlagged = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 18) {
@@ -741,6 +818,14 @@ private struct TranscriptRow: View {
                 .lineSpacing(5)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
+
+            if isFlagged {
+                Image(systemName: "flag.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(NookPalette.accent)
+                    .help("You flagged this moment")
+                    .accessibilityLabel("Flagged moment")
+            }
         }
         .padding(.vertical, 16)
         .contentShape(Rectangle())

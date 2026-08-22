@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		02CB71D60F10215BDCB0EE1C /* MomentHotKeyController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CB7EEE82F44BFE07A7B3DA5 /* MomentHotKeyController.swift */; };
 		0A33032F282F4E25C69ED2A5 /* MarkdownDraftController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E8AD6D39BBB6970C574F566 /* MarkdownDraftController.swift */; };
 		0ADB67F317BA07AC2DB93C9F /* RecordingRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8161483F1374BD8342076C40 /* RecordingRecovery.swift */; };
 		0C664A5C897DC87CE1B511FA /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AA003E269F1E0F3206F33F2 /* AppDelegate.swift */; };
@@ -30,6 +31,7 @@
 		33117E5FB38554157F01B4E3 /* QuickNoteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18E597E1AE2B79758C53B7CD /* QuickNoteView.swift */; };
 		3330D914ECA27BA976B84252 /* MarkdownCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ECD88CCE2B0C67780F060FB /* MarkdownCodec.swift */; };
 		3976A4DD0C5C281BFFA7E4CD /* CaptureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B742437E025D0BAB1C7C0BA /* CaptureService.swift */; };
+		397A5AC1AEB7449BC5DB3A2F /* MomentHotKeyController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CB7EEE82F44BFE07A7B3DA5 /* MomentHotKeyController.swift */; };
 		3BC3093CE0799C935F5744FB /* MeetingCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04DB60A1C42F72E177BB9160 /* MeetingCoordinator.swift */; };
 		40BFD6BCAB1A1E74EC952472 /* NookIconSource-Cobalt.png in Resources */ = {isa = PBXBuildFile; fileRef = 2B35E9D093EB220A65D04B90 /* NookIconSource-Cobalt.png */; };
 		40E8A120A8B3A409F01BCCFA /* MeetingCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04DB60A1C42F72E177BB9160 /* MeetingCoordinator.swift */; };
@@ -158,6 +160,7 @@
 		170212C508F45D65AB1B9513 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		18E597E1AE2B79758C53B7CD /* QuickNoteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickNoteView.swift; sourceTree = "<group>"; };
 		1C9240F4EB4F14EE10C37FF7 /* NOTICE */ = {isa = PBXFileReference; path = NOTICE; sourceTree = "<group>"; };
+		1CB7EEE82F44BFE07A7B3DA5 /* MomentHotKeyController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MomentHotKeyController.swift; sourceTree = "<group>"; };
 		1D5C59EC69ED9C02DCECCCA7 /* FloatingNotesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatingNotesView.swift; sourceTree = "<group>"; };
 		1DAAB582D0BEF7F53894D139 /* NotchPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchPanelView.swift; sourceTree = "<group>"; };
 		1E12DEFF243E7B4B84A7A135 /* NookApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookApp.swift; sourceTree = "<group>"; };
@@ -262,6 +265,7 @@
 				04DB60A1C42F72E177BB9160 /* MeetingCoordinator.swift */,
 				1162CB8F3088E4EA4EDAEC43 /* MeetingDetector.swift */,
 				82F5D4466C034B90191F6217 /* MeetingNotificationService.swift */,
+				1CB7EEE82F44BFE07A7B3DA5 /* MomentHotKeyController.swift */,
 				E1A3A12949A21AFC99737BCE /* NookDebugLog.swift */,
 				CE0257E326F8CB6F9CC6CCB4 /* NookUpdateController.swift */,
 				83A5502CE70F9EA4C3BE8F69 /* PermissionSetupController.swift */,
@@ -600,6 +604,7 @@
 				E3873161E0BB564FC8D0B61B /* MeetingDetector.swift in Sources */,
 				F541004C6AAAAB03F765DD59 /* MeetingNote.swift in Sources */,
 				B7B6B177408EB97C3177D25C /* MeetingNotificationService.swift in Sources */,
+				02CB71D60F10215BDCB0EE1C /* MomentHotKeyController.swift in Sources */,
 				A4A0E1DA0DDA1431733498E3 /* NookApp.swift in Sources */,
 				A7825C444D696A2890C5B3BF /* NookAppIntents.swift in Sources */,
 				F8E2128CCD1CDA8A676FB36D /* NookDebugLog.swift in Sources */,
@@ -660,6 +665,7 @@
 				4374C287B03A461C71BE2C48 /* MeetingDetector.swift in Sources */,
 				5E743ABBDF9C1C2DCB66EF92 /* MeetingNote.swift in Sources */,
 				9901438495EE438AAF2BFC0D /* MeetingNotificationService.swift in Sources */,
+				397A5AC1AEB7449BC5DB3A2F /* MomentHotKeyController.swift in Sources */,
 				60BECAC3A23D0BA1CFA5CE68 /* NookAppIntents.swift in Sources */,
 				7C5E746BF2743CA0922F157F /* NookDebugLog.swift in Sources */,
 				1059013167E7B7AFAABCE5BB /* NookDesign.swift in Sources */,

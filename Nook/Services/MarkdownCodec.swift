@@ -12,16 +12,24 @@ enum MarkdownCodec {
             return "- **[\($0.timestamp)]** \(speaker)\($0.text.trimmingCharacters(in: .whitespacesAndNewlines))"
         }.joined(separator: "\n")
 
-        let frontmatter = """
-        ---
-        id: \(note.id.uuidString)
-        kind: \(note.kind.rawValue)
-        title: "\(escape(note.title))"
-        started: \(isoString(from: note.startedAt))
-        ended: \(isoString(from: note.endedAt))
-        source: "\(escape(note.sourceApp))"
-        ---
-        """
+        var frontmatterLines = [
+            "---",
+            "id: \(note.id.uuidString)",
+            "kind: \(note.kind.rawValue)",
+            "title: \"\(escape(note.title))\"",
+            "started: \(isoString(from: note.startedAt))",
+            "ended: \(isoString(from: note.endedAt))",
+            "source: \"\(escape(note.sourceApp))\"",
+        ]
+        if !note.moments.isEmpty {
+            // Offsets are rounded to a tenth of a second, which is finer than
+            // anyone can flag and keeps the line short for hour-long meetings.
+            let offsets = note.moments
+                .map { String(format: "%.1f", $0.offset) }
+                .joined(separator: ",")
+            frontmatterLines.append("moments: \(offsets)")
+        }
+        let frontmatter = (frontmatterLines + ["---"]).joined(separator: "\n")
 
         // A spoken note is a title and then prose, with nothing after it.
         //
@@ -127,6 +135,11 @@ enum MarkdownCodec {
         let transcript = TranscriptAssembler.coalesce(
             transcriptItems(in: section("Transcript", in: markdown))
         )
+        // Flagged moments only describe a recording timeline, which spoken
+        // notes do not have.
+        let moments = kind == .spoken
+            ? []
+            : parseMoments(metadata["moments"] ?? "")
 
         return MeetingNote(
             id: id,
@@ -141,8 +154,150 @@ enum MarkdownCodec {
             actionItems: actionItems,
             personalNotes: personalNotes,
             transcript: transcript,
+            moments: moments,
             fileURL: fileURL
         )
+    }
+
+    /// Flagged offsets from the frontmatter line, in the order written.
+    private static func parseMoments(_ value: String) -> [MeetingMoment] {
+        value.split(separator: ",").compactMap { piece in
+            let offset = TimeInterval(
+                piece.trimmingCharacters(in: .whitespaces)
+            )
+            guard let offset, offset >= 0 else { return nil }
+            return MeetingMoment(offset: offset)
+        }
+    }
+
+    /// The section headings Nook itself writes. Anything else that looks like
+    /// a heading belongs to whoever typed it.
+    static let recognizedHeadings: Set<String> = [
+        "## summary",
+        "## key points",
+        "## decisions",
+        "## action items",
+        "## my notes",
+        "## transcript"
+    ]
+}
+
+/// One checkbox item from a note's Action items section, addressed by its
+/// position among that section's items so a toggle can edit exactly one line
+/// of the file instead of re-encoding the whole document.
+struct ActionItemLine: Hashable, Sendable {
+    let index: Int
+    let text: String
+    let isChecked: Bool
+}
+
+extension MarkdownCodec {
+    private static func isHeadingLine(_ line: Substring, _ title: String) -> Bool {
+        line.trimmingCharacters(in: .whitespaces).lowercased()
+            == "## \(title)"
+    }
+
+    /// The checkbox items under the Action items heading, in file order.
+    ///
+    /// Only genuine checkbox lines count; placeholder text such as
+    /// "_None captured._" produces nothing rather than an untogglable entry.
+    static func actionItemLines(in markdown: String) -> [ActionItemLine] {
+        let lines = markdown.split(
+            separator: "\n",
+            omittingEmptySubsequences: false
+        )
+        guard
+            let headingIndex = lines.firstIndex(where: {
+                isHeadingLine($0, "action items")
+            })
+        else {
+            return []
+        }
+
+        var items: [ActionItemLine] = []
+        for line in lines[lines.index(after: headingIndex)...] {
+            if MarkdownCodec.recognizedHeadings.contains(
+                line.trimmingCharacters(in: .whitespaces)
+                    .lowercased()
+            ) {
+                break
+            }
+            guard let box = checkbox(in: line) else { continue }
+            items.append(
+                ActionItemLine(
+                    index: items.count,
+                    text: box.text,
+                    isChecked: box.isChecked
+                )
+            )
+        }
+        return items
+    }
+
+    /// Rewrites exactly one checkbox in the document, leaving every other
+    /// byte untouched.
+    ///
+    /// Decoding and re-encoding would work too, but it normalises whitespace
+    /// across every section and would silently rewrite files the user may be
+    /// editing elsewhere. Returns nil when the heading or the item has moved,
+    /// which callers treat as staleness rather than loss.
+    static func markdownBySettingActionItem(
+        _ target: ActionItemLine,
+        checked: Bool,
+        in markdown: String
+    ) -> String? {
+        let lines = markdown.split(
+            separator: "\n",
+            omittingEmptySubsequences: false
+        ).map(String.init)
+        guard
+            let headingIndex = lines.firstIndex(where: {
+                $0.trimmingCharacters(in: .whitespaces)
+                    .lowercased() == "## action items"
+            }),
+            lines.indices.contains(headingIndex)
+        else {
+            return nil
+        }
+
+        var ordinal = -1
+        for position in lines.index(after: headingIndex)..<lines.count {
+            let line = lines[position]
+            if MarkdownCodec.recognizedHeadings.contains(
+                line.trimmingCharacters(in: .whitespaces)
+            ) {
+                break
+            }
+            guard let box = checkbox(in: line[...]) else { continue }
+            ordinal += 1
+            guard ordinal == target.index else { continue }
+            guard box.text == target.text else { return nil }
+
+            let leading = String(line.prefix(
+                while: { $0 == " " || $0 == "\t" }
+            ))
+            let rewritten = leading + "- [\(checked ? "x" : " ")] \(box.text)"
+            var result = lines
+            result[position] = rewritten
+            return result.joined(separator: "\n")
+        }
+        return nil
+    }
+
+    private static func checkbox(
+        in line: Substring
+    ) -> (isChecked: Bool, text: String)? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        for (marker, checked) in [
+            ("- [ ] ", false),
+            ("- [x] ", true),
+            ("- [X] ", true)
+        ] {
+            if trimmed.hasPrefix(marker) {
+                return (checked, String(trimmed.dropFirst(marker.count)))
+            }
+        }
+        return nil
     }
 
     /// The text between a "## Title" heading line and the next one.
@@ -186,15 +341,6 @@ enum MarkdownCodec {
     /// encoder produces act as boundaries here; anything else belongs to the
     /// user's notes and survives the round-trip.
     static func personalNotesContent(in markdown: String) -> String {
-        let recognizedHeadings: Set<String> = [
-            "## summary",
-            "## key points",
-            "## decisions",
-            "## action items",
-            "## my notes",
-            "## transcript"
-        ]
-
         let lines = markdown.split(
             separator: "\n",
             omittingEmptySubsequences: false
@@ -210,7 +356,7 @@ enum MarkdownCodec {
         for line in lines[lines.index(after: start)...] {
             let heading = line.trimmingCharacters(in: .whitespaces)
                 .lowercased()
-            if recognizedHeadings.contains(heading) {
+            if MarkdownCodec.recognizedHeadings.contains(heading) {
                 break
             }
             collected.append(line)

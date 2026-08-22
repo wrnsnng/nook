@@ -79,6 +79,11 @@ final class MeetingCoordinator: ObservableObject {
     @Published var liveNotes = ""
     @Published private(set) var liveNotesDetached = false
     @Published private(set) var audioLevel = 0.0
+    /// Moments flagged during the live recording, in flag order.
+    @Published private(set) var liveMoments: [MeetingMoment] = []
+    /// Set briefly after a flag so the panel can acknowledge it without a
+    /// dialog; cleared on its own timer.
+    @Published private(set) var momentAcknowledgedAt: Date?
     @Published private(set) var isPaused = false
     @Published private(set) var pauseTransitionInFlight = false
     @Published private(set) var liveCaptionNotice: String?
@@ -106,6 +111,8 @@ final class MeetingCoordinator: ObservableObject {
     private let store: MarkdownStore
     private let detector: MeetingDetector
     private let capture = CaptureService()
+    /// Global flag hotkey, registered only while a recording is running.
+    private let momentHotKeys = MomentHotKeyController()
     private let transcriber = TranscriptionService()
     private let liveTranscriber = LiveTranscriptionService()
     private let summarizer = SummaryService()
@@ -117,6 +124,7 @@ final class MeetingCoordinator: ObservableObject {
     private var liveStartupTask: Task<Void, Never>?
     private var liveSummaryTask: Task<Void, Never>?
     private var pauseTask: Task<Void, Never>?
+    private var momentNoticeTask: Task<Void, Never>?
     private var dismissedDetection: DetectedMeeting?
     private var targetAudioLevel = 0.0
     private var liveTranscriptIsComplete = false
@@ -157,6 +165,9 @@ final class MeetingCoordinator: ObservableObject {
         }
         capture.onUnexpectedStop = { [weak self] _ in
             self?.finishAfterCaptureStopped()
+        }
+        momentHotKeys.onFlag = { [weak self] in
+            self?.flagMoment()
         }
     }
 
@@ -199,6 +210,8 @@ final class MeetingCoordinator: ObservableObject {
         stopRequestedDuringPauseTransition = false
         elapsedTask?.cancel()
         meterTask?.cancel()
+        momentNoticeTask?.cancel()
+        momentHotKeys.stop()
         onRecordingStopped?()
         topPanelHidden = false
         processingCancellationRequested = false
@@ -316,6 +329,49 @@ final class MeetingCoordinator: ObservableObject {
         } else {
             pauseRecording()
         }
+    }
+
+    /// Marks this instant of the meeting so it can be found in the note.
+    ///
+    /// Allowed while paused as well: the offset simply freezes with the
+    /// elapsed clock, which is what the flag means.
+    func flagMoment() {
+        guard phase.isRecording else { return }
+        let offset = Self.currentRecordingOffset(
+            accumulated: accumulatedElapsed,
+            startedAt: activeElapsedStartedAt,
+            now: Date()
+        )
+        liveMoments = Self.appendingMoment(liveMoments, at: offset)
+        if liveMoments.last?.offset == offset {
+            momentAcknowledgedAt = Date()
+            momentNoticeTask?.cancel()
+            momentNoticeTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(3))
+                guard !Task.isCancelled else { return }
+                self?.momentAcknowledgedAt = nil
+            }
+        }
+    }
+
+    /// Appends a flag unless it lands within a second of the previous one,
+    /// which reads as a double-press rather than intent.
+    static func appendingMoment(
+        _ moments: [MeetingMoment],
+        at offset: TimeInterval
+    ) -> [MeetingMoment] {
+        if let last = moments.last?.offset, abs(offset - last) < 1 {
+            return moments
+        }
+        return moments + [MeetingMoment(offset: offset)]
+    }
+
+    static func currentRecordingOffset(
+        accumulated: TimeInterval,
+        startedAt: Date?,
+        now: Date
+    ) -> TimeInterval {
+        accumulated + (startedAt.map { max(0, now.timeIntervalSince($0)) } ?? 0)
     }
 
     func pauseRecording() {
@@ -566,8 +622,11 @@ final class MeetingCoordinator: ObservableObject {
                 requiredPermission = nil
                 phase = .recording(title: title, startedAt: draft.startedAt)
                 activeElapsedStartedAt = Date()
+                liveMoments = []
+                momentAcknowledgedAt = nil
                 startElapsedClock()
                 startAudioMeter()
+                momentHotKeys.start()
                 startLiveCaptions()
             } catch {
                 if Task.isCancelled || processingCancellationRequested {
@@ -713,7 +772,8 @@ final class MeetingCoordinator: ObservableObject {
                 decisions: insights.decisions,
                 actionItems: insights.actionItems,
                 personalNotes: personalNotes,
-                transcript: transcript
+                transcript: transcript,
+                moments: liveMoments
             )
             let saved = try store.save(note)
 

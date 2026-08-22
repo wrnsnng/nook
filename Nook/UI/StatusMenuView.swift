@@ -130,6 +130,13 @@ struct StatusMenuView: View {
     private var recordingCommands: some View {
         Group {
             Button {
+                AppModel.shared.meeting.flagMoment()
+            } label: {
+                Label("Flag this moment", systemImage: "flag")
+            }
+            .keyboardShortcut("f", modifiers: [.command, .option])
+
+            Button {
                 AppModel.shared.meeting.togglePause()
             } label: {
                 Label(

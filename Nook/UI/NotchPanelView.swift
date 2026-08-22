@@ -573,6 +573,14 @@ struct NotchPanelView: View {
                 .disabled(meeting.pauseTransitionInFlight)
 
                 CompactMeetingControl(
+                    symbol: "flag.fill",
+                    label: "Flag this moment",
+                    tint: meeting.momentAcknowledgedAt == nil
+                        ? nil : NookPalette.success,
+                    action: meeting.flagMoment
+                )
+
+                CompactMeetingControl(
                     symbol: "stop.fill",
                     label: "Finish meeting",
                     tint: NookPalette.danger,
