@@ -42,7 +42,13 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
     /// One ordered channel for live speech input, drained by a single task.
     private var liveIngestPump: Task<Void, Never>?
     private let liveIngestPipe = Mutex<AsyncStream<LiveIngest>.Continuation?>(nil)
-    private var audioLevelHandler: ((Double, TranscriptSegment.Source) -> Void)?
+    private let latestLevels = Mutex<[TranscriptSegment.Source: Double]>([:])
+
+    /// The freshest measured level for a source, for the coordinator's meter
+    /// tick to poll.
+    func currentAudioLevel(for source: TranscriptSegment.Source) -> Double {
+        latestLevels.withLock { $0[source] ?? 0 }
+    }
     private let systemAudioQueue = DispatchQueue(
         label: "com.localfirst.nook.capture.system-audio",
         qos: .userInteractive
@@ -133,8 +139,7 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
 
     func start(
         to url: URL,
-        permissionsAreReady: Bool = false,
-        onAudioLevel: ((Double, TranscriptSegment.Source) -> Void)? = nil
+        permissionsAreReady: Bool = false
     ) async throws {
         guard stream == nil, streamStopTask == nil else {
             throw CaptureError.alreadyRecording
@@ -207,7 +212,7 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         self.isPaused = false
         self.liveTranscription = nil
         closeLiveIngestPump()
-        self.audioLevelHandler = onAudioLevel
+        latestLevels.withLock { $0 = [:] }
 
         do {
             try await stream.startCapture()
@@ -418,7 +423,6 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
         of outputType: SCStreamOutputType
     ) {
-        let outputStreamID = ObjectIdentifier(stream)
         guard sampleBuffer.isValid, sampleBuffer.dataReadiness == .ready else { return }
         let source: TranscriptSegment.Source
         switch outputType {
@@ -431,18 +435,12 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         }
 
         let level = Self.normalizedAudioLevel(in: sampleBuffer)
+        latestLevels.withLock { $0[source] = level }
         let liveBuffer: AVAudioPCMBuffer? = if preparesLiveInput.withLock({ $0 }),
             let buffer = Self.pcmBuffer(from: sampleBuffer) {
             buffer
         } else {
             nil
-        }
-
-        // Level smoothing downstream takes a running maximum, so delivery
-        // order is irrelevant and the hop costs nothing in correctness.
-        Task { @MainActor [weak self] in
-            guard let self, outputStreamID == self.streamID else { return }
-            self.audioLevelHandler?(level, source)
         }
 
         // Yield is thread-safe and order-preserving, so buffers produced by
@@ -548,7 +546,6 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         preparesLiveInput.withLock { $0 = false }
         closeLiveIngestPump()
         liveTranscription = nil
-        audioLevelHandler = nil
         releaseSleepAssertion()
 
         if stopState?.streamHasStopped == true || streamStopTask == nil {
@@ -616,7 +613,6 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         finalizationWaiter.cancel()
         closeLiveIngestPump()
         liveTranscription = nil
-        audioLevelHandler = nil
         preparesLiveInput.withLock { $0 = false }
         lastError = nil
     }

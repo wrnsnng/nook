@@ -109,6 +109,48 @@ struct LiveSegmentMergerTests {
         #expect(merger.interleaved.count == 2)
     }
 
+    @Test
+    func theWordCountTracksMergesAndReplacements() {
+        var merger = LiveSegmentMerger()
+        merger.consume([segment(0, "one two three")][...])
+        #expect(merger.totalWords == 3)
+
+        // Merging into an open line adds only the new words.
+        merger.consume([segment(1, "four five", duration: 0.5)][...])
+        #expect(merger.totalWords == 5)
+
+        // A system duplicate replaces a microphone line when the texts are
+        // close enough to be the same sentence heard twice.
+        merger.consume(
+            [
+                segment(
+                    30,
+                    "six seven eight",
+                    source: .microphone
+                )
+            ][...]
+        )
+        #expect(merger.totalWords == 8)
+        let replaced = merger.consume(
+            [segment(30.4, "six seven eight nine", source: .system)][...]
+        )
+        #expect(replaced)
+        #expect(merger.totalWords == 9)
+
+        // A rebuild from an out-of-order arrival must land on the same total.
+        let rebuilt = merger.consume(
+            [segment(20, "inserted line here", source: .system)][...]
+        )
+        #expect(rebuilt)
+        let expected = merger.coalesced.reduce(0) {
+            $0 + LiveSegmentMerger.words(in: $1.text)
+        }
+        #expect(merger.totalWords == expected)
+
+        merger.reset()
+        #expect(merger.totalWords == 0)
+    }
+
     /// The old comparator treated "within eighty milliseconds" as equality,
     /// which is not transitive and made sorted() behaviour undefined. Exact
     /// ties now break toward the microphone line first, preserving what the

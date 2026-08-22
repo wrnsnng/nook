@@ -550,13 +550,6 @@ final class MeetingCoordinator: ObservableObject {
 
         recordingStartTask = Task { [weak self] in
             guard let self else { return }
-            let updateLevel: @MainActor (
-                Double,
-                TranscriptSegment.Source
-            ) -> Void = { [weak self] level, _ in
-                guard let self else { return }
-                self.targetAudioLevel = max(self.targetAudioLevel, level)
-            }
 
             do {
                 try await capture.requestPermissions()
@@ -565,8 +558,7 @@ final class MeetingCoordinator: ObservableObject {
                 try Task.checkCancellation()
                 try await capture.start(
                     to: url,
-                    permissionsAreReady: true,
-                    onAudioLevel: updateLevel
+                    permissionsAreReady: true
                 )
                 try Task.checkCancellation()
                 recordingStartTask = nil
@@ -866,7 +858,15 @@ final class MeetingCoordinator: ObservableObject {
                 guard let self else { return }
                 let rise = targetAudioLevel > audioLevel ? 0.42 : 0.16
                 var level = audioLevel + (targetAudioLevel - audioLevel) * rise
-                targetAudioLevel *= 0.76
+                // Levels arrive as a polled latest value instead of one hop
+                // per buffer, so the decay and the fresh reading meet here.
+                let fresh = isPaused
+                    ? 0
+                    : max(
+                        capture.currentAudioLevel(for: .system),
+                        capture.currentAudioLevel(for: .microphone)
+                    )
+                targetAudioLevel = max(targetAudioLevel * 0.76, fresh)
                 if level < 0.008 { level = 0 }
                 // Publishing writes objectWillChange for every observer of the
                 // coordinator, panel and menus included. Writing the settled

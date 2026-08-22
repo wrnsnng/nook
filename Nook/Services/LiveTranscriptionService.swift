@@ -9,6 +9,10 @@ struct LiveTranscriptState: Equatable, Sendable {
     var microphonePartial = ""
     var latestSource: TranscriptSegment.Source = .system
     var revision = 0
+    /// Maintained by `LiveSegmentMerger` as lines are folded in. Recounting
+    /// it per interface update split every word of every segment of the whole
+    /// meeting so far, at whatever rate the surface repainted.
+    var wordCount = 0
 
     static let empty = LiveTranscriptState()
 
@@ -45,12 +49,6 @@ struct LiveTranscriptState: Equatable, Sendable {
             )
         }
         return lines
-    }
-
-    var wordCount: Int {
-        segments.reduce(0) { count, segment in
-            count + segment.text.split(whereSeparator: \.isWhitespace).count
-        }
     }
 
     private var activePartial: (source: TranscriptSegment.Source, text: String)? {
@@ -98,6 +96,13 @@ final class LiveTranscriptionService {
     /// partial revisions, which never change finalized text.
     private var consumedFinalCounts: [TranscriptSegment.Source: Int] = [:]
     private var merger = LiveSegmentMerger()
+    /// Partial revisions arrive many times per second while anyone speaks.
+    /// Republishing each one invalidated every observer of the coordinator far
+    /// faster than captions can be read, and starved the one-second elapsed
+    /// clock badly enough that it visibly jumped ahead. Partials are
+    /// throttled; anything with newly finalized speech goes out immediately.
+    private static let minimumPartialInterval: TimeInterval = 0.1
+    private var lastPublishAt: Date?
     private(set) var isRunning = false
 
     func start(localeIdentifier: String) async throws {
@@ -156,7 +161,7 @@ final class LiveTranscriptionService {
         isRunning = true
         meetingTrack.start()
         microphoneTrack.start()
-        publish()
+        publish(force: true)
     }
 
     func ingest(
@@ -183,7 +188,7 @@ final class LiveTranscriptionService {
         tracks.removeAll()
         consumedFinalCounts = [:]
         merger.reset()
-        publish()
+        publish(force: true)
         return result
     }
 
@@ -196,7 +201,7 @@ final class LiveTranscriptionService {
         trackStates.removeAll()
         consumedFinalCounts = [:]
         merger.reset()
-        publish()
+        publish(force: true)
     }
 
     private func receive(_ snapshot: TrackSnapshot) {
@@ -205,15 +210,23 @@ final class LiveTranscriptionService {
         guard consumed < snapshot.segments.count else {
             // A partial revision. Finalized text is unchanged, so the cached
             // transcript is republished as-is instead of being recomputed.
-            publish()
+            publish(force: false)
             return
         }
         consumedFinalCounts[snapshot.source] = snapshot.segments.count
         merger.consume(snapshot.segments[consumed...])
-        publish()
+        publish(force: true)
     }
 
-    private func publish() {
+    private func publish(force: Bool) {
+        let now = Date()
+        if !force,
+           let last = lastPublishAt,
+           now.timeIntervalSince(last) < Self.minimumPartialInterval {
+            return
+        }
+        lastPublishAt = now
+
         let meeting = trackStates[.system] ?? TrackSnapshot(source: .system)
         let microphone = trackStates[.microphone] ?? TrackSnapshot(source: .microphone)
         let newest = [meeting, microphone].max { lhs, rhs in
@@ -225,7 +238,8 @@ final class LiveTranscriptionService {
             meetingPartial: meeting.partial,
             microphonePartial: microphone.partial,
             latestSource: newest?.source ?? .system,
-            revision: meeting.revision + microphone.revision
+            revision: meeting.revision + microphone.revision,
+            wordCount: merger.totalWords
         )
         if state.latestSource == .system, state.meetingPartial.isEmpty,
            !state.microphonePartial.isEmpty {
@@ -298,10 +312,17 @@ struct LiveSegmentMerger {
     private(set) var interleaved: [TranscriptSegment] = []
     /// The coalesced form of `interleaved` that caption surfaces render.
     private(set) var coalesced: [TranscriptSegment] = []
+    /// Running total over `coalesced`. Recomputing it per interface update is
+    /// what made long meetings progressively slower to repaint.
+    private(set) var totalWords = 0
 
     /// Duplicates land within seconds of their twin, so scanning back past
     /// this window cannot miss one.
     private static let duplicateWindow: TimeInterval = 4
+
+    static func words(in text: String) -> Int {
+        text.split(whereSeparator: \.isWhitespace).count
+    }
 
     static func sourceRank(_ source: TranscriptSegment.Source) -> Int {
         switch source {
@@ -334,6 +355,7 @@ struct LiveSegmentMerger {
     mutating func reset() {
         interleaved = []
         coalesced = []
+        totalWords = 0
     }
 
     /// Folds freshly finalized segments in, returning whether any of them
@@ -352,6 +374,7 @@ struct LiveSegmentMerger {
             // insertion-capable fold correct for a case that mostly never
             // happens.
             coalesced = TranscriptAssembler.coalesce(interleaved)
+            totalWords = coalesced.reduce(0) { $0 + Self.words(in: $1.text) }
         }
         return needsFullRebuild
     }
@@ -368,6 +391,7 @@ struct LiveSegmentMerger {
                 guard existing.source == .microphone, segment.source == .system else {
                     return false
                 }
+                totalWords += Self.words(in: segment.text) - Self.words(in: existing.text)
                 interleaved[index] = segment
                 return true
             }
@@ -385,9 +409,11 @@ struct LiveSegmentMerger {
         // coalesce would.
         let candidate = segment.normalized
         if let last = coalesced.last,
-           let merged = Self.merged(last, next: candidate) {
-            coalesced[coalesced.count - 1] = merged
+           let joined = Self.merged(last, next: candidate) {
+            totalWords += Self.words(in: joined.text) - Self.words(in: last.text)
+            coalesced[coalesced.count - 1] = joined
         } else {
+            totalWords += Self.words(in: candidate.text)
             coalesced.append(candidate)
         }
         return false

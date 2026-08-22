@@ -6,7 +6,15 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
-Nothing yet.
+- Recording no longer floods the main actor, which stalled the elapsed timer
+  until it visibly jumped ahead:
+  - partial transcription results are throttled to ten updates per second,
+    with finalized speech still published immediately;
+  - audio levels are read as a polled latest value instead of one task hop
+    per buffer;
+  - the live word count is maintained incrementally instead of recounting
+    every segment on each repaint.
+- The level meter no longer rises during a pause.
 
 ## 1.8.0
 
