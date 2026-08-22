@@ -51,6 +51,62 @@ struct OpenLatestNookMeetingIntent: AppIntent {
     }
 }
 
+struct FinishNookRecordingIntent: AppIntent {
+    static let title: LocalizedStringResource = "Finish a Nook Recording"
+    static let description = IntentDescription(
+        "Stops recording and processes the meeting into a local note."
+    )
+    static let openAppWhenRun = false
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        let meeting = AppModel.shared.meeting
+        guard meeting.phase.isRecording else {
+            return .result(dialog: "Nook is not recording.")
+        }
+        meeting.stopRecording()
+        return .result(dialog: "Finishing your note.")
+    }
+}
+
+struct ToggleNookPauseIntent: AppIntent {
+    static let title: LocalizedStringResource = "Pause or Resume a Nook Recording"
+    static let description = IntentDescription(
+        "Pauses or resumes the current Nook meeting recording."
+    )
+    static let openAppWhenRun = false
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        let meeting = AppModel.shared.meeting
+        guard meeting.phase.isRecording else {
+            return .result(dialog: "Nook is not recording.")
+        }
+        meeting.togglePause()
+        return .result(dialog: meeting.isPaused ? "Resuming." : "Paused.")
+    }
+}
+
+struct LatestNookNoteTextIntent: AppIntent {
+    static let title: LocalizedStringResource = "Get Latest Nook Note Text"
+    static let description = IntentDescription(
+        "Returns the summary of your most recent Nook meeting note."
+    )
+    static let openAppWhenRun = false
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ReturnsValue<String> {
+        let model = AppModel.shared
+        guard let latest = model.store.notes.first else {
+            return .result(value: "", dialog: "Your Nook library is empty.")
+        }
+        return .result(
+            value: latest.summary,
+            dialog: "Latest note: \(latest.title)."
+        )
+    }
+}
+
 struct NookShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(

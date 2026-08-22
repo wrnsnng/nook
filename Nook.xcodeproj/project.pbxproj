@@ -21,6 +21,7 @@
 		15185F5438EF0E9DC3095001 /* LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DEAE8AD6B91E1D69E8EDA41 /* LibraryView.swift */; };
 		15E244E9782298B52E9E6DB6 /* ShortcutRecorderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6F30A2530EE20C39D0E9AD5 /* ShortcutRecorderView.swift */; };
 		1697FF15C2FE7F3425EAF7A0 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 909D2C9060AAA9A88209979F /* SettingsView.swift */; };
+		1712FA81AA8FD30A68ABDEE1 /* DictationFormatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC23868A31B76A95FC6688E6 /* DictationFormatting.swift */; };
 		1756AD3AB5730CCC79B4BB0A /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = 51AB1BC7F2F3CFF20801DD9E /* LICENSE */; };
 		19884A251AE2475E5E2EF372 /* DictationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FA4268191B8994F04391D35 /* DictationCoordinator.swift */; };
 		1AA29AF013BC95AE5F69414D /* NotchPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DAAB582D0BEF7F53894D139 /* NotchPanelView.swift */; };
@@ -41,6 +42,7 @@
 		40E8A120A8B3A409F01BCCFA /* MeetingCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04DB60A1C42F72E177BB9160 /* MeetingCoordinator.swift */; };
 		426867718A3BE32CF3E90A7C /* DictationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FA4268191B8994F04391D35 /* DictationCoordinator.swift */; };
 		4374C287B03A461C71BE2C48 /* MeetingDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1162CB8F3088E4EA4EDAEC43 /* MeetingDetector.swift */; };
+		4466A37E4B613A0EA146AE14 /* DictationFormatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC23868A31B76A95FC6688E6 /* DictationFormatting.swift */; };
 		497A78D14E96DF4C32939107 /* LiveMeetingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A4476D46DFC63E2744F2D18 /* LiveMeetingView.swift */; };
 		4AA8FD468B3498F19EFADD09 /* WelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96D519F4CE62062C2D665436 /* WelcomeView.swift */; };
 		4BAC044221D7DAEB137A2E51 /* NotchPanelCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7D40B68EE579A68D1A8722E /* NotchPanelCoordinator.swift */; };
@@ -85,6 +87,7 @@
 		8EA62FBE67B79A580517A9A7 /* NookPermission.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A877376CD0320074D3AE2B8 /* NookPermission.swift */; };
 		8F9675D805A7E24CA288D4EC /* SpokenNoteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 109A234757DF010C3ABD7735 /* SpokenNoteTests.swift */; };
 		92275CBAE58E80B738E15FC6 /* DictationStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5008A93BBFF4EE8348B18580 /* DictationStyle.swift */; };
+		981CB8624F527E16C4BB6B4C /* DictationFormattingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4D5B14FA3AB01500EEB90B3 /* DictationFormattingTests.swift */; };
 		9901438495EE438AAF2BFC0D /* MeetingNotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82F5D4466C034B90191F6217 /* MeetingNotificationService.swift */; };
 		991615628B7EA39591436FA3 /* DictationRecognizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C5A0DD6E3695CE90FD0CA1C /* DictationRecognizer.swift */; };
 		9990F69C72CD78D40D91FB70 /* DictationOutputGuardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 462D5208BDEDD5B31204177C /* DictationOutputGuardTests.swift */; };
@@ -252,9 +255,11 @@
 		E015C1ABEA632C5CACB87CBB /* DigestBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DigestBuilder.swift; sourceTree = "<group>"; };
 		E1A3A12949A21AFC99737BCE /* NookDebugLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookDebugLog.swift; sourceTree = "<group>"; };
 		E29043FB627EE55136C66892 /* NookNotesEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookNotesEditor.swift; sourceTree = "<group>"; };
+		E4D5B14FA3AB01500EEB90B3 /* DictationFormattingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationFormattingTests.swift; sourceTree = "<group>"; };
 		E5AC94822A19FB5A7F9E4E48 /* LibraryAskView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryAskView.swift; sourceTree = "<group>"; };
 		E85BB1FB8EF66CBEB4C24DE7 /* MeetingNote.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingNote.swift; sourceTree = "<group>"; };
 		E86940D119C68C89BEF3B597 /* NookSnapshot */ = {isa = PBXFileReference; includeInIndex = 0; path = NookSnapshot; sourceTree = BUILT_PRODUCTS_DIR; };
+		EC23868A31B76A95FC6688E6 /* DictationFormatting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationFormatting.swift; sourceTree = "<group>"; };
 		F0DA313E3B4EB1C1104D8D92 /* LiveAnalyzerInputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveAnalyzerInputTests.swift; sourceTree = "<group>"; };
 		F6F30A2530EE20C39D0E9AD5 /* ShortcutRecorderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutRecorderView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -318,6 +323,7 @@
 			children = (
 				474FCF7E641790A7A9CF100C /* DictationAudioSource.swift */,
 				4FA4268191B8994F04391D35 /* DictationCoordinator.swift */,
+				EC23868A31B76A95FC6688E6 /* DictationFormatting.swift */,
 				8472D687C88E2ABF8BDF9FA5 /* DictationOutputGuard.swift */,
 				6C5A0DD6E3695CE90FD0CA1C /* DictationRecognizer.swift */,
 				78FB15A93010450F270E5C0D /* DictationRefiner.swift */,
@@ -435,6 +441,7 @@
 			isa = PBXGroup;
 			children = (
 				12E251538BA47334F24FABAB /* CalendarContextTests.swift */,
+				E4D5B14FA3AB01500EEB90B3 /* DictationFormattingTests.swift */,
 				462D5208BDEDD5B31204177C /* DictationOutputGuardTests.swift */,
 				6271F2989B3F82935AE714D4 /* DictationSettingsTests.swift */,
 				7FBF23AE1122A2E12B8EE118 /* DigestTests.swift */,
@@ -622,6 +629,7 @@
 				4FAB1B09486DEF819570A445 /* CommandLineAssistant.swift in Sources */,
 				8E93771F48EAE6649FE976CC /* DictationAudioSource.swift in Sources */,
 				426867718A3BE32CF3E90A7C /* DictationCoordinator.swift in Sources */,
+				1712FA81AA8FD30A68ABDEE1 /* DictationFormatting.swift in Sources */,
 				E28A43D6C73E524E5DCE2662 /* DictationIndicator.swift in Sources */,
 				FA3471E1EEE85B275762100A /* DictationOutputGuard.swift in Sources */,
 				991615628B7EA39591436FA3 /* DictationRecognizer.swift in Sources */,
@@ -690,6 +698,7 @@
 				FF0B0192F606798DB78C8A44 /* CommandLineAssistant.swift in Sources */,
 				A7FA2EA66B8F436D849ACAEB /* DictationAudioSource.swift in Sources */,
 				19884A251AE2475E5E2EF372 /* DictationCoordinator.swift in Sources */,
+				4466A37E4B613A0EA146AE14 /* DictationFormatting.swift in Sources */,
 				D0BC4ED50E5BB943FFFC00C4 /* DictationIndicator.swift in Sources */,
 				99E7C90E8993A71EF9769F6F /* DictationOutputGuard.swift in Sources */,
 				D5699A95895FBD4555C48EEE /* DictationRecognizer.swift in Sources */,
@@ -751,6 +760,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C5BCFA7DBC5D60C27C7DC6F1 /* CalendarContextTests.swift in Sources */,
+				981CB8624F527E16C4BB6B4C /* DictationFormattingTests.swift in Sources */,
 				9990F69C72CD78D40D91FB70 /* DictationOutputGuardTests.swift in Sources */,
 				5952AB977949651A552F6C5A /* DictationSettingsTests.swift in Sources */,
 				108C84CBB417186D3963CEE3 /* DigestTests.swift in Sources */,

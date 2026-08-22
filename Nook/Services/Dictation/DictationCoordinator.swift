@@ -414,7 +414,11 @@ final class DictationCoordinator: ObservableObject {
         #endif
 
         guard !cleaned.isEmpty else { return }
-        spokenChunks.append(cleaned)
+        // Spoken formatting commands are exact substitutions applied before
+        // anything else sees the chunk, so every delivery path honours them.
+        let spoken = DictationFormatting.apply(to: cleaned)
+        guard !spoken.isEmpty else { return }
+        spokenChunks.append(spoken)
 
         // Rewriting styles deliberately put nothing in the field while the user
         // is speaking. Streaming the raw words and swapping them afterwards
@@ -427,7 +431,7 @@ final class DictationCoordinator: ObservableObject {
         // destination is settled once the user stops talking.
         if capability == .noTextField {
             if quickNote?.isFrontmost == true {
-                quickNote?.append(cleaned)
+                quickNote?.append(spoken)
             }
             return
         }
@@ -436,10 +440,14 @@ final class DictationCoordinator: ObservableObject {
         else {
             return
         }
-        let separator = insertedAnything ? " " : ""
-        let appended = insertion.append(separator + cleaned)
+        // A break already provides the separation; a space before it would
+        // strand whitespace at the end of the previous paragraph.
+        let needsSpace = !spoken.hasPrefix("\n")
+        let appended = insertion.append(
+            (insertedAnything && needsSpace ? " " : "") + spoken
+        )
         #if DEBUG
-        NookDebugLog.write("[dictation] append \(appended ? "ok" : "FAILED"): \(cleaned)")
+        NookDebugLog.write("[dictation] append \(appended ? "ok" : "FAILED"): \(spoken)")
         #endif
         guard appended else {
             // The field stopped accepting writes mid-sentence. Silently
