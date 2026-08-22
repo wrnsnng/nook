@@ -4,7 +4,7 @@ Nook follows a user-facing release-note model. Each published version has a
 Markdown note in [`Releases/`](Releases/) and a matching `v<version>` release in
 the [binary releases repository](https://github.com/wrnsnng/nook-releases/releases).
 
-## Unreleased
+## 1.8.1
 
 - Recording no longer floods the main actor, which stalled the elapsed timer
   until it visibly jumped ahead:
