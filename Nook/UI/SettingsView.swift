@@ -222,8 +222,7 @@ struct SettingsView: View {
                     if dictation.style.usesLanguageModel, !isAppleIntelligenceAvailable {
                         Label(
                             "Apple Intelligence is unavailable, so Nook will type your words unchanged.",
-                            systemImage: "info.circle"
-                        )
+                            systemImage: "info.circle"                        )
                         .font(NookType.caption)
                         .foregroundStyle(.secondary)
                     }
@@ -232,6 +231,8 @@ struct SettingsView: View {
                 } footer: {
                     Text("Nook checks every rewrite against what you actually said. If the wording drifts too far, your own words are typed instead. A dictated question is never answered, only written down.")
                 }
+
+                PerAppDictationStylesSection()
 
                 Section {
                     Picker("Note actions run", selection: engineSelection) {
@@ -371,6 +372,8 @@ struct SettingsView: View {
                     "Keep extracted meeting audio",
                     isOn: $meeting.keepAudio
                 )
+
+                AudioRetentionSettingsRow()
 
                 if let storageMessage {
                     Label(storageMessage, systemImage: "exclamationmark.triangle")
@@ -691,5 +694,86 @@ private struct PrivacyFeatureRow: View {
         }
         .padding(.vertical, 3)
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// Opt-in automatic cleanup of kept meeting audio, with the window shown.
+private struct AudioRetentionSettingsRow: View {
+    @State private var isEnabled = AudioRetention.isEnabled
+    @State private var days = AudioRetention.days
+
+    var body: some View {
+        HStack {
+            Toggle("Delete kept audio older than", isOn: $isEnabled)
+                .onChange(of: isEnabled) { _, enabled in
+                    UserDefaults.standard.set(
+                        enabled,
+                        forKey: AudioRetention.enabledKey
+                    )
+                }
+
+            if isEnabled {
+                Picker("", selection: $days) {
+                    ForEach([30, 60, 90, 180], id: \.self) { value in
+                        Text("\(value) days").tag(value)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 110)
+                .onChange(of: days) { _, value in
+                    UserDefaults.standard.set(value, forKey: AudioRetention.daysKey)
+                }
+            }
+        }
+    }
+}
+
+/// Per-app dictation styles: the frontmost app can have its own habit.
+private struct PerAppDictationStylesSection: View {
+    @State private var overrides: [String] = DictationStyle.overriddenBundleIDs
+    @State private var pickedStyle: DictationStyle = .cleanUp
+
+    var body: some View {
+        Section {
+            HStack {
+                Button("Add for Frontmost App") {
+                    guard let app = NSWorkspace.shared.frontmostApplication,
+                          let bundleID = app.bundleIdentifier
+                    else { return }
+                    DictationStyle.setOverride(pickedStyle, forBundleID: bundleID)
+                    overrides = DictationStyle.overriddenBundleIDs
+                }
+                .disabled(NSWorkspace.shared.frontmostApplication == nil)
+
+                Spacer()
+
+                Picker("", selection: $pickedStyle) {
+                    ForEach(DictationStyle.allCases) { option in
+                        Text(option.title).tag(option)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 130)
+            }
+
+            ForEach(overrides, id: \.self) { bundleID in
+                LabeledContent(bundleID) {
+                    Text(
+                        DictationStyle.override(forBundleID: bundleID)?.title
+                            ?? ""
+                    )
+                    .foregroundStyle(.secondary)
+                    Button("Remove") {
+                        DictationStyle.setOverride(nil, forBundleID: bundleID)
+                        overrides = DictationStyle.overriddenBundleIDs
+                    }
+                    .controlSize(.small)
+                }
+            }
+        } header: {
+            Label("Per-app styles", systemImage: "square.stack.3d.up")
+        } footer: {
+            Text("An app listed here always gets its own style, wherever you are when you hold the shortcut. Switch to that app first, then press Add.")
+        }
     }
 }

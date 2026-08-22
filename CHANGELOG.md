@@ -16,6 +16,15 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
   on-device overview paragraph.
 - New `digest` note kind; unknown kinds in older files still decode as
   meetings.
+- Spoken formatting commands: "new paragraph" and "new line" become real
+  breaks through a fixed substitution table; ordinary sentences containing
+  those words pass through untouched.
+- Per-app dictation styles in Settings: the frontmost app can keep its own
+  style, resolved at the moment dictation starts.
+- Opt-in audio retention: kept extracted audio older than a chosen window is
+  moved to the Trash on launch. Off by default.
+- Shortcuts gains finish-recording, pause/resume, and latest-note-text
+  intents.
 
 ## 1.9.0
 

@@ -231,3 +231,25 @@ private final class TestDictationRecognizer: DictationRecognizing {
         cancelCount += 1
     }
 }
+
+/// Per-app overrides are stored under the app's bundle identifier and win
+/// only there; removing one returns that app to the global habit.
+@MainActor
+struct DictationStyleOverrideTests {
+    @Test
+    func anOverrideAppliesToItsAppAlone() {
+        // A namespaced bundle id keeps this from colliding with anything
+        // real, and the defer restores whatever was there before.
+        let bundleID = "com.nook.tests.mail-\(UUID().uuidString)"
+        DictationStyle.setOverride(.polish, forBundleID: bundleID)
+        defer { DictationStyle.setOverride(nil, forBundleID: bundleID) }
+
+        #expect(DictationStyle.override(forBundleID: bundleID) == .polish)
+        #expect(DictationStyle.override(forBundleID: "com.nook.tests.other") == nil)
+        #expect(DictationStyle.override(forBundleID: nil) == nil)
+
+        DictationStyle.setOverride(nil, forBundleID: bundleID)
+        #expect(DictationStyle.override(forBundleID: bundleID) == nil)
+        #expect(!DictationStyle.overriddenBundleIDs.contains(bundleID))
+    }
+}

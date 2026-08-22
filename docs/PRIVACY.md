@@ -141,6 +141,13 @@ in Settings. Each completed note is a plaintext Markdown file containing
 timestamps, source application, title, summary, key points, decisions, action
 items, personal notes, and transcript.
 
+Kept audio is deleted only when the user asks, or when the optional audio
+retention setting is switched on: extracted audio older than the chosen
+window moves to the Trash on launch. Notes are never touched by retention.
+"Ask your library" stores derived embedding vectors under Application
+Support (`NookAsk`), never beside the notes; deleting that folder removes
+everything it knows.
+
 Temporary capture and extracted-audio files live in a hidden `.recordings`
 folder inside the selected notes folder while Nook processes a meeting.
 

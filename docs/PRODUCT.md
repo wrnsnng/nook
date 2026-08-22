@@ -45,6 +45,14 @@ conversations, or reorganising their workflow around a new service.
 - Start a manual recording from the menu bar or `⇧⌘R`.
 - Flag a moment while recording (`⌥⌘F`, panel button, or menu command) so it
   can be found in the note and, when audio is kept, played back from there.
+- Ask a question across the whole library and get an answer drawn from your
+  own notes, citing the meetings it used. Entirely on-device; weak matches
+  are refused rather than guessed.
+- Compile the week's meetings into one digest note with real counts,
+  decisions, and highlights.
+- Dictate formatting commands ("new paragraph", "new line") as exact
+  substitutions, and keep a per-app dictation style for apps that need a
+  different habit.
 - Live-transcribe system audio and the user's microphone on-device.
 - Show recent final lines plus the current partial phrase, keeping spoken
   context visible rather than replacing it too quickly.

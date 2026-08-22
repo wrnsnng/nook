@@ -99,6 +99,7 @@ final class AppModel: ObservableObject {
             .first { !$0 }
             .sink { [weak self] _ in
                 self?.recovery.scan()
+                AudioRetention.sweep(store: store)
             }
             .store(in: &cancellables)
 

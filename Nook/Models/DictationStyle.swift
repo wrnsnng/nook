@@ -19,6 +19,40 @@ enum DictationStyle: String, CaseIterable, Codable, Identifiable, Sendable {
 
     var id: Self { self }
 
+    /// Per-app style overrides, keyed by the frontmost app's bundle
+    /// identifier. A dictation habit for Mail does not have to be the habit
+    /// for a code editor, and nothing about this leaves the Mac.
+    static let overridesKey = "dictationStyleOverrides"
+
+    static func override(forBundleID bundleID: String?) -> DictationStyle? {
+        guard let bundleID,
+              let overrides = UserDefaults.standard
+                  .dictionary(forKey: overridesKey) as? [String: String],
+              let raw = overrides[bundleID]
+        else { return nil }
+        return DictationStyle(rawValue: raw)
+    }
+
+    static func setOverride(
+        _ style: DictationStyle?,
+        forBundleID bundleID: String
+    ) {
+        var overrides = UserDefaults.standard
+            .dictionary(forKey: overridesKey) as? [String: String] ?? [:]
+        if let style {
+            overrides[bundleID] = style.rawValue
+        } else {
+            overrides.removeValue(forKey: bundleID)
+        }
+        UserDefaults.standard.set(overrides, forKey: overridesKey)
+    }
+
+    /// Bundle identifiers with an override, in a stable order.
+    static var overriddenBundleIDs: [String] {
+        (UserDefaults.standard.dictionary(forKey: overridesKey)
+            as? [String: String])?.keys.sorted() ?? []
+    }
+
     var title: String {
         switch self {
         case .verbatim: "Verbatim"

@@ -69,6 +69,10 @@ final class DictationCoordinator: ObservableObject {
     private var streamingFailed = false
     private var streamedChunkCount = 0
     private var isFinishing = false
+    /// The style in force for the current session: the global choice, or a
+    /// per-app override when the frontmost app has one. Resolved at begin so
+    /// an app switch mid-sentence cannot change how words are treated.
+    private var sessionStyle: DictationStyle = .cleanUp
     private var startTask: Task<Void, Never>?
     private var finishTask: Task<Void, Never>?
     /// Distinguishes one dictation from the next. A start that is still setting
@@ -266,6 +270,15 @@ final class DictationCoordinator: ObservableObject {
         resetRunState()
         isFinishing = false
 
+        // A per-app override, when one exists, wins for this session only.
+        // The global choice stays untouched for everywhere else.
+        let frontmostID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        if let override = DictationStyle.override(forBundleID: frontmostID) {
+            sessionStyle = override
+        } else {
+            sessionStyle = style
+        }
+
         capability = insertion.beginRun()
         // Keep dictating into the note only while the user is actually in it.
         //
@@ -400,7 +413,7 @@ final class DictationCoordinator: ObservableObject {
     // MARK: - Text
 
     private func acceptFinalized(_ text: String) {
-        let cleaned = style == .cleanUp ? DisfluencyFilter.clean(text) : text
+        let cleaned = sessionStyle == .cleanUp ? DisfluencyFilter.clean(text) : text
 
         #if DEBUG
         // `DisfluencyFilter` assumes the recognizer capitalizes a letter that
@@ -436,7 +449,7 @@ final class DictationCoordinator: ObservableObject {
             return
         }
 
-        guard capability == .streaming, style.streamsLive, !streamingFailed
+        guard capability == .streaming, sessionStyle.streamsLive, !streamingFailed
         else {
             return
         }
@@ -511,11 +524,11 @@ final class DictationCoordinator: ObservableObject {
         }
 
         var finalText = spoken
-        if style.usesLanguageModel {
+        if sessionStyle.usesLanguageModel {
             phase = .refining
             let outcome = await withDeadline(
                 seconds: Self.refinementTimeout
-            ) { [refiner, style, customPrompt] () -> DictationRefiner.Outcome in
+            ) { [refiner, style = sessionStyle, customPrompt] () -> DictationRefiner.Outcome in
                 await refiner.refine(
                     spoken: spoken,
                     style: style,
@@ -528,7 +541,7 @@ final class DictationCoordinator: ObservableObject {
         }
 
         switch capability {
-        case .streaming where !streamingFailed && !style.streamsLive:
+        case .streaming where !streamingFailed && !sessionStyle.streamsLive:
             // Nothing was written while the user spoke, so the finished
             // sentence goes in now, in one piece.
             guard insertion.append(finalText) else {
