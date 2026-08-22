@@ -4,6 +4,24 @@ Nook follows a user-facing release-note model. Each published version has a
 Markdown note in [`Releases/`](Releases/) and a matching `v<version>` release in
 the [binary releases repository](https://github.com/wrnsnng/nook-releases/releases).
 
+## 1.9.0
+
+- Optional, opt-in calendar context: a nearby event enriches detection with
+  its real title and attendee count, and a once-per-event notification fires
+  one to ten minutes before an event starts. Access is requested only when
+  the setting is enabled; reads stay on-device.
+- Live moments: Option-Command-F, panel button, or menu command flags the
+  current recording offset (double-presses within a second ignored). Moments
+  persist in frontmatter, render as jump chips in Notes, and mark their
+  transcript line.
+- Transcript playback when kept audio exists, seeking by segment offset with
+  a position-following highlight and a small transport.
+- "Open actions" sidebar section aggregating unchecked items across notes.
+  Toggling rewrites exactly that line of the file; items can be exported to
+  Reminders on request, asking for access at first use.
+- Library reloads reuse cached decodes keyed by each file's modification
+  date instead of re-decoding everything on every activation.
+
 ## 1.8.1
 
 - Recording no longer floods the main actor, which stalled the elapsed timer
