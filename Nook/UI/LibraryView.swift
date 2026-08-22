@@ -19,6 +19,7 @@ struct LibraryView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var searchController = LibrarySearchController()
+    @StateObject private var openActions = OpenActionsController()
     @State private var selection: LibrarySelection?
     @State private var searchText = ""
     @State private var pendingSelection: LibrarySelection?
@@ -120,6 +121,10 @@ struct LibraryView: View {
             store.reload()
             searchController.update(query: searchText, notes: store.notes)
             chooseInitialSelection()
+            Task { await openActions.refresh(store: store) }
+        }
+        .onChange(of: store.notes) { _, _ in
+            Task { await openActions.refresh(store: store) }
         }
         .onReceive(
             NotificationCenter.default.publisher(for: .nookOpenMeetingNote)
@@ -194,6 +199,8 @@ struct LibraryView: View {
 
     private var sidebar: some View {
         List {
+            openActionsSection
+
             if presentsLiveActivity {
                 Section {
                     Button {
@@ -337,6 +344,54 @@ struct LibraryView: View {
             .font(.caption.weight(.semibold))
             .foregroundStyle(Color(nsColor: .secondaryLabelColor))
             .textCase(nil)
+    }
+
+    /// Unfinished action items across the library, closest first.
+    @ViewBuilder
+    private var openActionsSection: some View {
+        let visible = openActions.entries.prefix(8)
+        if !visible.isEmpty {
+            Section {
+                ForEach(Array(visible)) { entry in
+                    OpenActionRow(
+                        entry: entry,
+                        exported: openActions.exportedIDs.contains(entry.id),
+                        onToggle: {
+                            Task {
+                                await openActions.toggle(
+                                    entry,
+                                    store: store
+                                )
+                            }
+                        },
+                        onSelect: {
+                            requestSelection(.note(entry.noteID))
+                        },
+                        onSendToReminders: {
+                            Task {
+                                await openActions.sendToReminders(entry)
+                            }
+                        }
+                    )
+                }
+                if openActions.entries.count > visible.count {
+                    Text("\(openActions.entries.count - visible.count) more in the notes")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if let message = openActions.lastError {
+                    Label(message, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(NookPalette.danger)
+                }
+            } header: {
+                sidebarSectionHeader("Open actions")
+            } footer: {
+                Text("Unfinished items from your meeting notes.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 
     @ViewBuilder
@@ -728,5 +783,57 @@ private struct EmptyLibraryView: View {
                 hasAppeared = true
             }
         }
+    }
+}
+
+/// One unfinished action item in the sidebar: tickable, jumpable, exportable.
+private struct OpenActionRow: View {
+    let entry: OpenAction
+    let exported: Bool
+    let onToggle: () -> Void
+    let onSelect: () -> Void
+    let onSendToReminders: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 9) {
+            Button(action: onToggle) {
+                Image(systemName: "circle")
+                    .font(.system(size: 13))
+                    .foregroundStyle(NookPalette.accent)
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Mark as done")
+            .accessibilityLabel("Mark \(entry.text) as done")
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.text)
+                    .font(.callout)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text(entry.noteTitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onSelect)
+        }
+        .padding(.vertical, 3)
+        .contextMenu {
+            Button {
+                onSendToReminders()
+            } label: {
+                Label(
+                    exported ? "Sent to Reminders" : "Send to Reminders",
+                    systemImage: exported
+                        ? "checkmark.circle" : "square.and.arrow.up"
+                )
+            }
+            .disabled(exported)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("Opens the meeting note")
     }
 }
