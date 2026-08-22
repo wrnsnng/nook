@@ -18,6 +18,7 @@ struct SettingsView: View {
     @EnvironmentObject private var dictation: DictationCoordinator
     @EnvironmentObject private var quickNote: QuickNoteController
     @EnvironmentObject private var recovery: RecordingRecovery
+    @EnvironmentObject private var calendar: CalendarContextService
     @State private var pendingStorageURL: URL?
     @State private var storageMessage: String?
     @State private var selectedPane: SettingsPane
@@ -101,6 +102,8 @@ struct SettingsView: View {
                 Text("Auto follows your Mac. Light and Dark keep Nook fixed in that appearance.")
             }
 
+            calendarSection
+
             Section {
                 Toggle(
                     "Detect meetings automatically",
@@ -129,6 +132,34 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// Optional calendar context. Access is requested only when this switch
+    /// is turned on, never at launch.
+    private var calendarSection: some View {
+        Section {
+            Toggle(
+                "Use my calendar for meeting context",
+                isOn: Binding(
+                    get: { calendar.isEnabled },
+                    set: { enabled in
+                        Task { await calendar.setEnabled(enabled) }
+                    }
+                )
+            )
+            if calendar.accessDenied {
+                Label(
+                    "Calendar access was declined. Allow Nook in System Settings, Privacy & Security, Calendars.",
+                    systemImage: "exclamationmark.triangle"
+                )
+                .font(.callout)
+                .foregroundStyle(NookPalette.danger)
+            }
+        } header: {
+            Label("Calendar", systemImage: "calendar")
+        } footer: {
+            Text("Read on this Mac only, to name meetings after their event and to mention one shortly before it starts. Nook still asks before recording.")
+        }
     }
 
     private var dictationPane: some View {

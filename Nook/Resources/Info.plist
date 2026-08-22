@@ -28,10 +28,14 @@
 	<true/>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>Nook captures meeting audio from your Mac so it can create a private local transcript.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Nook reads your calendar, only on this Mac, to name meetings and remind you before they start.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 Common Tools Co.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Nook records your microphone so your side of a meeting can be transcribed locally.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Nook adds an action item to Reminders only when you ask it to.</string>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Nook captures a minimal screen stream to record meeting system audio locally.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>

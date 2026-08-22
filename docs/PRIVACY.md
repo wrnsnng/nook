@@ -48,6 +48,23 @@ to avoid placing a window title in Notification Center.
 Detection is heuristic and can be disabled at any time in Settings. Manual
 recording remains available when detection is off.
 
+## Calendar context (opt-in)
+
+Off by default and never prompted for at launch. When "Use my calendar for
+meeting context" is switched on in Settings, Nook asks macOS for calendar
+access at that moment, then:
+
+- names a detected meeting after its nearby event, instead of an app window
+  title; and
+- posts one quiet notification shortly before an event starts.
+
+Event titles, attendee counts, and times are read from the Mac's local
+calendar store, used in memory, and never sent anywhere. Nothing about events
+is logged or written into notes beyond the note title the user accepts by
+recording. Disabling the switch stops all calendar reads. Exporting an action
+item to Reminders is a separate, on-request write that asks for Reminders
+access when first used.
+
 ## Recording and permissions
 
 Nook requests macOS-controlled access to:

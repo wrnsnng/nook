@@ -550,11 +550,31 @@ final class MeetingCoordinator: ObservableObject {
         }
     }
 
+    /// Optional calendar context, owned by AppModel. When enabled and
+    /// permitted, a nearby event names the detected meeting after what the
+    /// calendar calls it rather than what the app's window title says.
+    weak var calendarContext: CalendarContextService?
+
     private func handleDetection(_ detection: DetectedMeeting) {
         guard activeDraft == nil, processingTask == nil, dismissedDetection != detection else { return }
+        var detection = detection
+        if let context = calendarContext,
+           let event = context.event(enrichingDetectionAt: Date()),
+           !event.title.trimmingCharacters(in: .whitespaces).isEmpty {
+            detection = DetectedMeeting(
+                appName: detection.appName,
+                windowTitle: event.title
+            )
+        }
         phase = .detected(detection)
         onPresentationRequested?()
         onMeetingNotificationRequested?(detection)
+    }
+
+    /// Starts a recording named by a calendar event the user was prompted
+    /// about. Still user-initiated: the prompt never records on its own.
+    func startCalendarMeeting(title: String) {
+        startRecording(title: title, sourceApp: "Calendar")
     }
 
     private func handleMeetingEnded() {

@@ -1569,3 +1569,43 @@ struct ActionItemToggleTests {
         )
     }
 }
+
+/// The decode cache exists so app activation stops re-reading every file.
+/// Its whole contract is the timestamp: matching means reuse, anything else
+/// means the file changed through some route and must be read again.
+@MainActor
+struct NoteDecodeCacheTests {
+    private func sampleNote() -> MeetingNote {
+        MeetingNote(
+            title: "Cache probe",
+            startedAt: Date(timeIntervalSince1970: 1_000_000),
+            endedAt: Date(timeIntervalSince1970: 1_000_060),
+            sourceApp: "Zoom",
+            summary: "Probe summary"
+        )
+    }
+
+    @Test
+    func anEntrySurvivesOnlyWhileItsTimestampMatches() {
+        let cache = NoteDecodeCache()
+        let url = URL(fileURLWithPath: "/tmp/probe.md")
+        let original = Date(timeIntervalSince1970: 100)
+
+        cache.store(sampleNote(), for: url, modified: original)
+
+        #expect(
+            cache.note(for: url, modified: original)?.title
+                == "Cache probe"
+        )
+        #expect(cache.note(for: url, modified: original.addingTimeInterval(1)) == nil)
+        #expect(
+            cache.note(
+                for: URL(fileURLWithPath: "/tmp/other.md"),
+                modified: original
+            ) == nil
+        )
+
+        cache.clear()
+        #expect(cache.note(for: url, modified: original) == nil)
+    }
+}

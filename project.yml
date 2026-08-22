@@ -51,6 +51,8 @@ targets:
         LSApplicationCategoryType: public.app-category.productivity
         LSMinimumSystemVersion: "$(MACOSX_DEPLOYMENT_TARGET)"
         LSUIElement: true
+        NSCalendarsFullAccessUsageDescription: "Nook reads your calendar, only on this Mac, to name meetings and remind you before they start."
+        NSRemindersFullAccessUsageDescription: "Nook adds an action item to Reminders only when you ask it to."
         NSAudioCaptureUsageDescription: "Nook captures meeting audio from your Mac so it can create a private local transcript."
         NSHumanReadableCopyright: "Copyright © 2026 Common Tools Co."
         NSMicrophoneUsageDescription: "Nook records your microphone so your side of a meeting can be transcribed locally."

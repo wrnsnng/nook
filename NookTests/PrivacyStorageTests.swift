@@ -58,7 +58,7 @@ struct PrivacyStorageTests {
         )
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let store = MarkdownStore(noteLoader: { _ in
+        let store = MarkdownStore(noteLoader: { _, _ in
             .success((notes: [], issues: []))
         })
         store.storageURL = directory

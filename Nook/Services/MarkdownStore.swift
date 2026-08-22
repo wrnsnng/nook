@@ -14,16 +14,25 @@ final class MarkdownStore: ObservableObject {
         notes: [MeetingNote],
         issues: [MarkdownLoadIssue]
     )
-    typealias NoteLoader = @Sendable (URL) -> Result<LoadPayload, Error>
+    typealias NoteLoader = @Sendable (
+        URL,
+        NoteDecodeCache?
+    ) -> Result<LoadPayload, Error>
 
     @Published private(set) var notes: [MeetingNote] = []
     @Published private(set) var loadIssues: [MarkdownLoadIssue] = []
     @Published private(set) var isLoading = false
-    @Published var storageURL: URL
+    @Published var storageURL: URL {
+        didSet {
+            // Cached decodes belong to the directory they came from.
+            decodeCache.clear()
+        }
+    }
     @Published var lastError: String?
 
     private let fileManager: FileManager
     private let noteLoader: NoteLoader
+    private let decodeCache = NoteDecodeCache()
     private var reloadGeneration = 0
 
     init(
@@ -47,11 +56,12 @@ final class MarkdownStore: ObservableObject {
         let generation = reloadGeneration
         let directory = storageURL
         let noteLoader = noteLoader
+        let cache = decodeCache
         isLoading = true
 
         Task {
             let result = await Task.detached(priority: .userInitiated) {
-                noteLoader(directory)
+                noteLoader(directory, cache)
             }.value
 
             guard generation == reloadGeneration, directory == storageURL else { return }
@@ -332,7 +342,8 @@ final class MarkdownStore: ObservableObject {
     }
 
     nonisolated static func loadNotes(
-        in directory: URL
+        in directory: URL,
+        cache: NoteDecodeCache? = nil
     ) -> Result<LoadPayload, Error> {
         do {
             let urls = try FileManager.default.contentsOfDirectory(
@@ -344,18 +355,35 @@ final class MarkdownStore: ObservableObject {
             var issues: [MarkdownLoadIssue] = []
 
             for url in urls {
+                let modified = try? url.resourceValues(forKeys: [
+                    .contentModificationDateKey
+                ]).contentModificationDate
+                if let modified, let cached = cache?.note(
+                    for: url,
+                    modified: modified
+                ) {
+                    notes.append(cached)
+                    continue
+                }
+
                 do {
                     let markdown = try String(contentsOf: url, encoding: .utf8)
-                    if let note = MarkdownCodec.decode(markdown, fileURL: url) {
-                        notes.append(note)
-                    } else {
+                    guard let note = MarkdownCodec.decode(
+                        markdown,
+                        fileURL: url
+                    ) else {
                         issues.append(
                             MarkdownLoadIssue(
                                 fileURL: url,
                                 message: "The frontmatter is missing required meeting fields."
                             )
                         )
+                        continue
                     }
+                    if let modified {
+                        cache?.store(note, for: url, modified: modified)
+                    }
+                    notes.append(note)
                 } catch {
                     issues.append(
                         MarkdownLoadIssue(

@@ -182,6 +182,9 @@ Nook may require:
 2. Speech Recognition
 3. Screen & System Audio Recording
 4. Direct ScreenCaptureKit access without the per-meeting private window picker
+5. Calendars (opt-in, requested when "Use my calendar for meeting context" is
+   switched on; read-only use)
+6. Reminders (requested at the moment an action item is exported)
 
 The final two macOS consent layers are completed together in guided setup.
 Setup verifies direct access by fetching shareable-content metadata without

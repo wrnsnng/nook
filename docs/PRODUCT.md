@@ -39,7 +39,12 @@ conversations, or reorganising their workflow around a new service.
 - Detect likely meetings in Zoom, Microsoft Teams, Google Meet, FaceTime,
   Webex, Slack Huddles, Around, and Whereby.
 - Prompt before starting a detected meeting.
+- Optionally read the local calendar (opt-in) to name meetings after their
+  event and to mention an upcoming one before it starts. Calendar reads stay
+  on the Mac and recording still always asks first.
 - Start a manual recording from the menu bar or `⇧⌘R`.
+- Flag a moment while recording (`⌥⌘F`, panel button, or menu command) so it
+  can be found in the note and, when audio is kept, played back from there.
 - Live-transcribe system audio and the user's microphone on-device.
 - Show recent final lines plus the current partial phrase, keeping spoken
   context visible rather than replacing it too quickly.
@@ -54,6 +59,9 @@ conversations, or reorganising their workflow around a new service.
 - Save the summary, structured outcomes, personal notes, and transcript into a
   local Markdown file.
 - Browse, search, edit, reveal, and review saved meetings in the native library.
+- Follow through on decisions: unfinished action items from every note are
+  listed in the library, can be ticked off in place, and can be exported to
+  Reminders on request.
 - Dictate into any text field on the Mac with a customisable global shortcut.
 - Receive signed and notarized updates through Sparkle.
 

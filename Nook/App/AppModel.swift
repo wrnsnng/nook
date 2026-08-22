@@ -27,6 +27,7 @@ final class AppModel: ObservableObject {
     let notifications: MeetingNotificationService
     let dictation: DictationCoordinator
     let quickNote: QuickNoteController
+    let calendar: CalendarContextService
     let recovery: RecordingRecovery
     private let dictationIndicator = DictationIndicatorController()
     private var openLibraryAction: (@MainActor () -> Void)?
@@ -60,6 +61,14 @@ final class AppModel: ObservableObject {
         dictation.quickNote = quickNote
         self.dictation = dictation
         self.quickNote = quickNote
+        let calendar = CalendarContextService()
+        self.calendar = calendar
+        meeting.calendarContext = calendar
+        calendar.onUpcomingEvent = { [weak notifications] event in
+            // The notification's Record action routes back through
+            // MeetingNotificationService, so nothing starts without a tap.
+            notifications?.present(upcoming: event)
+        }
 
         meeting.onPresentationRequested = { [weak panel] in
             panel?.show()
@@ -92,6 +101,8 @@ final class AppModel: ObservableObject {
                 self?.recovery.scan()
             }
             .store(in: &cancellables)
+
+        calendar.restoreSessionIfNeeded()
         meeting.$phase
             .removeDuplicates()
             .dropFirst()
