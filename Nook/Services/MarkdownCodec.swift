@@ -52,6 +52,32 @@ enum MarkdownCodec {
             """
         }
 
+        // A digest is compiled, not recorded: it carries the period's
+        // overview and outcomes but no transcript and no personal notes.
+        if note.kind == .digest {
+            return """
+            \(frontmatter)
+
+            # \(headingText(note.title))
+
+            ## Summary
+
+            \(note.summary.trimmingCharacters(in: .whitespacesAndNewlines))
+
+            ## Key points
+
+            \(keyPoints)
+
+            ## Decisions
+
+            \(decisions)
+
+            ## Action items
+
+            \(actions)
+            """
+        }
+
         return """
         \(frontmatter)
 

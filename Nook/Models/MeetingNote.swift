@@ -8,6 +8,8 @@ import Foundation
 enum NoteKind: String, Codable, Sendable {
     case meeting
     case spoken
+    /// Compiled from several notes over a period, not recorded live.
+    case digest
 
     /// Notes written before this distinction existed are meetings.
     static let `default` = NoteKind.meeting
@@ -16,6 +18,7 @@ enum NoteKind: String, Codable, Sendable {
         switch self {
         case .meeting: "Meeting"
         case .spoken: "Note"
+        case .digest: "Digest"
         }
     }
 
@@ -23,6 +26,7 @@ enum NoteKind: String, Codable, Sendable {
         switch self {
         case .meeting: "quote.bubble.fill"
         case .spoken: "waveform.badge.mic"
+        case .digest: "newspaper.fill"
         }
     }
 }

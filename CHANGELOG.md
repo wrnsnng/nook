@@ -4,6 +4,19 @@ Nook follows a user-facing release-note model. Each published version has a
 Markdown note in [`Releases/`](Releases/) and a matching `v<version>` release in
 the [binary releases repository](https://github.com/wrnsnng/nook-releases/releases).
 
+## Unreleased
+
+- "Ask your library": ask a question across every note and get an answer
+  drawn only from your own passages, citing the meetings it used. Weak
+  matches are refused rather than guessed; retrieval runs entirely on this
+  Mac via on-device embeddings, cached under Application Support.
+- "Create weekly digest" compiles the last seven days of meetings into one
+  note: deterministic counts, decisions deduplicated across meetings, up to
+  two highlights per meeting, flagged-moment totals, and an optional
+  on-device overview paragraph.
+- New `digest` note kind; unknown kinds in older files still decode as
+  meetings.
+
 ## 1.9.0
 
 - Optional, opt-in calendar context: a nearby event enriches detection with

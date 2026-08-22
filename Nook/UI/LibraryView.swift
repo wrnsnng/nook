@@ -25,6 +25,7 @@ struct LibraryView: View {
     @State private var pendingSelection: LibrarySelection?
     @State private var showsUnsavedChangesAlert = false
     @State private var copyNotice: String?
+    @State private var showsAskSheet = false
 
     init(initialNoteID: MeetingNote.ID? = nil) {
         _selection = State(
@@ -77,6 +78,20 @@ struct LibraryView: View {
         .tint(NookPalette.accent)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    showsAskSheet = true
+                } label: {
+                    Label("Ask your library", systemImage: "sparkle.magnifyingglass")
+                }
+                .help("Ask a question across all your notes")
+
+                Button {
+                    createWeeklyDigest()
+                } label: {
+                    Label("Create weekly digest", systemImage: "newspaper")
+                }
+                .help("Compile this week's meetings into one note")
+
                 if meeting.phase.isRecording {
                     Button {
                         meeting.togglePause()
@@ -177,6 +192,16 @@ struct LibraryView: View {
             if phase == .active {
                 store.reload()
             }
+        }
+        .sheet(isPresented: $showsAskSheet) {
+            LibraryAskView(
+                notes: store.notes,
+                onSelectNote: { noteID in
+                    showsAskSheet = false
+                    requestSelection(.note(noteID))
+                },
+                onClose: { showsAskSheet = false }
+            )
         }
         .alert(
             "Save your Markdown changes?",
@@ -539,6 +564,19 @@ struct LibraryView: View {
                 .month(.wide)
                 .year()
         )
+    }
+
+    /// Compiles the week's meetings into one digest note and opens it.
+    private func createWeeklyDigest() {
+        Task {
+            let digest = await DigestBuilder.build(from: store.notes)
+            do {
+                let saved = try store.save(digest)
+                requestSelection(.note(saved.id))
+            } catch {
+                copyNotice = error.localizedDescription
+            }
+        }
     }
 
     private func chooseInitialSelection() {
