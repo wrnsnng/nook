@@ -27,6 +27,9 @@ struct MeetingDetailView: View {
     @State private var transcriptSearch = ""
     /// A moment the user asked to see; consumed by the transcript scroll.
     @State private var requestedMomentOffset: TimeInterval?
+    /// Kept audio for this note, if any, enabling transcript playback.
+    @State private var playback = AudioPlaybackController()
+    @State private var positionTick: Task<Void, Never>?
     @State private var copyNotice: String?
     @State private var titleDraft: String
     @State private var personalNotesDraft: String
@@ -478,6 +481,76 @@ struct MeetingDetailView: View {
         note.transcript.last { $0.startTime <= offset + 0.001 }
     }
 
+    private var keptAudioURL: URL? {
+        AudioPlaybackController.audioURL(for: note)
+    }
+
+    /// Whether this row is the one playback is currently inside.
+    private func isPlayingSegment(_ segment: TranscriptSegment) -> Bool {
+        guard let offset = playback.activeOffset else { return false }
+        guard
+            let covering = segmentCovering(offset: offset),
+            covering.id == segment.id
+        else { return false }
+        return true
+    }
+
+    /// Small transport shown above the transcript while kept audio exists.
+    private func playbackBar(url: URL) -> some View {
+        HStack(spacing: 12) {
+            Button {
+                if playback.isPlaying {
+                    playback.stop()
+                } else {
+                    playback.start(url: url, at: 0)
+                }
+            } label: {
+                Label(
+                    playback.isPlaying ? "Stop" : "Play from start",
+                    systemImage: playback.isPlaying
+                        ? "stop.fill" : "play.fill"
+                )
+                .font(.system(size: 11, weight: .medium))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(
+                playback.isPlaying
+                    ? "Stop playback"
+                    : "Play recording from the beginning"
+            )
+
+            if let offset = playback.activeOffset {
+                Text(
+                    "\(Self.clock(offset)) / \(Self.clock(playback.duration))"
+                )
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Playback position")
+            }
+
+            Spacer()
+
+            Text("Kept audio, on this Mac")
+                .font(NookType.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(NookPalette.accent.opacity(0.08))
+        )
+        .padding(.bottom, 12)
+    }
+
+    private static func clock(_ interval: TimeInterval) -> String {
+        String(
+            format: "%02d:%02d",
+            Int(interval) / 60,
+            Int(interval) % 60
+        )
+    }
+
     private var transcriptView: some View {
         VStack(spacing: 0) {
             transcriptSearchBar
@@ -494,12 +567,22 @@ struct MeetingDetailView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 0) {
+                            if let audioURL = keptAudioURL {
+                                playbackBar(url: audioURL)
+                            }
                             ForEach(filteredTranscript) { segment in
                                 TranscriptRow(
                                     segment: segment,
                                     isFlagged: flaggedSegmentIDs.contains(
                                         segment.id
-                                    )
+                                    ),
+                                    isPlaying: isPlayingSegment(segment),
+                                    playAction: keptAudioURL.map { url in
+                                        { playback.start(
+                                            url: url,
+                                            at: segment.startTime
+                                        ) }
+                                    }
                                 )
                                 .id(segment.id)
                             }
@@ -516,6 +599,21 @@ struct MeetingDetailView: View {
                         withAnimation(.easeOut(duration: 0.25)) {
                             proxy.scrollTo(target.id, anchor: .center)
                         }
+                    }
+                    .onChange(of: playback.isPlaying) { _, playing in
+                        guard playing else { return }
+                        // Keep the published position fresh while playing.
+                        positionTick?.cancel()
+                        positionTick = Task {
+                            while !Task.isCancelled {
+                                try? await Task.sleep(for: .milliseconds(500))
+                                playback.refreshPosition()
+                            }
+                        }
+                    }
+                    .onDisappear {
+                        positionTick?.cancel()
+                        playback.stop()
                     }
                 }
             }
@@ -802,6 +900,9 @@ private struct EditorialSection<Content: View>: View {
 private struct TranscriptRow: View {
     let segment: TranscriptSegment
     var isFlagged = false
+    var isPlaying = false
+    /// Present only when kept audio exists; tapping plays this line.
+    var playAction: (() -> Void)?
 
     var body: some View {
         HStack(alignment: .top, spacing: 18) {
@@ -826,8 +927,34 @@ private struct TranscriptRow: View {
                     .help("You flagged this moment")
                     .accessibilityLabel("Flagged moment")
             }
+
+            if let playAction {
+                Button(action: playAction) {
+                    Image(
+                        systemName: isPlaying
+                            ? "speaker.wave.2.fill" : "play"
+                    )
+                    .font(.system(size: 11))
+                    .foregroundStyle(
+                        isPlaying ? NookPalette.accent : Color.secondary
+                    )
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Play from here")
+                .accessibilityLabel(
+                    "Play recording from \(segment.timestamp)"
+                )
+            }
         }
         .padding(.vertical, 16)
+        .padding(.horizontal, isPlaying ? 8 : 0)
+        .background(
+            RoundedRectangle(cornerRadius: 8).fill(
+                isPlaying ? NookPalette.accent.opacity(0.08) : Color.clear
+            )
+        )
         .contentShape(Rectangle())
         .overlay(alignment: .bottom) {
             SoftDivider()

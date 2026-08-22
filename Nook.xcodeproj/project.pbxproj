@@ -49,6 +49,7 @@
 		570ABE50DDCC6103608C52F0 /* ShortcutRecorderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6F30A2530EE20C39D0E9AD5 /* ShortcutRecorderView.swift */; };
 		57437246B9E90D1A4BDE1082 /* RecordingLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B45B67065E78F2C7EF8F403B /* RecordingLifecycleTests.swift */; };
 		581A5C583F700F10916ACAE1 /* StatusMenuView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77437DEB25AC4ECE82644D22 /* StatusMenuView.swift */; };
+		581F39EAAEF9CBBE8F1ED907 /* AudioPlaybackController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF45BE65468EC8567396A848 /* AudioPlaybackController.swift */; };
 		58B5D0B1AFDDB83A3829B1F1 /* LiveTranscriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BE43DCDC9893FE96856CD02 /* LiveTranscriptionService.swift */; };
 		5937BD5AEFDA720E632C2033 /* QuickNoteController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83933D3879F3DCE359A1FFF2 /* QuickNoteController.swift */; };
 		5952AB977949651A552F6C5A /* DictationSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6271F2989B3F82935AE714D4 /* DictationSettingsTests.swift */; };
@@ -110,6 +111,7 @@
 		D5699A95895FBD4555C48EEE /* DictationRecognizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C5A0DD6E3695CE90FD0CA1C /* DictationRecognizer.swift */; };
 		D70159FD08573AB5AFD40683 /* InterfaceCopyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14AEB8FABBA49A9275352D7E /* InterfaceCopyTests.swift */; };
 		D804D64E5D450C381A292987 /* QuickNoteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18E597E1AE2B79758C53B7CD /* QuickNoteView.swift */; };
+		DEF5FDCFDF7CC33193DE295D /* AudioPlaybackController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF45BE65468EC8567396A848 /* AudioPlaybackController.swift */; };
 		E03611B9969AE1D8D7D729F0 /* GlobalShortcutMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B4C6FF938B446CFCD19A0E1 /* GlobalShortcutMonitor.swift */; };
 		E0C18B17DD6BFF54AE673EB0 /* LiveMeetingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A4476D46DFC63E2744F2D18 /* LiveMeetingView.swift */; };
 		E28A43D6C73E524E5DCE2662 /* DictationIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90BED486BAA050AE7FC31A5A /* DictationIndicator.swift */; };
@@ -221,6 +223,7 @@
 		C798B7121A65925D6161CA7E /* LiveSegmentMergerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveSegmentMergerTests.swift; sourceTree = "<group>"; };
 		CD921CC11A139E1721BD0361 /* NookTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NookTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CE0257E326F8CB6F9CC6CCB4 /* NookUpdateController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookUpdateController.swift; sourceTree = "<group>"; };
+		CF45BE65468EC8567396A848 /* AudioPlaybackController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioPlaybackController.swift; sourceTree = "<group>"; };
 		D190DD1E42E7B8A2C319B54D /* AudioExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioExtractor.swift; sourceTree = "<group>"; };
 		D588A6E65FB7C05B912F3220 /* SpeechAssets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechAssets.swift; sourceTree = "<group>"; };
 		DEA407B4708D8AD7F0B06502 /* NookDesign.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookDesign.swift; sourceTree = "<group>"; };
@@ -256,6 +259,7 @@
 			isa = PBXGroup;
 			children = (
 				D190DD1E42E7B8A2C319B54D /* AudioExtractor.swift */,
+				CF45BE65468EC8567396A848 /* AudioPlaybackController.swift */,
 				6B742437E025D0BAB1C7C0BA /* CaptureService.swift */,
 				0216CD1F9BF8CBA79B99EF44 /* LibrarySearchController.swift */,
 				5BE43DCDC9893FE96856CD02 /* LiveTranscriptionService.swift */,
@@ -579,6 +583,7 @@
 				0C664A5C897DC87CE1B511FA /* AppDelegate.swift in Sources */,
 				BBF8E36E986242845ED2BE91 /* AppModel.swift in Sources */,
 				F5C9C5924B843FF595C97A7C /* AudioExtractor.swift in Sources */,
+				DEF5FDCFDF7CC33193DE295D /* AudioPlaybackController.swift in Sources */,
 				3976A4DD0C5C281BFFA7E4CD /* CaptureService.swift in Sources */,
 				4FAB1B09486DEF819570A445 /* CommandLineAssistant.swift in Sources */,
 				8E93771F48EAE6649FE976CC /* DictationAudioSource.swift in Sources */,
@@ -640,6 +645,7 @@
 			files = (
 				E77396AB28F08D6571DC9CC9 /* AppModel.swift in Sources */,
 				F141ED71BB6A618D89F9E92A /* AudioExtractor.swift in Sources */,
+				581F39EAAEF9CBBE8F1ED907 /* AudioPlaybackController.swift in Sources */,
 				68DEF893547BEF1D4ED02FFC /* CaptureService.swift in Sources */,
 				FF0B0192F606798DB78C8A44 /* CommandLineAssistant.swift in Sources */,
 				A7FA2EA66B8F436D849ACAEB /* DictationAudioSource.swift in Sources */,
