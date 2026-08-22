@@ -4,7 +4,7 @@ Nook follows a user-facing release-note model. Each published version has a
 Markdown note in [`Releases/`](Releases/) and a matching `v<version>` release in
 the [binary releases repository](https://github.com/wrnsnng/nook-releases/releases).
 
-## Unreleased
+## 1.10.0
 
 - "Ask your library": ask a question across every note and get an answer
   drawn only from your own passages, citing the meetings it used. Weak
