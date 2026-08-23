@@ -4,6 +4,32 @@ Nook follows a user-facing release-note model. Each published version has a
 Markdown note in [`Releases/`](Releases/) and a matching `v<version>` release in
 the [binary releases repository](https://github.com/wrnsnng/nook-releases/releases).
 
+## 1.11.0
+
+- Record into an existing note or merge two saved notes: one continuous
+  transcript with visible gap markers, kept audio that joins so moment
+  playback still works, regenerated summary and title, and personal
+  notes that are never rewritten.
+- Prep briefs: an approaching calendar event with earlier sittings gains
+  a quiet library card and a notification action, quoting decisions,
+  key points, mentioned actions, and past sittings from local notes.
+- Action items carry due dates with quick-set menus, overdue chips, a
+  soonest-first sidebar sort, and Reminders export that includes the
+  date.
+- A spoken quick note can be promoted into a meeting note, keeping its
+  prose as personal notes.
+- The library can move notes to the Trash itself.
+- Weekly digests state real conversation time across sittings.
+- Keyboard focus is visible across custom controls, and the recording
+  consent prompt highlights what Return will do.
+- Meeting titles save when the field loses focus instead of vanishing on
+  navigate-away.
+- Weekly digest refuses empty weeks rather than saving zero-count notes;
+  failures render as warnings instead of confirmations.
+- Larger compact-rail controls, one shared elapsed-clock format past the
+  hour, single motion element in expanded recording, and VoiceOver
+  actions for ticking off and exporting action items.
+
 ## 1.10.2
 
 - Turning on calendar context now shows the macOS permission prompt. Nook
