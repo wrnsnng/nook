@@ -514,12 +514,15 @@ struct MomentFlaggingTests {
 
     @Test
     func theOffsetMatchesThePausedElapsedClock() {
-        // Five accumulated minutes, resumed twenty seconds ago.
+        // Five accumulated minutes, resumed twenty seconds ago. The clock is
+        // derived, not sampled twice: two separate Date() calls drift apart
+        // under suite load and the exact equality below fails on real time.
+        let startedAt = Date(timeIntervalSince1970: 1_000)
         #expect(
             MeetingCoordinator.currentRecordingOffset(
                 accumulated: 300,
-                startedAt: Date(timeIntervalSinceNow: -20),
-                now: Date()
+                startedAt: startedAt,
+                now: startedAt.addingTimeInterval(20)
             ) == 320
         )
         // Paused: no active start, so the flag freezes at the accumulation.
@@ -527,7 +530,7 @@ struct MomentFlaggingTests {
             MeetingCoordinator.currentRecordingOffset(
                 accumulated: 300,
                 startedAt: nil,
-                now: Date()
+                now: startedAt
             ) == 300
         )
     }
