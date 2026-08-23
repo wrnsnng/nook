@@ -4,5 +4,13 @@
 <dict>
 	<key>com.apple.security.device.audio-input</key>
 	<true/>
+	<!-- Hardened Runtime gates TCC prompting behind these: without them
+	     EventKit requests are refused silently and no permission dialog
+	     ever appears, so calendar context and Reminders actions cannot
+	     even ask. -->
+	<key>com.apple.security.personal-information.calendars</key>
+	<true/>
+	<key>com.apple.security.personal-information.reminders</key>
+	<true/>
 </dict>
 </plist>
