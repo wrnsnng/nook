@@ -4,6 +4,17 @@ Nook follows a user-facing release-note model. Each published version has a
 Markdown note in [`Releases/`](Releases/) and a matching `v<version>` release in
 the [binary releases repository](https://github.com/wrnsnng/nook-releases/releases).
 
+## 1.10.1
+
+- Setup gains an optional calendar step: turn on meeting context at the one
+  moment it makes sense, using the same switch as Settings. Leaving it off
+  never asks for Calendar access, and either choice can be revisited later.
+- The final setup screen names a few things worth knowing: flagging moments,
+  asking your library questions, and weekly digests.
+- Calendar copy states its sources plainly: events come from every account in
+  System Settings, Internet Accounts, including iCloud, Google, and Exchange.
+  There is nothing to link or sign in to inside Nook.
+
 ## 1.10.0
 
 - "Ask your library": ask a question across every note and get an answer
