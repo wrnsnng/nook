@@ -158,7 +158,9 @@ struct SettingsView: View {
         } header: {
             Label("Calendar", systemImage: "calendar")
         } footer: {
-            Text("Read on this Mac only, to name meetings after their event and to mention one shortly before it starts. Nook still asks before recording.")
+            Text(
+                "Read on this Mac only, to name meetings after their event and to mention one shortly before it starts. Events come from every calendar account set up in System Settings, Internet Accounts, including iCloud, Google, and Exchange, so there is nothing to sign in to here. Nook still asks before recording."
+            )
         }
     }
 

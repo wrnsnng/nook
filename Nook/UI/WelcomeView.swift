@@ -6,6 +6,7 @@ enum WelcomeStep: Int, CaseIterable {
     case microphone
     case speechRecognition
     case screenRecording
+    case calendar
     case dictation
     case ready
 
@@ -17,7 +18,7 @@ enum WelcomeStep: Int, CaseIterable {
             .microphone
         case .speechRecognition:
             .speechRecognition
-        case .introduction, .dictation, .ready:
+        case .introduction, .calendar, .dictation, .ready:
             nil
         }
     }
@@ -30,6 +31,8 @@ struct WelcomeView: View {
     /// Absent when onboarding is rendered outside the running app, such as in
     /// the snapshot tool, where there is no coordinator to speak of.
     private let dictation: DictationCoordinator?
+    /// Optional for the same reason as `dictation`.
+    private let calendar: CalendarContextService?
     @StateObject private var permissions = PermissionSetupController()
     @State private var step = WelcomeStep.introduction
     @State private var previewStep = 0
@@ -44,6 +47,7 @@ struct WelcomeView: View {
         _detector = ObservedObject(wrappedValue: appModel.detector)
         _step = State(initialValue: initialStep)
         dictation = appModel.dictation
+        calendar = appModel.calendar
         completeWelcomeAction = { appModel.completeWelcome() }
         openLibraryAction = { appModel.openLibrary() }
     }
@@ -55,6 +59,7 @@ struct WelcomeView: View {
         _detector = ObservedObject(wrappedValue: detector)
         _step = State(initialValue: initialStep)
         dictation = nil
+        calendar = nil
         completeWelcomeAction = {}
         openLibraryAction = {}
     }
@@ -74,6 +79,8 @@ struct WelcomeView: View {
                         if let permission = step.permission {
                             permissionSetup(permission)
                         }
+                    case .calendar:
+                        calendarIntroduction
                     case .dictation:
                         dictationIntroduction
                     case .ready:
@@ -280,6 +287,78 @@ struct WelcomeView: View {
         }
     }
 
+    /// Optional calendar context, offered at the one moment it makes sense.
+    ///
+    /// The switch is the only place access is ever requested: turning it on
+    /// asks, leaving it off never does, and either choice can be revisited in
+    /// Settings. Recording still prompts on its own afterwards.
+    private var calendarIntroduction: some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 9) {
+                Image(systemName: "calendar.badge.clock")
+                    .font(.system(size: 34, weight: .light))
+                    .foregroundStyle(NookPalette.accent)
+
+                Text("Name meetings after their event")
+                    .font(NookType.title)
+
+                Text("With your calendar, Nook calls a meeting what your calendar calls it, and mentions an event shortly before it starts.")
+                    .font(NookType.body)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(2)
+                    .frame(maxWidth: 440)
+            }
+            .padding(.top, 27)
+
+            VStack(spacing: 12) {
+                if let calendar {
+                    Toggle(
+                        isOn: Binding(
+                            get: { calendar.isEnabled },
+                            set: { enabled in
+                                Task { await calendar.setEnabled(enabled) }
+                            }
+                        )
+                    ) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Use my calendar for meeting context")
+                                .font(NookType.control)
+                            Text("Read on this Mac only. Nook will ask for Calendar access if you turn this on.")
+                                .font(NookType.micro)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .toggleStyle(.switch)
+
+                    if calendar.accessDenied {
+                        Label(
+                            "Calendar access was declined. Allow Nook in System Settings, Privacy & Security, Calendars.",
+                            systemImage: "exclamationmark.triangle"
+                        )
+                        .font(NookType.caption)
+                        .foregroundStyle(NookPalette.danger)
+                        .frame(maxWidth: 430, alignment: .leading)
+                    }
+                }
+
+                Text("Nook reads the calendars already set up on this Mac, such as iCloud, Google, or Exchange. Missing one? Add it in System Settings, Internet Accounts.")
+                    .font(NookType.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 430)
+
+                Text("Either way, Nook always asks before recording anything.")
+                    .font(NookType.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 84)
+            .padding(.top, 26)
+
+            Spacer()
+        }
+    }
+
     private var ready: some View {
         VStack(spacing: 0) {
             VStack(spacing: 10) {
@@ -365,7 +444,38 @@ struct WelcomeView: View {
             .padding(.horizontal, 84)
             .padding(.top, 18)
 
+            VStack(alignment: .leading, spacing: 8) {
+                worthKnowingRow(
+                    symbol: "flag",
+                    text: "Flag a moment while recording with ⌥⌘F, and play it back later."
+                )
+                worthKnowingRow(
+                    symbol: "sparkle.magnifyingglass",
+                    text: "Ask your library anything in the toolbar; answers cite their meetings."
+                )
+                worthKnowingRow(
+                    symbol: "newspaper",
+                    text: "Compile the week into one digest note whenever you like."
+                )
+            }
+            .padding(.horizontal, 84)
+            .padding(.top, 16)
+            .accessibilityElement(children: .combine)
+
             Spacer()
+        }
+    }
+
+    private func worthKnowingRow(symbol: String, text: String) -> some View {
+        HStack(alignment: .top, spacing: 9) {
+            Image(systemName: symbol)
+                .foregroundStyle(NookPalette.accent)
+                .frame(width: 16)
+                .accessibilityHidden(true)
+            Text(text)
+                .font(NookType.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 

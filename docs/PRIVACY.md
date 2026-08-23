@@ -59,7 +59,9 @@ access at that moment, then:
 - posts one quiet notification shortly before an event starts.
 
 Event titles, attendee counts, and times are read from the Mac's local
-calendar store, used in memory, and never sent anywhere. Nothing about events
+calendar store (which includes every account signed in under Internet
+Accounts, such as iCloud, Google, or Exchange), used in memory, and never sent
+anywhere. Nothing about events
 is logged or written into notes beyond the note title the user accepts by
 recording. Disabling the switch stops all calendar reads. Exporting an action
 item to Reminders is a separate, on-request write that asks for Reminders
