@@ -40,16 +40,19 @@ conversations, or reorganising their workflow around a new service.
   Webex, Slack Huddles, Around, and Whereby.
 - Prompt before starting a detected meeting.
 - Optionally read the local calendar (opt-in) to name meetings after their
-  event and to mention an upcoming one before it starts. Calendar reads stay
-  on the Mac and recording still always asks first.
+  event and to mention an upcoming one before it starts. When that event has
+  earlier sittings in the library, Nook offers a prep brief assembled locally
+  from those notes: last decisions and key points, every action item the
+  series mentions, and the sittings themselves. Calendar reads stay on the
+  Mac and recording still always asks first.
 - Start a manual recording from the menu bar or `⇧⌘R`.
 - Flag a moment while recording (`⌥⌘F`, panel button, or menu command) so it
   can be found in the note and, when audio is kept, played back from there.
 - Ask a question across the whole library and get an answer drawn from your
   own notes, citing the meetings it used. Entirely on-device; weak matches
   are refused rather than guessed.
-- Compile the week's meetings into one digest note with real counts,
-  decisions, and highlights.
+- Compile the week's meetings into one digest note with real counts, real
+  conversation time, decisions, and highlights.
 - Dictate formatting commands ("new paragraph", "new line") as exact
   substitutions, and keep a per-app dictation style for apps that need a
   different habit.
@@ -66,10 +69,15 @@ conversations, or reorganising their workflow around a new service.
   signal, with a timestamp title only as fallback.
 - Save the summary, structured outcomes, personal notes, and transcript into a
   local Markdown file.
-- Browse, search, edit, reveal, and review saved meetings in the native library.
+- Record into an existing note when a conversation arrives in sittings, or
+  merge two saved notes into one; the transcript stays one continuous timeline
+  with the gap between sittings visible, and personal notes are never rewritten.
+- Browse, search, edit, reveal, review, and trash saved meetings in the native
+  library.
 - Follow through on decisions: unfinished action items from every note are
-  listed in the library, can be ticked off in place, and can be exported to
-  Reminders on request.
+  listed in the library, sorted so the soonest deadline leads, can be ticked
+  off in place, given a due date that shows as an overdue chip when it lapses,
+  and exported to Reminders with its date on request.
 - Dictate into any text field on the Mac with a customisable global shortcut.
 - Receive signed and notarized updates through Sparkle.
 
@@ -171,6 +179,12 @@ stateDiagram-v2
     Recording --> Failed: capture failure
     Failed --> Idle: dismiss or recover
 ```
+
+A recording started from an existing note ("Record into this note") follows the
+same lifecycle and ends in the same Completed state; only the saving step
+differs, joining the finished sitting to that note's timeline instead of
+creating a new file. Nook never proposes this on its own: growing a note is
+always chosen from the note.
 
 ## Accessibility contract
 

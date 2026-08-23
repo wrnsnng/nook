@@ -174,6 +174,40 @@ final class MarkdownStore: ObservableObject {
             : "\(loadIssues.count) Markdown file\(loadIssues.count == 1 ? "" : "s") couldn’t be loaded."
     }
 
+    /// Moves a note's Markdown file to the Trash.
+    ///
+    /// Trashing rather than unlinking keeps the deletion reversible from the
+    /// Finder, which matters for the only destructive action in the library.
+    /// Kept audio in the recordings folder is left where it is; the existing
+    /// orphan cleanup and audio retention govern it. Returns false and sets
+    /// `lastError` when nothing was deleted, leaving every list untouched.
+    @discardableResult
+    func delete(_ note: MeetingNote) -> Bool {
+        guard let url = note.fileURL else {
+            // A note that has never been saved has no file to protect.
+            notes.removeAll { $0.id == note.id }
+            return true
+        }
+        do {
+            if fileManager.fileExists(atPath: url.path) {
+                try fileManager.trashItem(at: url, resultingItemURL: nil)
+            }
+        } catch {
+            // Volumes without a Trash still deserve a working delete.
+            do {
+                try fileManager.removeItem(at: url)
+            } catch {
+                lastError = "Couldn’t move \(url.lastPathComponent) to the Trash: "
+                    + error.localizedDescription
+                return false
+            }
+        }
+        notes.removeAll { $0.id == note.id }
+        invalidateReloadSnapshot()
+        lastError = nil
+        return true
+    }
+
     func selectStorageDirectory() -> URL? {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false

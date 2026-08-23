@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Foundation
 
 enum MeetingPhase: Equatable, Sendable {
@@ -182,6 +183,24 @@ final class MeetingCoordinator: ObservableObject {
         startRecording(
             title: "Meeting \(formatter.string(from: Date()))",
             sourceApp: "Manual"
+        )
+    }
+
+    /// Starts a recording that will be appended to an existing note when it
+    /// finishes, rather than creating a new one.
+    ///
+    /// Entirely user-initiated from the note's own actions; Nook never
+    /// suggests growing one note versus starting another. A spoken note is a
+    /// valid target and becomes a meeting note on finish, its prose kept as
+    /// personal notes. Digests are compiled, not recorded, so they are not
+    /// appendable.
+    func continueRecording(into note: MeetingNote) {
+        guard activeDraft == nil, processingTask == nil else { return }
+        guard note.kind != .digest else { return }
+        startRecording(
+            title: note.title,
+            sourceApp: note.sourceApp,
+            attaching: note.id
         )
     }
 
@@ -520,12 +539,27 @@ final class MeetingCoordinator: ObservableObject {
 
         let title = defaults.string(forKey: PermissionResumeKey.title)
         let sourceApp = defaults.string(forKey: PermissionResumeKey.sourceApp)
+        let attachedNoteID = defaults.string(forKey: PermissionResumeKey.attachedNoteID)
+            .flatMap { UUID(uuidString: $0) }
         defaults.removeObject(forKey: PermissionResumeKey.shouldResume)
         defaults.removeObject(forKey: PermissionResumeKey.title)
         defaults.removeObject(forKey: PermissionResumeKey.sourceApp)
+        defaults.removeObject(forKey: PermissionResumeKey.attachedNoteID)
 
         guard let title, let sourceApp else { return false }
-        startRecording(title: title, sourceApp: sourceApp)
+        // The note may have been deleted or its folder moved while the
+        // permission relaunch was pending. Recording unattached loses the
+        // attachment but never the words.
+        if let attachedNoteID,
+           store.notes.first(where: { $0.id == attachedNoteID }) == nil {
+            startRecording(title: title, sourceApp: sourceApp)
+            return true
+        }
+        startRecording(
+            title: title,
+            sourceApp: sourceApp,
+            attaching: attachedNoteID
+        )
         return true
     }
 
@@ -586,11 +620,16 @@ final class MeetingCoordinator: ObservableObject {
         }
     }
 
-    private func startRecording(title: String, sourceApp: String) {
+    private func startRecording(
+        title: String,
+        sourceApp: String,
+        attaching attachedNoteID: UUID? = nil
+    ) {
         guard activeDraft == nil, processingTask == nil else { return }
         pendingStartRequest = PendingStartRequest(
             title: title,
-            sourceApp: sourceApp
+            sourceApp: sourceApp,
+            attachedNoteID: attachedNoteID
         )
         requiredPermission = nil
         let id = UUID()
@@ -600,7 +639,8 @@ final class MeetingCoordinator: ObservableObject {
             title: title,
             sourceApp: sourceApp,
             startedAt: Date(),
-            recordingURL: url
+            recordingURL: url,
+            attachedNoteID: attachedNoteID
         )
         activeDraft = draft
         liveTranscript = .empty
@@ -679,7 +719,11 @@ final class MeetingCoordinator: ObservableObject {
             resetStatus()
             return
         }
-        startRecording(title: request.title, sourceApp: request.sourceApp)
+        startRecording(
+            title: request.title,
+            sourceApp: request.sourceApp,
+            attaching: request.attachedNoteID
+        )
     }
 
     private func persistPendingStartRequest() {
@@ -688,6 +732,14 @@ final class MeetingCoordinator: ObservableObject {
         defaults.set(true, forKey: PermissionResumeKey.shouldResume)
         defaults.set(request.title, forKey: PermissionResumeKey.title)
         defaults.set(request.sourceApp, forKey: PermissionResumeKey.sourceApp)
+        if let attachedNoteID = request.attachedNoteID {
+            defaults.set(
+                attachedNoteID.uuidString,
+                forKey: PermissionResumeKey.attachedNoteID
+            )
+        } else {
+            defaults.removeObject(forKey: PermissionResumeKey.attachedNoteID)
+        }
     }
 
     private static func permissionRequired(
@@ -773,6 +825,24 @@ final class MeetingCoordinator: ObservableObject {
             try Task.checkCancellation()
             let transcript = TranscriptAssembler.coalesce(rawTranscript)
 
+            // A recording started from an existing note joins that note
+            // instead of creating one; everything downstream differs.
+            if let attachedNoteID = draft.attachedNoteID,
+               let target = store.notes.first(where: { $0.id == attachedNoteID }) {
+                let (saved, cleanupFailures) = try await appendFinalizedSession(
+                    to: target,
+                    draft: draft,
+                    sessionTranscript: transcript,
+                    sessionAudioURL: audioURL,
+                    recordingURLs: recordingURLs
+                )
+                completeSuccessfulProcessing(
+                    cleanupFailures: cleanupFailures,
+                    title: saved.title
+                )
+                return
+            }
+
             phase = .processing(.summarizing)
             let insights = await summarizer.summarize(
                 transcript: transcript,
@@ -803,31 +873,10 @@ final class MeetingCoordinator: ObservableObject {
                 preserving: keepAudio ? Set([audioURL]) : []
             )
 
-            activeDraft = nil
-            processingTask = nil
-            elapsed = 0
-            accumulatedElapsed = 0
-            activeElapsedStartedAt = nil
-            isPaused = false
-            pauseTransitionInFlight = false
-            audioLevel = 0
-            liveCaptionNotice = nil
-            liveNotes = ""
-            liveInsights = nil
-            liveSummaryUpdatedAt = nil
-            topPanelHidden = false
-            processingCancellationRequested = false
-            stopRequestedDuringPauseTransition = false
-            if cleanupFailures.isEmpty {
-                phase = .completed(saved.title)
-                NookEventLog.write(.meetingSaved)
-            } else {
-                phase = .failed(
-                    "Your meeting note was saved, but Nook could not remove every temporary recording file."
-                        + Self.cleanupNotice(for: cleanupFailures)
-                )
-            }
-            onPresentationRequested?()
+            completeSuccessfulProcessing(
+                cleanupFailures: cleanupFailures,
+                title: saved.title
+            )
         } catch {
             if Task.isCancelled || processingCancellationRequested {
                 await discardCancelledMeeting(
@@ -871,6 +920,150 @@ final class MeetingCoordinator: ObservableObject {
             NookEventLog.write(.meetingProcessingFailed)
             onPresentationRequested?()
         }
+    }
+
+    /// Shared tail of every successful finalize, whether the recording
+    /// created a note or joined one.
+    private func completeSuccessfulProcessing(
+        cleanupFailures: [URL],
+        title: String
+    ) {
+        activeDraft = nil
+        processingTask = nil
+        elapsed = 0
+        accumulatedElapsed = 0
+        activeElapsedStartedAt = nil
+        isPaused = false
+        pauseTransitionInFlight = false
+        audioLevel = 0
+        liveCaptionNotice = nil
+        liveNotes = ""
+        liveInsights = nil
+        liveSummaryUpdatedAt = nil
+        topPanelHidden = false
+        processingCancellationRequested = false
+        stopRequestedDuringPauseTransition = false
+        if cleanupFailures.isEmpty {
+            phase = .completed(title)
+            NookEventLog.write(.meetingSaved)
+        } else {
+            phase = .failed(
+                "Your meeting note was saved, but Nook could not remove every temporary recording file."
+                    + Self.cleanupNotice(for: cleanupFailures)
+            )
+        }
+        onPresentationRequested?()
+    }
+
+    /// Finishes a recording that was started from an existing note.
+    ///
+    /// The sitting joins the note on one continuous timeline: kept audio is
+    /// concatenated onto what was there (or becomes the note's first audio),
+    /// transcript offsets continue where the note left off, and the summary
+    /// and title are regenerated over the combined material. Personal notes,
+    /// including everything typed during this sitting, are never rewritten.
+    private func appendFinalizedSession(
+        to target: MeetingNote,
+        draft: MeetingDraft,
+        sessionTranscript: [TranscriptSegment],
+        sessionAudioURL: URL,
+        recordingURLs: [URL]
+    ) async throws -> (note: MeetingNote, cleanupFailures: [URL]) {
+        let recordingsDirectory = store.recordingsDirectory()
+        let priorAudioURL = recordingsDirectory
+            .appendingPathComponent("\(target.id.uuidString).m4a")
+        let priorAudioExists = FileManager.default.fileExists(atPath: priorAudioURL.path)
+        let priorAudioDuration = priorAudioExists
+            ? await NoteSessionAppend.audioDuration(of: priorAudioURL)
+            : nil
+        // A file that exists but cannot be measured cannot be concatenated
+        // safely either, so it is treated like absent audio rather than
+        // trusted with the timeline.
+        let hadUsablePriorAudio = priorAudioExists && priorAudioDuration != nil
+
+        // Audio time is the clock moments play back against, so when kept
+        // audio exists its length decides where this sitting begins. Any gap
+        // between audio and transcript extent is real recorded time.
+        let offset = hadUsablePriorAudio
+            ? target.audioStart + (priorAudioDuration ?? 0)
+            : NoteSessionAppend.continuationOffset(
+                for: target,
+                priorAudioDuration: nil
+            )
+
+        var promotedTarget = target
+        NoteSessionAppend.promoteSpokenToMeeting(&promotedTarget)
+
+        let material = NoteSessionAppend.Material(
+            startedAt: draft.startedAt,
+            endedAt: Date(),
+            transcript: sessionTranscript,
+            moments: liveMoments,
+            personalNotes: liveNotes.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+        )
+        // Without usable earlier audio this sitting's own audio becomes the
+        // note's kept file, starting mid-timeline at exactly the offset the
+        // transcript continued from.
+        let combinedAudioStart = hadUsablePriorAudio ? target.audioStart : offset
+
+        phase = .processing(.preparing)
+        var preserve: Set<URL> = []
+        if keepAudio || hadUsablePriorAudio {
+            let finalAudioURL = recordingsDirectory
+                .appendingPathComponent("\(target.id.uuidString).m4a")
+            if hadUsablePriorAudio {
+                let combinedTemporaryURL = recordingsDirectory
+                    .appendingPathComponent("combined-\(draft.id.uuidString).m4a")
+                try await AudioExtractor.extractAudio(
+                    from: [priorAudioURL, sessionAudioURL],
+                    to: combinedTemporaryURL
+                )
+                try FileManager.default.replaceItemAt(
+                    finalAudioURL,
+                    withItemAt: combinedTemporaryURL
+                )
+            } else {
+                try? FileManager.default.removeItem(at: finalAudioURL)
+                try FileManager.default.moveItem(
+                    at: sessionAudioURL,
+                    to: finalAudioURL
+                )
+            }
+            // Previously kept audio survives even when keeping new audio is
+            // switched off; it was kept under an earlier promise.
+            preserve.insert(finalAudioURL)
+        }
+
+        phase = .processing(.summarizing)
+        let appended = NoteSessionAppend.appending(
+            material: material,
+            to: promotedTarget,
+            offset: offset,
+            audioStart: combinedAudioStart
+        )
+        let insights = await summarizer.summarize(
+            transcript: appended.transcript,
+            fallbackTitle: target.title.isEmpty ? draft.title : target.title
+        )
+        try Task.checkCancellation()
+
+        phase = .processing(.saving)
+        var updated = appended
+        updated.title = insights.title
+        updated.summary = insights.summary
+        updated.keyPoints = insights.keyPoints
+        updated.decisions = insights.decisions
+        updated.actionItems = insights.actionItems
+        let saved = try store.save(updated)
+
+        let cleanupFailures = RecordingArtifactCleanup.removeArtifacts(
+            for: draft,
+            additionalURLs: recordingURLs + [sessionAudioURL],
+            preserving: preserve
+        )
+        return (saved, cleanupFailures)
     }
 
     /// Tells the user where the audio went when processing could not finish.
@@ -1218,10 +1411,12 @@ enum RecordingArtifactCleanup {
 private struct PendingStartRequest {
     let title: String
     let sourceApp: String
+    var attachedNoteID: UUID?
 }
 
 private enum PermissionResumeKey {
     static let shouldResume = "resumeRecordingAfterPermission"
     static let title = "resumeRecordingAfterPermissionTitle"
     static let sourceApp = "resumeRecordingAfterPermissionSource"
+    static let attachedNoteID = "resumeRecordingAfterPermissionNoteID"
 }

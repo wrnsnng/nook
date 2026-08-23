@@ -48,6 +48,12 @@ Nook 1.7.4 (build 17) is the current public release.
 12. **Accessibility access is dictation-only.** It is never requested during
     first-run setup, never required for recording, and must remain absent from
     the meeting permission set.
+13. **Multi-session notes are additive.** The `sessions:` and `audioStart:`
+    frontmatter keys and the transcript divider lines exist so a note can hold
+    several recorded sittings. Older versions must keep decoding those files:
+    unknown frontmatter keys are ignored and divider lines are not transcript
+    content. Appending or merging regenerates summary and title but must never
+    rewrite personal notes.
 
 ## Historical toolchain regression
 

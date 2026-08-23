@@ -50,6 +50,21 @@ struct MeetingMoment: Hashable, Sendable {
     }
 }
 
+/// One recorded sitting within a note.
+///
+/// A note usually has exactly one, which is why the field stays empty for
+/// ordinary meetings: absent sessions means "read started and ended as one
+/// sitting". A note gains several when a later recording is appended to it,
+/// either by recording into the note again or by merging another note in.
+struct MeetingSession: Hashable, Sendable {
+    let startedAt: Date
+    let endedAt: Date
+
+    var duration: TimeInterval {
+        max(0, endedAt.timeIntervalSince(startedAt))
+    }
+}
+
 struct MeetingNote: Identifiable, Hashable, Sendable {
     let id: UUID
     var kind: NoteKind = .default
@@ -65,6 +80,16 @@ struct MeetingNote: Identifiable, Hashable, Sendable {
     var transcript: [TranscriptSegment]
     /// Offsets the user flagged during the recording, in the order flagged.
     var moments: [MeetingMoment] = []
+    /// Recorded sittings beyond a single one, in order. Empty for every note
+    /// with exactly one sitting.
+    var sessions: [MeetingSession] = []
+    /// Where kept audio begins on the transcript timeline.
+    ///
+    /// Normally zero: extraction concatenates every recording, so audio time
+    /// and transcript time are one clock. It is positive only when material
+    /// was appended after earlier audio was already gone, which leaves the
+    /// kept file starting partway along the combined timeline.
+    var audioStart: TimeInterval = 0
     var fileURL: URL?
 
     init(
@@ -81,6 +106,8 @@ struct MeetingNote: Identifiable, Hashable, Sendable {
         personalNotes: String = "",
         transcript: [TranscriptSegment] = [],
         moments: [MeetingMoment] = [],
+        sessions: [MeetingSession] = [],
+        audioStart: TimeInterval = 0,
         fileURL: URL? = nil
     ) {
         self.id = id
@@ -96,11 +123,26 @@ struct MeetingNote: Identifiable, Hashable, Sendable {
         self.personalNotes = personalNotes
         self.transcript = transcript
         self.moments = moments
+        self.sessions = sessions
+        self.audioStart = audioStart
         self.fileURL = fileURL
     }
 
     var duration: TimeInterval {
-        max(0, endedAt.timeIntervalSince(startedAt))
+        // A multi-session note's listening time is the sum of its sittings,
+        // not the span that includes the lunch break between them.
+        guard sessions.isEmpty else {
+            return sessions.reduce(0) { $0 + $1.duration }
+        }
+        return max(0, endedAt.timeIntervalSince(startedAt))
+    }
+
+    /// The furthest point the transcript reaches, which is also where
+    /// appended material begins when there is no kept audio to measure.
+    var transcriptExtent: TimeInterval {
+        transcript.reduce(TimeInterval(0)) {
+            max($0, $1.startTime + $1.duration)
+        }
     }
 
     var durationLabel: String {
@@ -122,4 +164,23 @@ struct MeetingDraft: Sendable {
     let sourceApp: String
     let startedAt: Date
     let recordingURL: URL
+    /// Set when this recording was started from an existing note, so
+    /// finalization appends to that note instead of creating a new one.
+    let attachedNoteID: UUID?
+
+    init(
+        id: UUID,
+        title: String,
+        sourceApp: String,
+        startedAt: Date,
+        recordingURL: URL,
+        attachedNoteID: UUID? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.sourceApp = sourceApp
+        self.startedAt = startedAt
+        self.recordingURL = recordingURL
+        self.attachedNoteID = attachedNoteID
+    }
 }

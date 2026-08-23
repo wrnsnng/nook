@@ -4,6 +4,7 @@ import SwiftUI
 private enum LibrarySelection: Hashable {
     case live
     case note(MeetingNote.ID)
+    case prep
 }
 
 private struct LibraryNoteGroup: Identifiable {
@@ -16,6 +17,7 @@ struct LibraryView: View {
     @EnvironmentObject private var store: MarkdownStore
     @EnvironmentObject private var meeting: MeetingCoordinator
     @EnvironmentObject private var markdownDraft: MarkdownDraftController
+    @EnvironmentObject private var prep: PrepBriefController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var searchController = LibrarySearchController()
@@ -26,6 +28,10 @@ struct LibraryView: View {
     @State private var showsUnsavedChangesAlert = false
     @State private var copyNotice: String?
     @State private var showsAskSheet = false
+    /// The note a second note is being merged into, when the picker shows.
+    @State private var mergeTarget: MeetingNote?
+    /// The note awaiting Trash confirmation.
+    @State private var notePendingDeletion: MeetingNote?
 
     init(initialNoteID: MeetingNote.ID? = nil) {
         _selection = State(
@@ -152,6 +158,19 @@ struct LibraryView: View {
             }
             requestSelection(.note(requestedID))
         }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .nookOpenPrepBrief)
+        ) { _ in
+            guard prep.current != nil else { return }
+            requestSelection(.prep)
+        }
+        // A brief dies when its event starts. Falling back to the ordinary
+        // selection beats stranding the detail pane on a vanished surface.
+        .onChange(of: prep.current) { _, brief in
+            if brief == nil, selection == .prep {
+                selection = restoredOrFirstSelection(in: store.notes)
+            }
+        }
         .onChange(of: store.notes) { _, notes in
             searchController.update(query: searchText, notes: notes)
             guard !notes.isEmpty else {
@@ -193,6 +212,37 @@ struct LibraryView: View {
                 store.reload()
             }
         }
+        .sheet(item: $mergeTarget) { target in
+            NoteMergePickerView(
+                target: target,
+                candidates: store.notes.filter {
+                    $0.id != target.id && $0.kind != .digest
+                }
+            ) { absorbed in
+                mergeNotes(absorbed, into: target)
+            }
+        }
+        .alert(
+            "Move this note to the Trash?",
+            isPresented: Binding(
+                get: { notePendingDeletion != nil },
+                set: { if !$0 { notePendingDeletion = nil } }
+            )
+        ) {
+            Button("Move to Trash", role: .destructive) {
+                if let note = notePendingDeletion {
+                    _ = store.delete(note)
+                }
+                notePendingDeletion = nil
+            }
+            Button("Cancel", role: .cancel) {
+                notePendingDeletion = nil
+            }
+        } message: {
+            Text(
+                "The Markdown file moves to the Trash and can be restored from there. Kept audio stays until its retention expires."
+            )
+        }
         .sheet(isPresented: $showsAskSheet) {
             LibraryAskView(
                 notes: store.notes,
@@ -224,6 +274,7 @@ struct LibraryView: View {
 
     private var sidebar: some View {
         List {
+            prepSection
             openActionsSection
 
             if presentsLiveActivity {
@@ -337,6 +388,26 @@ struct LibraryView: View {
                                 )
                                 showCopyNotice("Markdown copied")
                             }
+                            if note.kind != .digest {
+                                Divider()
+                                Button("Record into this note") {
+                                    meeting.continueRecording(into: note)
+                                }
+                                .disabled(
+                                    meeting.phase.isRecording || isProcessing
+                                )
+                                .help(
+                                    "Appends the next recording to this note instead of creating a new one"
+                                )
+                                Button("Merge another note into this") {
+                                    mergeTarget = note
+                                }
+                                .disabled(isProcessing)
+                            }
+                            Divider()
+                            Button("Delete", role: .destructive) {
+                                notePendingDeletion = note
+                            }
                         }
                     }
                 } header: {
@@ -371,6 +442,23 @@ struct LibraryView: View {
             .textCase(nil)
     }
 
+    /// A quiet pointer at the next sitting of a series with history. Time-
+    /// sensitive, so it leads the sidebar; tapping opens the brief.
+    @ViewBuilder
+    private var prepSection: some View {
+        if let brief = prep.current {
+            Section {
+                PrepCard(
+                    brief: brief,
+                    isOpen: selection == .prep,
+                    onOpen: { requestSelection(.prep) }
+                )
+            } header: {
+                sidebarSectionHeader("Prep")
+            }
+        }
+    }
+
     /// Unfinished action items across the library, closest first.
     @ViewBuilder
     private var openActionsSection: some View {
@@ -395,6 +483,24 @@ struct LibraryView: View {
                         onSendToReminders: {
                             Task {
                                 await openActions.sendToReminders(entry)
+                            }
+                        },
+                        onSetDue: { date in
+                            Task {
+                                await openActions.setDue(
+                                    entry,
+                                    on: date,
+                                    store: store
+                                )
+                            }
+                        },
+                        onClearDue: {
+                            Task {
+                                await openActions.setDue(
+                                    entry,
+                                    on: nil,
+                                    store: store
+                                )
                             }
                         }
                     )
@@ -423,6 +529,10 @@ struct LibraryView: View {
     private var detail: some View {
         if selection == .live {
             LiveMeetingView()
+        } else if selection == .prep, let brief = prep.current {
+            PrepBriefView(brief: brief) { noteID in
+                requestSelection(.note(noteID))
+            }
         } else if let selectedNote {
             MeetingDetailView(note: selectedNote)
                 .id(selectedNote.id)
@@ -575,6 +685,35 @@ struct LibraryView: View {
                 requestSelection(.note(saved.id))
             } catch {
                 copyNotice = error.localizedDescription
+            }
+        }
+    }
+
+    /// Folds one saved note into another and removes what it absorbed.
+    ///
+    /// The merged note is saved before the absorbed file is trashed, so a
+    /// failure anywhere leaves both originals on disk rather than half of one.
+    private func mergeNotes(_ absorbed: MeetingNote, into target: MeetingNote) {
+        Task {
+            do {
+                let result = try await NoteCombiner.merge(
+                    absorbed,
+                    into: target,
+                    recordingsDirectory: store.recordingsDirectory(),
+                    summarizer: SummaryService()
+                )
+                let saved = try store.save(result.merged)
+                store.delete(result.absorbed)
+                requestSelection(.note(saved.id))
+                if result.audioOutcome == .targetOnly {
+                    showCopyNotice(
+                        "Merged. Kept audio from the other note stayed in your recordings folder."
+                    )
+                } else {
+                    showCopyNotice("Notes merged")
+                }
+            } catch {
+                store.lastError = error.localizedDescription
             }
         }
     }
@@ -824,13 +963,19 @@ private struct EmptyLibraryView: View {
     }
 }
 
-/// One unfinished action item in the sidebar: tickable, jumpable, exportable.
+/// One unfinished action item in the sidebar: tickable, jumpable, exportable,
+/// and datable so follow-through has a clock on it.
 private struct OpenActionRow: View {
     let entry: OpenAction
     let exported: Bool
     let onToggle: () -> Void
     let onSelect: () -> Void
     let onSendToReminders: () -> Void
+    let onSetDue: (Date) -> Void
+    let onClearDue: () -> Void
+
+    @State private var showsDuePicker = false
+    @State private var pickerDate = Date().addingTimeInterval(86_400)
 
     var body: some View {
         HStack(alignment: .top, spacing: 9) {
@@ -843,17 +988,41 @@ private struct OpenActionRow: View {
             }
             .buttonStyle(.plain)
             .help("Mark as done")
-            .accessibilityLabel("Mark \(entry.text) as done")
+            .accessibilityLabel("Mark \(entry.displayText) as done")
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(entry.text)
+                Text(entry.displayText)
                     .font(.callout)
                     .lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Text(entry.noteTitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(entry.noteTitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    if !dueChip.text.isEmpty {
+                        Text(dueChip.text)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(
+                                dueChip.isOverdue
+                                    ? NookPalette.danger : .secondary
+                            )
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(
+                                Capsule().fill(
+                                    (dueChip.isOverdue
+                                        ? NookPalette.danger
+                                        : Color.secondary).opacity(0.12)
+                                )
+                            )
+                            .accessibilityLabel(
+                                dueChip.isOverdue
+                                    ? "Overdue: \(dueChip.text)"
+                                    : dueChip.text
+                            )
+                    }
+                }
             }
             .contentShape(Rectangle())
             .onTapGesture(perform: onSelect)
@@ -870,8 +1039,128 @@ private struct OpenActionRow: View {
                 )
             }
             .disabled(exported)
+
+            Divider()
+            Button("Due today") { onSetDue(Calendar.current.startOfDay(for: Date())) }
+            Button("Due tomorrow") { onSetDue(tomorrow()) }
+            Button("Next week") { onSetDue(nextWeek()) }
+            Button("Choose date…") {
+                pickerDate = entry.dueDate ?? tomorrow()
+                showsDuePicker = true
+            }
+            if entry.dueDate != nil {
+                Button("Remove due date", role: .destructive) {
+                    onClearDue()
+                }
+            }
+        }
+        .popover(isPresented: $showsDuePicker) {
+            VStack(alignment: .leading, spacing: 12) {
+                DatePicker(
+                    "Due",
+                    selection: $pickerDate,
+                    displayedComponents: [.date]
+                )
+                HStack {
+                    Spacer()
+                    Button("Cancel") { showsDuePicker = false }
+                    Button("Set Due Date") {
+                        showsDuePicker = false
+                        onSetDue(Calendar.current.startOfDay(for: pickerDate))
+                    }
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(14)
+            .frame(width: 260)
         }
         .accessibilityElement(children: .combine)
         .accessibilityHint("Opens the meeting note")
+    }
+
+    private var dueChip: (text: String, isOverdue: Bool) {
+        entry.dueChip()
+    }
+
+    private func tomorrow() -> Date {
+        Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: Date()))!
+    }
+
+    private func nextWeek() -> Date {
+        Calendar.current.date(byAdding: .day, value: 7, to: Calendar.current.startOfDay(for: Date()))!
+    }
+}
+
+/// Picks which saved note folds into the merge target.
+///
+/// Deliberately plain: a list, a selection, and two verbs. The destructive
+/// half is stated in the button, and the confirmation copy after the merge
+/// reports anything the user should know about kept audio.
+private struct NoteMergePickerView: View {
+    let target: MeetingNote
+    let candidates: [MeetingNote]
+    let onMerge: (MeetingNote) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedID: MeetingNote.ID?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Merge into \"\(target.title)\"")
+                    .font(NookType.title)
+                    .lineLimit(2)
+                Text(
+                    "The other note's transcript, moments, and personal notes join this one, and its summary is rewritten over everything."
+                )
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
+            List(candidates, selection: $selectedID) { candidate in
+                HStack(spacing: 9) {
+                    Image(systemName: candidate.kind.symbol)
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(candidate.title)
+                            .lineLimit(1)
+                        Text(
+                            candidate.startedAt.formatted(
+                                date: .abbreviated,
+                                time: .shortened
+                            )
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                .tag(candidate.id)
+            }
+            .listStyle(.bordered(alternatesRowBackgrounds: true))
+            .frame(minHeight: 220)
+
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+
+                Button("Merge Note") {
+                    guard
+                        let absorbed = candidates.first(
+                            where: { $0.id == selectedID }
+                        )
+                    else { return }
+                    dismiss()
+                    onMerge(absorbed)
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(selectedID == nil)
+            }
+        }
+        .padding(22)
+        .frame(width: 460)
     }
 }

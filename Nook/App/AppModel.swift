@@ -6,6 +6,14 @@ extension Notification.Name {
     static let nookOpenMeetingNote = Notification.Name(
         "com.localfirst.nook.open-meeting-note"
     )
+    /// The Prep brief notification action was tapped; open the library.
+    static let nookRequestPrepBrief = Notification.Name(
+        "com.localfirst.nook.request-prep-brief"
+    )
+    /// The library window should select its prep surface.
+    static let nookOpenPrepBrief = Notification.Name(
+        "com.localfirst.nook.open-prep-brief"
+    )
 }
 
 enum NookWindowRole: String, Hashable {
@@ -28,6 +36,7 @@ final class AppModel: ObservableObject {
     let dictation: DictationCoordinator
     let quickNote: QuickNoteController
     let calendar: CalendarContextService
+    let prep: PrepBriefController
     let recovery: RecordingRecovery
     private let dictationIndicator = DictationIndicatorController()
     private var openLibraryAction: (@MainActor () -> Void)?
@@ -64,11 +73,30 @@ final class AppModel: ObservableObject {
         let calendar = CalendarContextService()
         self.calendar = calendar
         meeting.calendarContext = calendar
-        calendar.onUpcomingEvent = { [weak notifications] event in
+        let prep = PrepBriefController(store: store, calendar: calendar)
+        self.prep = prep
+        calendar.onUpcomingEvent = { [weak notifications, weak store] event in
             // The notification's Record action routes back through
             // MeetingNotificationService, so nothing starts without a tap.
-            notifications?.present(upcoming: event)
+            // When this series has history, the notification says so and
+            // gains the Prep brief action.
+            let seriesKey = SeriesMatcher.seriesKey(for: event.title)
+            let priorSittings = store?.notes.filter { note in
+                note.kind != .digest
+                    && SeriesMatcher.seriesKey(for: note.title) == seriesKey
+            }.count ?? 0
+            notifications?.present(
+                upcoming: event,
+                priorSittings: priorSittings
+            )
         }
+
+        NotificationCenter.default
+            .publisher(for: .nookRequestPrepBrief)
+            .sink { [weak self] _ in
+                self?.openPrepBrief()
+            }
+            .store(in: &cancellables)
 
         meeting.onPresentationRequested = { [weak panel] in
             panel?.show()
@@ -172,6 +200,23 @@ final class AppModel: ObservableObject {
     func openLatestMeeting() {
         store.reload()
         openLibrary(noteID: store.notes.first?.id)
+    }
+
+    /// Opens the library on its prep surface, when a brief is current.
+    ///
+    /// Mirrors the note-selection delay in `openLibrary(noteID:)`: a freshly
+    /// opening window installs its selection handling a run loop or two late,
+    /// and the targeted notification must survive that.
+    func openPrepBrief() {
+        openLibrary()
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(140))
+            guard self?.prep.current != nil else { return }
+            NotificationCenter.default.post(
+                name: .nookOpenPrepBrief,
+                object: nil
+            )
+        }
     }
 
     func openIntroduction() {

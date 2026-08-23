@@ -7,10 +7,7 @@ enum MarkdownCodec {
         let actions = checklist(note.actionItems, checked: false)
         let personalNotes = note.personalNotes
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let transcript = note.transcript.map {
-            let speaker = $0.source == .mixed ? "" : "**\($0.source.label):** "
-            return "- **[\($0.timestamp)]** \(speaker)\($0.text.trimmingCharacters(in: .whitespacesAndNewlines))"
-        }.joined(separator: "\n")
+        let transcript = transcriptLines(for: note)
 
         var frontmatterLines = [
             "---",
@@ -28,6 +25,19 @@ enum MarkdownCodec {
                 .map { String(format: "%.1f", $0.offset) }
                 .joined(separator: ",")
             frontmatterLines.append("moments: \(offsets)")
+        }
+        // A single-sitting note is the ordinary case, so its sessions stay
+        // out of the file entirely.
+        if note.sessions.count > 1 {
+            let pairs = note.sessions.map { session in
+                "\(isoString(from: session.startedAt))/\(isoString(from: session.endedAt))"
+            }
+            frontmatterLines.append("sessions: \(pairs.joined(separator: ";"))")
+        }
+        if note.audioStart > 0 {
+            frontmatterLines.append(
+                "audioStart: \(String(format: "%.1f", note.audioStart))"
+            )
         }
         let frontmatter = (frontmatterLines + ["---"]).joined(separator: "\n")
 
@@ -166,6 +176,14 @@ enum MarkdownCodec {
         let moments = kind == .spoken
             ? []
             : parseMoments(metadata["moments"] ?? "")
+        // Recorded sittings and the audio position exist only on notes that
+        // gained a second sitting; every older file decodes without them.
+        let sessions = kind == .spoken
+            ? []
+            : parseSessions(metadata["sessions"] ?? "")
+        let audioStart = kind == .spoken
+            ? 0
+            : TimeInterval(metadata["audioStart"] ?? "") ?? 0
 
         return MeetingNote(
             id: id,
@@ -181,6 +199,8 @@ enum MarkdownCodec {
             personalNotes: personalNotes,
             transcript: transcript,
             moments: moments,
+            sessions: sessions,
+            audioStart: audioStart,
             fileURL: fileURL
         )
     }
@@ -194,6 +214,73 @@ enum MarkdownCodec {
             guard let offset, offset >= 0 else { return nil }
             return MeetingMoment(offset: offset)
         }
+    }
+
+    /// Recorded sittings from the frontmatter line.
+    private static func parseSessions(_ value: String) -> [MeetingSession] {
+        value.split(separator: ";").compactMap { piece in
+            let bounds = piece.split(separator: "/")
+            guard bounds.count == 2,
+                let startedAt = isoDate(from: String(bounds[0])),
+                let endedAt = isoDate(from: String(bounds[1]))
+            else { return nil }
+            return MeetingSession(startedAt: startedAt, endedAt: endedAt)
+        }
+    }
+
+    /// Transcript lines with a readable divider where one sitting ends and a
+    /// later one begins.
+    ///
+    /// The divider is derived from the sessions list rather than stored as
+    /// content, so it can never contradict the frontmatter and a decoder is
+    /// free to ignore it. Placement walks cumulative session durations, which
+    /// are exactly the offsets appended material was shifted by.
+    private static func transcriptLines(for note: MeetingNote) -> String {
+        var lines = note.transcript.map { segment in
+            let speaker = segment.source == .mixed
+                ? "" : "**\(segment.source.label):** "
+            return "- **[\(segment.timestamp)]** \(speaker)\(segment.text.trimmingCharacters(in: .whitespacesAndNewlines))"
+        }
+        guard note.sessions.count > 1 else {
+            return lines.joined(separator: "\n")
+        }
+
+        var boundary = note.sessions[0].duration
+        for session in note.sessions.dropFirst() {
+            let divider = "- *(resumed \(sessionResumeStamp(session.startedAt)))*"
+            // First segment at or after the boundary opens this sitting; a
+            // silent sitting still gets its divider so the file shows where
+            // time passed even when nothing was said.
+            let insertion = lines.firstIndex {
+                guard let offset = segmentOffset($0) else { return false }
+                return offset >= boundary - 0.001
+            } ?? lines.count
+            lines.insert(divider, at: insertion)
+            boundary += session.duration
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// The timeline offset encoded in a rendered transcript line, or nil for
+    /// divider lines.
+    private static func segmentOffset(_ line: String) -> TimeInterval? {
+        guard line.hasPrefix("- **["), let closing = line.range(of: "]**") else {
+            return nil
+        }
+        let stampStart = line.index(line.startIndex, offsetBy: 5)
+        let stamp = String(line[stampStart..<closing.lowerBound])
+        let parts = stamp.split(separator: ":").compactMap { TimeInterval($0) }
+        switch parts.count {
+        case 3: return parts[0] * 3_600 + parts[1] * 60 + parts[2]
+        case 2: return parts[0] * 60 + parts[1]
+        default: return nil
+        }
+    }
+
+    private static func sessionResumeStamp(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "d MMM yyyy, HH:mm"
+        return formatter.string(from: date)
     }
 
     /// The section headings Nook itself writes. Anything else that looks like
@@ -212,13 +299,56 @@ enum MarkdownCodec {
 /// position among that section's items so a toggle can edit exactly one line
 /// of the file instead of re-encoding the whole document.
 struct ActionItemLine: Hashable, Sendable {
+    /// The full stored text, including any `[due: ...]` suffix. Toggling
+    /// matches on this, so a rewrite can never lose the suffix.
     let index: Int
     let text: String
     let isChecked: Bool
+
+    /// The optional due date carried as a human-readable suffix in the line,
+    /// e.g. `- [ ] Draft the note [due: 2026-09-12]`.
+    var dueDate: Date? {
+        Self.dueDate(in: text)
+    }
+
+    /// The text with its due suffix removed, for display and for rewriting
+    /// when the date changes.
+    var displayText: String {
+        Self.strippingDueSuffix(from: text)
+    }
+
+    static func dueDate(in text: String) -> Date? {
+        guard let range = text.range(of: Self.duePattern, options: .regularExpression)
+        else { return nil }
+        let stamp = String(text[range])
+            .replacingOccurrences(of: "[due:", with: "")
+            .replacingOccurrences(of: "]", with: "")
+            .trimmingCharacters(in: .whitespaces)
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone.current
+        return formatter.date(from: stamp)
+    }
+
+    static func strippingDueSuffix(from text: String) -> String {
+        var result = text.replacingOccurrences(
+            of: duePattern,
+            with: "",
+            options: .regularExpression,
+            range: nil
+        )
+        return result.trimmingCharacters(in: .whitespaces)
+    }
+
+    private static let duePattern = #"\s*\[due:\s*\d{4}-\d{2}-\d{2}\]\s*"#
 }
 
 extension MarkdownCodec {
-    private static func isHeadingLine(_ line: Substring, _ title: String) -> Bool {
+    private static func isHeadingLine(
+        _ line: some StringProtocol,
+        _ title: String
+    ) -> Bool {
         line.trimmingCharacters(in: .whitespaces).lowercased()
             == "## \(title)"
     }
@@ -303,6 +433,69 @@ extension MarkdownCodec {
                 while: { $0 == " " || $0 == "\t" }
             ))
             let rewritten = leading + "- [\(checked ? "x" : " ")] \(box.text)"
+            var result = lines
+            result[position] = rewritten
+            return result.joined(separator: "\n")
+        }
+        return nil
+    }
+
+    /// Adds, changes, or removes the due date on exactly one action line.
+    ///
+    /// Same discipline as `markdownBySettingActionItem`: the item is matched
+    /// by ordinal and exact text so a file edited elsewhere is reported as
+    /// stale rather than rewritten from a stale model. The checkbox state and
+    /// every other byte of the document stay untouched.
+    static func markdownBySettingActionItemDue(
+        _ target: ActionItemLine,
+        dueTo date: Date?,
+        in markdown: String
+    ) -> String? {
+        let lines = markdown.split(
+            separator: "\n",
+            omittingEmptySubsequences: false
+        ).map(String.init)
+        guard
+            let headingIndex = lines.firstIndex(where: {
+                isHeadingLine($0, "action items")
+            }),
+            lines.indices.contains(headingIndex)
+        else {
+            return nil
+        }
+
+        var ordinal = -1
+        for position in lines.index(after: headingIndex)..<lines.count {
+            let line = lines[position]
+            if MarkdownCodec.recognizedHeadings.contains(
+                line.trimmingCharacters(in: .whitespaces)
+            ) {
+                break
+            }
+            guard let box = checkbox(in: line[...]) else { continue }
+            ordinal += 1
+            guard ordinal == target.index else { continue }
+            guard box.text == target.text else { return nil }
+
+            // The suffix lives at the end of the text; the base wording and
+            // the checked state survive any change untouched.
+            let baseText = target.displayText
+            let newText: String
+            if let date {
+                let formatter = DateFormatter()
+                formatter.dateFormat = "yyyy-MM-dd"
+                formatter.locale = Locale(identifier: "en_US_POSIX")
+                formatter.timeZone = TimeZone.current
+                newText = "\(baseText) [due: \(formatter.string(from: date))]"
+            } else {
+                newText = baseText
+            }
+
+            let leading = String(line.prefix(
+                while: { $0 == " " || $0 == "\t" }
+            ))
+            let rewritten =
+                leading + "- [\(target.isChecked ? "x" : " ")] \(newText)"
             var result = lines
             result[position] = rewritten
             return result.joined(separator: "\n")

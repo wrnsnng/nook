@@ -38,9 +38,28 @@ struct DigestTests {
 
         #expect(digest.kind == .digest)
         #expect(digest.summary.contains("1 meetings between"))
+        // Each helper meeting runs an hour; the week's conversation time is
+        // stated plainly.
+        #expect(digest.summary.contains("1h of conversation"))
         #expect(!digest.summary.contains("Offsite"))
         // No model, no overview paragraph beyond the deterministic facts.
         #expect(digest.keyPoints.isEmpty)
+    }
+
+    @Test
+    func conversationTimeLabelsStayHuman() {
+        #expect(
+            DigestBuilder.conversationTimeLabel(for: 45 * 60)
+                == "45m of conversation"
+        )
+        #expect(
+            DigestBuilder.conversationTimeLabel(for: 60 * 60)
+                == "1h of conversation"
+        )
+        #expect(
+            DigestBuilder.conversationTimeLabel(for: 3 * 3_600 + 25 * 60)
+                == "3h 25m of conversation"
+        )
     }
 
     @Test

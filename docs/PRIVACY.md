@@ -67,6 +67,10 @@ recording. Disabling the switch stops all calendar reads. Exporting an action
 item to Reminders is a separate, on-request write that asks for Reminders
 access when first used.
 
+Prep briefs are assembled on this Mac from the local library when a calendar
+event with earlier sittings approaches. No new data is collected and nothing
+leaves the machine; the brief quotes saved notes only.
+
 ## Recording and permissions
 
 Nook requests macOS-controlled access to:
@@ -143,6 +147,13 @@ in Settings. Each completed note is a plaintext Markdown file containing
 timestamps, source application, title, summary, key points, decisions, action
 items, personal notes, and transcript.
 
+A note can hold more than one recorded sitting: recording into an existing
+note, or merging two saved notes, appends the new material to the same file.
+Those files additionally list their recorded sittings in the frontmatter. Kept
+audio remains one file per note inside the recordings folder; when earlier
+audio was already gone before a later sitting was appended, the frontmatter
+records where the kept audio begins on the combined timeline.
+
 Kept audio is deleted only when the user asks, or when the optional audio
 retention setting is switched on: extracted audio older than the chosen
 window moves to the Trash on launch. Notes are never touched by retention.
@@ -211,6 +222,7 @@ Users can:
 - choose the notes folder;
 - choose whether extracted audio is retained;
 - edit, move, or delete Markdown and retained audio with ordinary file tools;
+  deleting a note from the library moves its Markdown file to the Trash;
 - disable automatic update checks or downloads; and
 - revoke Nook's permissions in System Settings.
 

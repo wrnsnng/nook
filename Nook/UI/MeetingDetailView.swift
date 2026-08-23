@@ -20,6 +20,7 @@ enum DetailTab: String, CaseIterable, Identifiable {
 struct MeetingDetailView: View {
     @EnvironmentObject private var store: MarkdownStore
     @EnvironmentObject private var markdownDraft: MarkdownDraftController
+    @EnvironmentObject private var meeting: MeetingCoordinator
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let note: MeetingNote
 
@@ -142,6 +143,22 @@ struct MeetingDetailView: View {
             } label: {
                 Label("Show in Finder", systemImage: "folder")
             }
+
+            if note.kind != .digest {
+                Divider()
+                Button {
+                    meeting.continueRecording(into: note)
+                } label: {
+                    Label(
+                        "Record into this note",
+                        systemImage: "record.circle"
+                    )
+                }
+                .disabled(!canRecordIntoThisNote)
+                .help(
+                    "Appends the next recording to this note instead of creating a new one"
+                )
+            }
         } label: {
             Image(systemName: "ellipsis")
                 .font(NookType.control)
@@ -153,6 +170,14 @@ struct MeetingDetailView: View {
         .fixedSize()
         .help("Meeting actions")
         .accessibilityLabel("Meeting actions")
+    }
+
+    /// Recording can only join a note from a quiet state; the coordinator
+    /// guards this too, and this keeps the menu item honest about it.
+    private var canRecordIntoThisNote: Bool {
+        if meeting.phase.isRecording { return false }
+        if case .processing = meeting.phase { return false }
+        return true
     }
 
     private var titleBlock: some View {

@@ -65,6 +65,13 @@ final class CalendarContextService: ObservableObject {
     /// Set when macOS declines or the user refuses access while enabling.
     @Published private(set) var accessDenied = false
 
+    /// The nearest event inside the pre-meeting horizon, if any.
+    ///
+    /// Published so passive surfaces (the library's prep card) can follow
+    /// along without polling; it clears once the event starts or calendar
+    /// context switches off. Firing the one-time prompt remains separate.
+    @Published private(set) var currentUpcomingEvent: CalendarMeetingEvent?
+
     /// Fired when an event is about to start and has not been prompted yet.
     var onUpcomingEvent: ((CalendarMeetingEvent) -> Void)?
 
@@ -157,16 +164,23 @@ final class CalendarContextService: ObservableObject {
     private func stopPolling() {
         pollTask?.cancel()
         pollTask = nil
+        currentUpcomingEvent = nil
     }
 
     private func pollOnce() {
         guard isEnabled, !accessDenied, let onUpcomingEvent else { return }
+        let now = Date()
         let candidates = provider.events(
-            between: Date().addingTimeInterval(90),
-            end: Date().addingTimeInterval(10 * 60)
+            between: now.addingTimeInterval(90),
+            end: now.addingTimeInterval(10 * 60)
         )
+        // The nearest event in the horizon is published regardless of whether
+        // its one-time prompt has fired, so passive surfaces stay accurate.
+        currentUpcomingEvent = candidates.min {
+            $0.startDate < $1.startDate
+        }
         guard let event = Self.promptCandidate(
-            now: Date(),
+            now: now,
             among: candidates,
             alreadyPrompted: promptedEventKeys
         ) else { return }

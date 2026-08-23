@@ -7,8 +7,10 @@ final class MeetingNotificationService: NSObject, UNUserNotificationCenterDelega
         static let record = "NOOK_RECORD_MEETING"
         static let later = "NOOK_MEETING_LATER"
         static let recordCalendar = "NOOK_RECORD_CALENDAR"
+        static let prep = "NOOK_OPEN_PREP"
         static let category = "NOOK_MEETING_DETECTED"
         static let upcomingCategory = "NOOK_UPCOMING_MEETING"
+        static let upcomingPrepCategory = "NOOK_UPCOMING_MEETING_PREP"
     }
 
     private weak var meeting: MeetingCoordinator?
@@ -28,6 +30,16 @@ final class MeetingNotificationService: NSObject, UNUserNotificationCenterDelega
             identifier: Action.later,
             title: "Not now"
         )
+        let recordCalendar = UNNotificationAction(
+            identifier: Action.recordCalendar,
+            title: "Record",
+            options: [.foreground]
+        )
+        let prep = UNNotificationAction(
+            identifier: Action.prep,
+            title: "Prep brief",
+            options: [.foreground]
+        )
         center.setNotificationCategories([
             UNNotificationCategory(
                 identifier: Action.category,
@@ -37,16 +49,16 @@ final class MeetingNotificationService: NSObject, UNUserNotificationCenterDelega
             ),
             UNNotificationCategory(
                 identifier: Action.upcomingCategory,
-                actions: [
-                    UNNotificationAction(
-                        identifier: Action.recordCalendar,
-                        title: "Record",
-                        options: [.foreground]
-                    )
-                ],
+                actions: [recordCalendar],
                 intentIdentifiers: [],
                 options: [.customDismissAction]
-            )
+            ),
+            UNNotificationCategory(
+                identifier: Action.upcomingPrepCategory,
+                actions: [prep, recordCalendar],
+                intentIdentifiers: [],
+                options: [.customDismissAction]
+            ),
         ])
     }
 
@@ -75,7 +87,11 @@ final class MeetingNotificationService: NSObject, UNUserNotificationCenterDelega
 
     /// A quiet heads-up that a calendar event is about to start, even when no
     /// meeting-app signal has fired. Recording remains the user's choice.
-    func present(upcoming: CalendarMeetingEvent) {
+    ///
+    /// When the library holds earlier sittings of this series, the notification
+    /// says so and gains a Prep brief action; assembling and showing the brief
+    /// still waits for a tap.
+    func present(upcoming: CalendarMeetingEvent, priorSittings: Int = 0) {
         Task {
             let granted = (try? await center.requestAuthorization(
                 options: [.alert, .sound]
@@ -85,16 +101,21 @@ final class MeetingNotificationService: NSObject, UNUserNotificationCenterDelega
             let content = UNMutableNotificationContent()
             content.title = "Starting soon"
             content.subtitle = upcoming.title
-            if upcoming.attendeeCount > 0 {
-                content.body = """
-                    \(upcoming.attendeeCount) invited. Record this meeting \
-                    locally with Nook?
-                    """
+            var bodyText: String
+            if priorSittings > 0 {
+                bodyText =
+                    "\(priorSittings) earlier sitting\(priorSittings == 1 ? "" : "s") in your library."
+            } else if upcoming.attendeeCount > 0 {
+                bodyText = "\(upcoming.attendeeCount) invited."
             } else {
-                content.body = "Record this meeting locally with Nook?"
+                bodyText = ""
             }
+            content.body = (bodyText + " Record this meeting locally with Nook?")
+                .trimmingCharacters(in: .whitespaces)
             content.interruptionLevel = .passive
-            content.categoryIdentifier = Action.upcomingCategory
+            content.categoryIdentifier = priorSittings > 0
+                ? Action.upcomingPrepCategory
+                : Action.upcomingCategory
 
             let request = UNNotificationRequest(
                 identifier: "nook-upcoming-\(upcoming.key)",
@@ -127,6 +148,13 @@ final class MeetingNotificationService: NSObject, UNUserNotificationCenterDelega
                 meeting.startDetectedMeeting()
             case Action.recordCalendar:
                 meeting.startCalendarMeeting(title: eventTitle)
+            case Action.prep:
+                // The brief itself lives in the library; opening it is a
+                // routing concern, not the notification service's.
+                NotificationCenter.default.post(
+                    name: .nookRequestPrepBrief,
+                    object: nil
+                )
             case Action.later, UNNotificationDismissActionIdentifier:
                 meeting.dismissPrompt()
             default:

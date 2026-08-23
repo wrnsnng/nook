@@ -43,10 +43,12 @@ enum DigestBuilder {
         }
 
         let flaggedCount = covered.reduce(0) { $0 + $1.moments.count }
+        let conversationSeconds = covered.reduce(0) { $0 + $1.duration }
         var stats = [
             covered.count == 1
                 ? "1 meeting captured"
-                : "\(covered.count) meetings captured"
+                : "\(covered.count) meetings captured",
+            Self.conversationTimeLabel(for: conversationSeconds),
         ]
         if flaggedCount > 0 {
             stats.append(
@@ -83,5 +85,19 @@ enum DigestBuilder {
             actionItems: [],
             transcript: []
         )
+    }
+
+    /// How much of the week was spent in captured conversation. Uses each
+    /// note's sitting-aware duration, so a multi-session meeting counts its
+    /// recorded time rather than the span between sittings.
+    static func conversationTimeLabel(for seconds: TimeInterval) -> String {
+        let minutes = Int(seconds) / 60
+        if minutes >= 60 {
+            let remainder = minutes % 60
+            return remainder == 0
+                ? "\(minutes / 60)h of conversation"
+                : "\(minutes / 60)h \(remainder)m of conversation"
+        }
+        return "\(minutes)m of conversation"
     }
 }
