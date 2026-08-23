@@ -32,6 +32,8 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
   transcript with visible gap markers, kept audio that joins so moment
   playback still works, regenerated summary and title, and personal
   notes that are never rewritten.
+  (Correction: the gap markers are divider lines in the saved Markdown
+  file. The app's own transcript view does not parse or display them.)
 - Prep briefs: an approaching calendar event with earlier sittings gains
   a quiet library card and a notification action, quoting decisions,
   key points, mentioned actions, and past sittings from local notes.
@@ -80,6 +82,9 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
   note: deterministic counts, decisions deduplicated across meetings, up to
   two highlights per meeting, flagged-moment totals, and an optional
   on-device overview paragraph.
+  (Correction: `DigestBuilder` supports the optional overview paragraph, but
+  no caller in the app supplies one, so every digest is the deterministic
+  facts alone.)
 - New `digest` note kind; unknown kinds in older files still decode as
   meetings.
 - Spoken formatting commands: "new paragraph" and "new line" become real
@@ -231,10 +236,19 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Current release
 
-- [1.7.4](Releases/Nook-1.7.4.md), current stable release, build 17.
+- [1.12.1](Releases/Nook-1.12.1.md), current stable release, build 26.
 
 ## Previous releases
 
+- [1.12.0](Releases/Nook-1.12.0.md)
+- [1.11.0](Releases/Nook-1.11.0.md)
+- [1.10.2](Releases/Nook-1.10.2.md)
+- [1.10.1](Releases/Nook-1.10.1.md)
+- [1.10.0](Releases/Nook-1.10.0.md)
+- [1.9.0](Releases/Nook-1.9.0.md)
+- [1.8.1](Releases/Nook-1.8.1.md)
+- [1.8.0](Releases/Nook-1.8.0.md)
+- [1.7.4](Releases/Nook-1.7.4.md)
 - [1.7.3](Releases/Nook-1.7.3.md)
 - [1.7.2](Releases/Nook-1.7.2.md)
 - [1.7.1](Releases/Nook-1.7.1.md)

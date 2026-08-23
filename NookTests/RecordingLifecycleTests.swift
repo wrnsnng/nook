@@ -189,6 +189,29 @@ struct RecordingLifecycleTests {
         #expect(coordinator.terminationState == .processing)
     }
 
+    /// The recovery list offers recordings belonging to no saved note, which
+    /// an in-flight recording matches for its whole life. Publishing its
+    /// identifier is what stops the list inviting somebody to recover a
+    /// meeting that is still being written.
+    @Test
+    @MainActor
+    func theRecordingInFlightIsNamedWhileItRuns() {
+        let coordinator = MeetingCoordinator(
+            store: MarkdownStore(),
+            detector: MeetingDetector()
+        )
+
+        #expect(coordinator.activeRecordingID == nil)
+
+        let id = coordinator.startDraftForTesting()
+
+        #expect(coordinator.activeRecordingID == id)
+
+        coordinator.clearDraftForTesting()
+
+        #expect(coordinator.activeRecordingID == nil)
+    }
+
     @Test
     @MainActor
     func stopRequestedDuringPauseRunsWhenTheTransitionCompletes() {
@@ -423,7 +446,9 @@ struct LiveTranscriptCoverageTests {
     }
 
     /// Trailing silence after everyone stops talking must not by itself force
-    /// re-transcription of a meeting whose recognizer stayed healthy.
+    /// re-transcription of a meeting whose recognizer stayed healthy. The tail
+    /// window is measured between the tracks, not against the recording,
+    /// precisely so a long closing silence stays ordinary.
     @Test
     func trailingSilenceIsStillCovered() {
         let trailingSilence = [segment(
@@ -435,6 +460,56 @@ struct LiveTranscriptCoverageTests {
         #expect(MeetingCoordinator.liveSegmentsCoverRecording(
             trailingSilence,
             recordedSeconds: 3_600
+        ))
+    }
+
+    /// The proportional rule alone accepted a track that stopped inside the
+    /// last quarter while the other one carried on, which is twenty minutes of
+    /// a two hour meeting saved as though it were the whole thing. Silence
+    /// would have ended both tracks together; only one of them ending early
+    /// means a recognizer died.
+    @Test
+    func aTrackStallingWhileTheOtherKeepsGoingIsNotTrusted() {
+        let stalledLate = [
+            segment(start: 0, duration: 60, source: .system),
+            segment(start: 5_900, duration: 100, source: .system),
+            segment(start: 7_100, duration: 50, source: .microphone)
+        ]
+
+        #expect(!MeetingCoordinator.liveSegmentsCoverRecording(
+            stalledLate,
+            recordedSeconds: 7_200
+        ))
+    }
+
+    /// Both tracks falling quiet at the same point is a meeting ending, not a
+    /// failure, however far from the end of the recording that point is.
+    @Test
+    func bothTracksGoingQuietTogetherIsAnOrdinaryEnding() {
+        let quietEnding = [
+            segment(start: 0, duration: 60, source: .system),
+            segment(start: 5_800, duration: 200, source: .system),
+            segment(start: 5_900, duration: 60, source: .microphone)
+        ]
+
+        #expect(MeetingCoordinator.liveSegmentsCoverRecording(
+            quietEnding,
+            recordedSeconds: 7_200
+        ))
+    }
+
+    /// The tail window never shrinks below a minute and a half, so a short
+    /// meeting is not condemned by one track pausing slightly earlier.
+    @Test
+    func aShortClosingPauseIsWithinTheTailWindow() {
+        let brief = [
+            segment(start: 0, duration: 200, source: .system),
+            segment(start: 150, duration: 70, source: .microphone)
+        ]
+
+        #expect(MeetingCoordinator.liveSegmentsCoverRecording(
+            brief,
+            recordedSeconds: 240
         ))
     }
 
@@ -467,6 +542,411 @@ struct LiveTranscriptCoverageTests {
             [],
             recordedSeconds: 0
         ))
+    }
+}
+
+/// A recognizer can die mid-meeting without reporting anything. Noticing while
+/// the meeting is still running means the saved-audio pass is already the plan
+/// by the time the recording stops.
+@MainActor
+struct StalledLiveTrackTests {
+    private func segment(
+        start: TimeInterval,
+        source: TranscriptSegment.Source
+    ) -> TranscriptSegment {
+        TranscriptSegment(
+            startTime: start,
+            duration: 10,
+            text: "Spoken words for the stall check",
+            source: source
+        )
+    }
+
+    @Test
+    func aTrackThatStopsWhileTheOtherKeepsGoingIsFlagged() {
+        let stalled = [
+            segment(start: 0, source: .microphone),
+            segment(start: 120, source: .microphone),
+            segment(start: 0, source: .system),
+            segment(start: 2_400, source: .system)
+        ]
+
+        #expect(MeetingCoordinator.liveTrackHasStalled(stalled))
+    }
+
+    /// Silence is ordinary. Only a gap longer than any natural pause counts,
+    /// and a source that never produced a word is not judged at all: nobody
+    /// speaking into the microphone is a normal meeting.
+    @Test
+    func ordinarySilenceAndAOneSidedMeetingAreNotFlagged() {
+        let brieflyQuiet = [
+            segment(start: 0, source: .microphone),
+            segment(start: 200, source: .microphone),
+            segment(start: 400, source: .system)
+        ]
+        let oneSided = [
+            segment(start: 0, source: .system),
+            segment(start: 3_000, source: .system)
+        ]
+
+        #expect(!MeetingCoordinator.liveTrackHasStalled(brieflyQuiet))
+        #expect(!MeetingCoordinator.liveTrackHasStalled(oneSided))
+        #expect(!MeetingCoordinator.liveTrackHasStalled([]))
+    }
+
+    @Test
+    func aStalledTrackClearsTheCompletenessFlagWhileRecording() {
+        let coordinator = MeetingCoordinator(
+            store: MarkdownStore(),
+            detector: MeetingDetector()
+        )
+        coordinator.setPreviewState(
+            phase: .recording(title: "Review", startedAt: .now),
+            elapsed: 2_400,
+            liveTranscript: .empty,
+            audioLevel: 0.2
+        )
+        coordinator.setLiveTranscriptCompleteForTesting(true)
+
+        coordinator.receiveLiveTranscriptForTesting(
+            LiveTranscriptState(segments: [
+                segment(start: 0, source: .microphone),
+                segment(start: 120, source: .microphone),
+                segment(start: 2_400, source: .system)
+            ])
+        )
+
+        #expect(!coordinator.liveTranscriptIsCompleteForTesting)
+    }
+}
+
+/// The live summary restarted on every caption publish, so on a meeting where
+/// anybody was talking it never finished, and the spinner it turned on before
+/// the pass never turned off.
+@MainActor
+struct LiveSummarySchedulingTests {
+    private func recording() -> MeetingCoordinator {
+        let coordinator = MeetingCoordinator(
+            store: MarkdownStore(),
+            detector: MeetingDetector()
+        )
+        coordinator.setPreviewState(
+            phase: .recording(title: "Review", startedAt: .now),
+            elapsed: 120,
+            liveTranscript: .empty,
+            audioLevel: 0.2
+        )
+        return coordinator
+    }
+
+    private func state(_ count: Int) -> LiveTranscriptState {
+        LiveTranscriptState(
+            segments: (0..<count).map { index in
+                TranscriptSegment(
+                    startTime: Double(index) * 5,
+                    duration: 4,
+                    text: "Line \(index) about the migration plan and its owners."
+                )
+            }
+        )
+    }
+
+    @Test
+    func aCaptionUpdateNeverCancelsThePassAlreadyRunning() {
+        let coordinator = recording()
+
+        coordinator.receiveLiveTranscriptForTesting(state(6))
+        #expect(coordinator.liveSummaryIsRunningForTesting)
+
+        coordinator.receiveLiveTranscriptForTesting(state(9))
+        coordinator.receiveLiveTranscriptForTesting(state(14))
+
+        #expect(coordinator.liveSummaryIsRunningForTesting)
+        // Nothing has reached the model yet, so nothing claims to be
+        // refreshing. The flag used to be raised here and never lowered.
+        #expect(!coordinator.liveSummaryIsRefreshing)
+
+        coordinator.setPreviewState(
+            phase: .idle,
+            elapsed: 0,
+            liveTranscript: .empty,
+            audioLevel: 0
+        )
+    }
+
+    /// A refresh the user asked for waits its turn instead of being dropped,
+    /// and instead of cancelling the pass in flight.
+    @Test
+    func aForcedRefreshQueuesBehindTheRunningPass() {
+        let coordinator = recording()
+        coordinator.receiveLiveTranscriptForTesting(state(6))
+
+        coordinator.refreshLiveSummary()
+
+        #expect(coordinator.liveSummaryIsRunningForTesting)
+        #expect(coordinator.liveSummaryForceIsQueuedForTesting)
+
+        coordinator.setPreviewState(
+            phase: .idle,
+            elapsed: 0,
+            liveTranscript: .empty,
+            audioLevel: 0
+        )
+    }
+
+    /// Each refresh costs more as the meeting grows while adding less, so a
+    /// two hour meeting must not summarize itself every half minute.
+    @Test
+    func refreshesBackOffAsTheMeetingGrows() {
+        let short = MeetingCoordinator.liveSummaryInterval(forSegmentCount: 20)
+        let medium = MeetingCoordinator.liveSummaryInterval(forSegmentCount: 150)
+        let long = MeetingCoordinator.liveSummaryInterval(forSegmentCount: 900)
+
+        #expect(short < medium)
+        #expect(medium < long)
+    }
+}
+
+/// Summarizing had no deadline at all, so a wedged on-device model held the
+/// save, and therefore a quit, open indefinitely.
+@MainActor
+struct SummaryDeadlineTests {
+    @Test
+    func longerMeetingsAreAllowedLongerButNotForever() {
+        let short = MeetingCoordinator.summaryDeadline(
+            forTranscriptCharacters: 2_000,
+            isTerminating: false
+        )
+        let long = MeetingCoordinator.summaryDeadline(
+            forTranscriptCharacters: 120_000,
+            isTerminating: false
+        )
+        let absurd = MeetingCoordinator.summaryDeadline(
+            forTranscriptCharacters: 10_000_000,
+            isTerminating: false
+        )
+
+        #expect(short >= 90)
+        #expect(long > short)
+        #expect(absurd <= 900)
+    }
+
+    /// Nobody waits minutes for an application to close.
+    @Test
+    func quittingCollapsesTheBudget() {
+        #expect(
+            MeetingCoordinator.summaryDeadline(
+                forTranscriptCharacters: 500_000,
+                isTerminating: true
+            ) == MeetingCoordinator.summaryQuitDeadline
+        )
+        #expect(MeetingCoordinator.summaryQuitDeadline < 60)
+    }
+
+    @Test
+    func aLongSummaryTellsTheUserWhichPartItIsOn() {
+        let coordinator = MeetingCoordinator(
+            store: MarkdownStore(),
+            detector: MeetingDetector()
+        )
+        coordinator.setPreviewState(
+            phase: .processing(.summarizing),
+            elapsed: 0,
+            liveTranscript: .empty,
+            audioLevel: 0
+        )
+
+        #expect(coordinator.processingDetail == MeetingPhase.ProcessingStep.summarizing.displaySentence)
+
+        coordinator.setSummaryProgressForTesting(
+            SummaryProgress(part: 3, total: 12)
+        )
+
+        #expect(coordinator.processingDetail.contains("part 3 of 12"))
+    }
+}
+
+/// Recording into a note regenerated its title and replaced its action items,
+/// so a name the user chose and a commitment they were still tracking both
+/// disappeared because a second sitting did not mention them again.
+@MainActor
+struct AppendedSessionTests {
+    @Test
+    func aTitleTheUserChoseSurvivesASecondSitting() {
+        #expect(
+            MeetingCoordinator.mergedTitle(
+                existing: "Pricing rework with Ana",
+                proposed: "Migration plan review"
+            ) == "Pricing rework with Ana"
+        )
+    }
+
+    @Test
+    func aPlaceholderTitleIsReplacedByARealOne() {
+        #expect(
+            MeetingCoordinator.mergedTitle(
+                existing: "Meeting Wed 2:03 PM",
+                proposed: "Migration plan review"
+            ) == "Migration plan review"
+        )
+        // Two placeholders leave the note as it was rather than swapping one
+        // meaningless title for another.
+        #expect(
+            MeetingCoordinator.mergedTitle(
+                existing: "Meeting Wed 2:03 PM",
+                proposed: "Zoom meeting"
+            ) == "Meeting Wed 2:03 PM"
+        )
+    }
+
+    @Test
+    func actionItemsAreJoinedRatherThanReplaced() {
+        let merged = MeetingCoordinator.unionedActionItems(
+            existing: [
+                "Ana to send the migration plan [due: 2026-09-12]",
+                "Book the load test window"
+            ],
+            proposed: [
+                "ana to send the migration plan",
+                "Draft the rollback note"
+            ]
+        )
+
+        // The existing string is kept exactly, due suffix included, and the
+        // reworded duplicate does not arrive alongside it.
+        #expect(merged == [
+            "Ana to send the migration plan [due: 2026-09-12]",
+            "Book the load test window",
+            "Draft the rollback note"
+        ])
+    }
+
+    @Test
+    func aTickedActionItemIsNotDuplicatedByItsUncheckedTwin() {
+        let merged = MeetingCoordinator.unionedActionItems(
+            existing: ["[x] Book the load test window"],
+            proposed: ["Book the load test window"]
+        )
+
+        #expect(merged == ["[x] Book the load test window"])
+    }
+
+    /// Audio kept under an earlier promise is never destroyed, and turning
+    /// retention off means this sitting's audio is not kept, so it is not
+    /// joined onto the note's file either.
+    @Test
+    func keptAudioFollowsTheRetentionSettingWithoutLosingWhatWasThere() {
+        #expect(
+            MeetingCoordinator.keptAudioPlan(
+                keepAudio: true,
+                priorAudioExists: true,
+                priorAudioIsReadable: true
+            ) == .concatenate
+        )
+        #expect(
+            MeetingCoordinator.keptAudioPlan(
+                keepAudio: false,
+                priorAudioExists: true,
+                priorAudioIsReadable: true
+            ) == .keepPriorOnly
+        )
+        #expect(
+            MeetingCoordinator.keptAudioPlan(
+                keepAudio: true,
+                priorAudioExists: false,
+                priorAudioIsReadable: false
+            ) == .adoptSession
+        )
+        #expect(
+            MeetingCoordinator.keptAudioPlan(
+                keepAudio: false,
+                priorAudioExists: false,
+                priorAudioIsReadable: false
+            ) == .none
+        )
+    }
+
+    /// A file that exists but cannot be measured used to be deleted outright.
+    /// It is now moved aside by the adopting plan, and left alone entirely
+    /// when nothing new is being kept.
+    @Test
+    func unreadablePriorAudioIsNeverSimplyDeleted() {
+        #expect(
+            MeetingCoordinator.keptAudioPlan(
+                keepAudio: true,
+                priorAudioExists: true,
+                priorAudioIsReadable: false
+            ) == .adoptSession
+        )
+        #expect(
+            MeetingCoordinator.keptAudioPlan(
+                keepAudio: false,
+                priorAudioExists: true,
+                priorAudioIsReadable: false
+            ) == .keepPriorOnly
+        )
+    }
+}
+
+/// Any failure after the capture stopped discarded the live transcript, so a
+/// Mac that could not close a file cost the user words Nook had already heard.
+@MainActor
+struct LiveCaptionRescueTests {
+    private func note() -> MeetingNote {
+        MeetingNote(
+            id: UUID(),
+            title: "Pricing rework with Ana",
+            startedAt: Date(timeIntervalSince1970: 1_000_000),
+            endedAt: Date(timeIntervalSince1970: 1_001_800),
+            sourceApp: "Manual",
+            summary: "The team reviewed pricing.",
+            transcript: [
+                TranscriptSegment(
+                    startTime: 0,
+                    duration: 30,
+                    text: "We reviewed the pricing tiers."
+                )
+            ]
+        )
+    }
+
+    @Test
+    func rescuedWordsJoinTheNoteAndSayWhereTheyCameFrom() {
+        let rescued = MeetingCoordinator.appendingLiveCaptions(
+            transcript: [
+                TranscriptSegment(
+                    startTime: 0,
+                    duration: 20,
+                    text: "The rollback plan needs a written owner."
+                )
+            ],
+            moments: [MeetingMoment(offset: 5)],
+            personalNotes: "Ask Ana about the tiers.",
+            startedAt: Date(timeIntervalSince1970: 1_002_000),
+            to: note()
+        )
+
+        #expect(rescued.transcript.count == 2)
+        // The second sitting continues the timeline rather than overwriting it.
+        #expect(rescued.transcript.last?.startTime ?? 0 >= 30)
+        #expect(rescued.moments.map(\.offset) == [35])
+        #expect(rescued.summary.contains("live captions"))
+        #expect(rescued.personalNotes.contains("Ask Ana"))
+        // The note keeps its own title and its earlier summary.
+        #expect(rescued.title == "Pricing rework with Ana")
+        #expect(rescued.summary.contains("The team reviewed pricing."))
+    }
+
+    /// A promise about the audio has to be true. The recording is kept, and
+    /// the note says so, because that is the only way a better transcript is
+    /// still reachable.
+    @Test
+    func theMarkerIsHonestAboutWhatHappened() {
+        let marker = MeetingCoordinator.liveCaptionNoteMarker
+
+        #expect(marker.contains("live captions"))
+        #expect(marker.contains("recording was kept"))
+        #expect(!marker.contains("\u{2014}"))
     }
 }
 

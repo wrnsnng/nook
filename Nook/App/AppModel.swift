@@ -131,6 +131,26 @@ final class AppModel: ObservableObject {
             }
             .store(in: &cancellables)
 
+        // A meeting that is recording or still being written up has audio in
+        // the recordings folder and no note yet, which is exactly what a
+        // stranded recording looks like. MeetingCoordinator keeps its draft
+        // private, so the phase is what can be forwarded: the pane lists
+        // nothing while a meeting is in flight rather than offering to delete
+        // the one in progress.
+        meeting.$phase
+            .removeDuplicates()
+            // The starting phase is idle, which is what this already assumes.
+            .dropFirst()
+            .sink { [weak self] phase in
+                switch phase {
+                case .recording, .processing:
+                    self?.recovery.activeRecording = .inFlight(nil)
+                default:
+                    self?.recovery.activeRecording = .none
+                }
+            }
+            .store(in: &cancellables)
+
         calendar.restoreSessionIfNeeded()
         meeting.$phase
             .removeDuplicates()
@@ -155,8 +175,15 @@ final class AppModel: ObservableObject {
             dictation.$volatileText.removeDuplicates()
         )
         .sink { [weak self] phase, level, volatileText in
-            self?.dictationIndicator.update(
-                phase: phase,
+            guard let self else { return }
+            // The indicator follows the pointer because dictation usually
+            // happens in someone else's text field. When the quick note pad is
+            // the field, it shows the same live guess inline, and two copies
+            // of the same half-heard sentence on screen at once read as a
+            // stutter rather than as feedback.
+            let padIsTheField = self.quickNote.isFrontmost
+            self.dictationIndicator.update(
+                phase: padIsTheField ? .idle : phase,
                 level: level,
                 volatileText: volatileText
             )

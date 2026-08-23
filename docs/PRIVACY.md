@@ -13,7 +13,8 @@ local meeting metadata (optional detection)
   → on-device Speech transcription
   → on-device Foundation Models summary, or deterministic fallback
   → plaintext Markdown in the selected notes folder
-  → temporary recording deleted unless audio retention is enabled
+  → temporary recording deleted; extracted audio deleted unless kept, and
+    kept audio later swept by age if audio retention is enabled
 ```
 
 Dictation is a separate path with the same property:
@@ -63,9 +64,22 @@ calendar store (which includes every account signed in under Internet
 Accounts, such as iCloud, Google, or Exchange), used in memory, and never sent
 anywhere. Nothing about events
 is logged or written into notes beyond the note title the user accepts by
-recording. Disabling the switch stops all calendar reads. Exporting an action
-item to Reminders is a separate, on-request write that asks for Reminders
-access when first used.
+recording. Disabling the switch stops all calendar reads.
+
+macOS grants calendar access as full access to events, not a read-only grant.
+EventKit does not offer a narrower scope for reading event details, so this is
+the permission macOS presents even though Nook only ever reads events: it
+never creates, edits, or deletes anything in your calendar.
+
+The pre-meeting notification shows the event's title and, when the library
+holds no earlier sitting of that series, how many people were invited. It
+never shows attendee names, locations, or descriptions.
+
+Exporting an action item to Reminders is a separate, on-request write that
+asks for full Reminders access the first time it is used. Each export creates
+one reminder in your default Reminders list, carrying only the action item's
+own text as its title and, when the item has a due date, that date at 09:00 as
+the reminder's due time. Nothing else about the note is written to Reminders.
 
 Prep briefs are assembled on this Mac from the local library when a calendar
 event with earlier sittings approaches. No new data is collected and nothing
@@ -130,6 +144,12 @@ If the wording has drifted too far — which is what happens when a model answer
 dictated speech instead of transcribing it — the user's own words are inserted
 instead.
 
+Holding the dictation shortcut with no text field focused opens the quick note
+pad instead of typing into an app. Its optional hands-free mode keeps the
+microphone open across pauses in speech, appending each recognized chunk to
+the note, until the user turns hands-free off; the same on-device recognition
+and rewrite guarantees apply to every chunk.
+
 ## Transcription and summaries
 
 Apple's Speech framework performs transcription on-device. macOS may contact
@@ -139,6 +159,37 @@ content in that asset request.
 When available, Apple's Foundation Models framework creates summaries on-device.
 When it is unavailable or fails, Nook uses deterministic local extraction.
 Nook does not send transcripts to a hosted language model.
+
+## The command-line assistant bridge (opt-in)
+
+Note actions can optionally run through a Claude Code or Codex CLI already
+installed and signed in on the Mac. This is the one exception to Nook keeping
+everything local, and it is off by default with consent required separately
+for each provider. The first action run against a given provider shows a
+warning naming what is about to happen; declining keeps the note untouched.
+
+When a run is confirmed:
+
+- only the text of the note currently being acted on is sent, never other
+  notes, recordings, or transcripts;
+- it is sent over standard input to the CLI tool's own non-interactive mode,
+  with no shell involved, so nothing in a note can be read as a command; and
+- the tool runs under the subscription the user already signed into on that
+  Mac. Nook does not read, store, or transmit any credential; there is
+  nothing for Nook to leak because it never holds one.
+
+Handling of that text once it reaches the CLI tool, and any request the tool
+makes from there, is covered by that provider's own terms and privacy policy,
+not Nook's.
+
+## Shortcuts
+
+Nook exposes a small set of Shortcuts actions: starting, pausing, or finishing
+a recording, opening the library or the latest meeting, and reading back the
+latest note's text. Each action runs only when a Shortcut invokes it. The
+note-text action hands that text to the Shortcut that asked for it, and
+anything the user's own Shortcut does with it from there, such as sending it
+to another app, is outside Nook.
 
 ## Files and retention
 
@@ -170,9 +221,17 @@ folder inside the selected notes folder while Nook processes a meeting.
   date and size, so it can be turned into a note or deleted rather than sitting
   on disk unnoticed.
 - Extracted M4A audio is deleted unless **Keep extracted meeting audio** is on.
+- Merging two notes that both kept audio combines them into one continuous
+  file. That work happens in a transient `merged-<UUID>.m4a` file inside the
+  recordings folder, which replaces the kept audio it was built from once the
+  merge succeeds and never survives past that step.
 - Cancelling processing discards the meeting's temporary files.
 - Nook attempts to clean up partial files after processing failures. Cleanup
   failures are surfaced rather than treated as success.
+
+A weekly digest note is compiled entirely from notes already saved in the
+library: counts, decisions, and highlights it quotes from them. Building one
+reads existing notes but collects nothing new and sends nothing anywhere.
 
 Plaintext files are readable by software and people with access to the selected
 folder. Depending on macOS and user configuration, Documents or another selected

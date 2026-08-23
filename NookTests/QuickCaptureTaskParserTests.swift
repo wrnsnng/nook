@@ -34,7 +34,7 @@ struct QuickCaptureTaskParserTests {
     func aWeekdayBecomesTheNextOccurrence() {
         // Spoken on a Thursday; "friday" must mean tomorrow, the 11th.
         let result = suggestion("Send Marco the report on friday")
-        #expect(result?.cueLabel == "friday")
+        #expect(result?.cueLabel == "Friday")
         #expect(day(of: result!.dueDate) == 11)
         #expect(sydney.component(.month, from: result!.dueDate) == 9)
     }
@@ -48,9 +48,9 @@ struct QuickCaptureTaskParserTests {
 
     @Test
     func todayTomorrowAndNextWeekMapDirectly() {
-        #expect(suggestion("Draft notes today")?.cueLabel == "today")
-        #expect(suggestion("Review tomorrow")?.cueLabel == "tomorrow")
-        #expect(suggestion("Plan next week")?.cueLabel == "next week")
+        #expect(suggestion("Draft notes today")?.cueLabel == "Today")
+        #expect(suggestion("Review tomorrow")?.cueLabel == "Tomorrow")
+        #expect(suggestion("Plan next week")?.cueLabel == "Next week")
         #expect(day(of: suggestion("Draft notes today")!.dueDate) == 10)
         #expect(day(of: suggestion("Review tomorrow")!.dueDate) == 11)
         #expect(day(of: suggestion("Plan next week")!.dueDate) == 17)
@@ -58,7 +58,7 @@ struct QuickCaptureTaskParserTests {
 
     @Test
     func tonightCountsAsToday() {
-        #expect(suggestion("Finish the deck tonight")?.cueLabel == "today")
+        #expect(suggestion("Finish the deck tonight")?.cueLabel == "Today")
         #expect(day(of: suggestion("Finish the deck tonight")!.dueDate) == 10)
     }
 
@@ -103,5 +103,69 @@ struct QuickCaptureTaskParserTests {
         #expect(applied.contains("- [ ] Send Marco the report friday [due: "))
         // The user's own words survive verbatim inside the line.
         #expect(applied.contains("Send Marco the report friday"))
+    }
+
+    @Test
+    func theCueIsLabelledAsSomethingAPersonWouldWrite() {
+        // The label is shown as a date of its own in the pad, where a
+        // lowercase weekday reads as a transcription slip.
+        #expect(suggestion("Call mum monday")?.cueLabel == "Monday")
+        #expect(suggestion("Ship it tonight")?.cueLabel == "Today")
+    }
+
+    @Test
+    func repeatingTheSameSentenceRewritesTheOneJustSaid() {
+        // Capture appends, so the suggestion is about the last thought. A
+        // plain substring search rewrote the first copy instead.
+        let text = """
+        Send Marco the report friday
+        Kickoff went well
+        Send Marco the report friday
+        """
+        let target = suggestion(text)!
+        let applied = QuickCaptureTaskParser.applying(target, to: text)
+        let lines = applied.split(separator: "\n").map(String.init)
+
+        #expect(lines[0] == "Send Marco the report friday")
+        #expect(lines[2].hasPrefix("- [ ] Send Marco the report friday [due: "))
+    }
+
+    @Test
+    func anAcceptedSuggestionIsNeverRewrittenIntoItself() {
+        // The accepted line still contains the original words, so a search
+        // from the end could otherwise aim inside the checklist line and
+        // nest one task in another.
+        let text = """
+        Send Marco the report friday
+        - [ ] Send Marco the report friday [due: 2026-09-11]
+        """
+        let target = suggestion(text)!
+        let applied = QuickCaptureTaskParser.applying(target, to: text)
+
+        #expect(
+            applied.hasSuffix("- [ ] Send Marco the report friday [due: 2026-09-11]")
+        )
+        #expect(!applied.contains("[due: 2026-09-11] [due:"))
+    }
+
+    @Test
+    func rememberingAMeetingIsNotATask() {
+        #expect(suggestion("We shipped the beta last friday") == nil)
+        #expect(suggestion("On monday we agreed the scope") == nil)
+        #expect(suggestion("We discussed on tuesday whether to wait") == nil)
+    }
+
+    @Test
+    func aTaskThatMentionsThePastIsStillATask() {
+        // Suppression is anchored to the cue itself. A past-tense word
+        // anywhere in the line would take real tasks away with it.
+        #expect(
+            suggestion("Send the deck we discussed by friday")?.cueLabel
+                == "Friday"
+        )
+        #expect(
+            suggestion("She asked for the notes, send them tomorrow")?.cueLabel
+                == "Tomorrow"
+        )
     }
 }

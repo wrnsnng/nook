@@ -2,9 +2,15 @@ import Foundation
 
 enum MarkdownCodec {
     static func encode(_ note: MeetingNote) -> String {
-        let keyPoints = checklist(note.keyPoints, checked: nil)
-        let decisions = checklist(note.decisions, checked: nil)
-        let actions = checklist(note.actionItems, checked: false)
+        let keyPoints = bulletList(note.keyPoints)
+        let decisions = bulletList(note.decisions)
+        // Completion is carried beside the item text rather than derived, so a
+        // rename or a personal-notes save re-encodes ticked items as ticked
+        // instead of reopening every one of them.
+        let actions = checklist(
+            note.actionItems,
+            completed: note.completedActionItems
+        )
         let personalNotes = note.personalNotes
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let transcript = transcriptLines(for: note)
@@ -62,61 +68,66 @@ enum MarkdownCodec {
             """
         }
 
-        // A digest is compiled, not recorded: it carries the period's
-        // overview and outcomes but no transcript and no personal notes.
-        if note.kind == .digest {
-            return """
-            \(frontmatter)
+        // Blocks separated by a blank line, which is exactly the layout the
+        // file has always had. Building it as a list rather than one literal
+        // is what lets preserved sections go back where their author left
+        // them instead of being appended somewhere at the end.
+        var blocks: [String] = ["# \(headingText(note.title))"]
+        var placedAnchors: Set<String> = []
 
-            # \(headingText(note.title))
-
-            ## Summary
-
-            \(note.summary.trimmingCharacters(in: .whitespacesAndNewlines))
-
-            ## Key points
-
-            \(keyPoints)
-
-            ## Decisions
-
-            \(decisions)
-
-            ## Action items
-
-            \(actions)
-            """
+        func appendPreserved(anchoredTo anchor: String?) {
+            if let anchor { placedAnchors.insert(anchor) }
+            for extra in note.extraSections where extra.anchor == anchor {
+                if let heading = extra.heading {
+                    blocks.append(heading)
+                }
+                let body = extra.body.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                )
+                if !body.isEmpty {
+                    blocks.append(body)
+                }
+            }
         }
 
-        return """
-        \(frontmatter)
+        func appendSection(_ heading: String, _ content: String) {
+            blocks.append("## \(heading)")
+            blocks.append(content)
+            appendPreserved(anchoredTo: "## \(heading.lowercased())")
+        }
 
-        # \(headingText(note.title))
+        // Anything written above the first section keeps its place too.
+        appendPreserved(anchoredTo: nil)
+        appendSection(
+            "Summary",
+            note.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        appendSection("Key points", keyPoints)
+        appendSection("Decisions", decisions)
+        appendSection("Action items", actions)
 
-        ## Summary
+        // A digest is compiled, not recorded: it carries the period's
+        // overview and outcomes but no transcript and no personal notes.
+        if note.kind != .digest {
+            appendSection(
+                "My notes",
+                personalNotes.isEmpty ? "_No personal notes._" : personalNotes
+            )
+            appendSection(
+                "Transcript",
+                transcript.isEmpty ? "_No speech was detected._" : transcript
+            )
+        }
 
-        \(note.summary.trimmingCharacters(in: .whitespacesAndNewlines))
+        // A block anchored to a heading this note does not write still has to
+        // land somewhere. Dropping it would be exactly the loss the anchor
+        // exists to prevent, so it goes at the end instead.
+        for anchor in note.extraSections.compactMap(\.anchor)
+        where !placedAnchors.contains(anchor) {
+            appendPreserved(anchoredTo: anchor)
+        }
 
-        ## Key points
-
-        \(keyPoints)
-
-        ## Decisions
-
-        \(decisions)
-
-        ## Action items
-
-        \(actions)
-
-        ## My notes
-
-        \(personalNotes.isEmpty ? "_No personal notes._" : personalNotes)
-
-        ## Transcript
-
-        \(transcript.isEmpty ? "_No speech was detected._" : transcript)
-        """
+        return ([frontmatter] + blocks).joined(separator: "\n\n")
     }
 
     static func decode(_ markdown: String, fileURL: URL? = nil) -> MeetingNote? {
@@ -136,12 +147,12 @@ enum MarkdownCodec {
         // all meetings.
         let kind = metadata["kind"]
             .flatMap { NoteKind(rawValue: unquote($0)) } ?? .default
+        let blocks = kind == .spoken ? [] : bodyBlocks(in: markdown)
         // A spoken note carries its text under the heading rather than under a
         // "## Summary" marker, so it is read back from the body.
         let summary = kind == .spoken
             ? bodyText(in: markdown)
-            : section("Summary", in: markdown)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+            : proseSection("Summary", in: blocks)
 
         // Everything in a spoken note is its prose. Parsing sections out of it
         // would pull fragments of the body into fields that then get written
@@ -159,17 +170,25 @@ enum MarkdownCodec {
             )
         }
         let keyPoints = NoteContentSanitizer.meaningfulItems(
-            listItems(in: section("Key points", in: markdown))
+            listItems(in: body(of: "Key points", in: blocks))
         )
         let decisions = NoteContentSanitizer.meaningfulItems(
-            listItems(in: section("Decisions", in: markdown))
+            listItems(in: body(of: "Decisions", in: blocks))
+        )
+        let actionChecklist = checklistItems(
+            in: body(of: "Action items", in: blocks)
         )
         let actionItems = NoteContentSanitizer.meaningfulItems(
-            listItems(in: section("Action items", in: markdown))
+            actionChecklist.map(\.text)
         )
-        let personalNotes = personalNotesContent(in: markdown)
+        // Only genuine items carry a completion bit, so a placeholder bullet
+        // can never come back as a ticked task.
+        let completedActionItems = Set(
+            actionChecklist.filter(\.isChecked).map(\.text)
+        ).intersection(actionItems)
+        let personalNotes = personalNotesContent(in: blocks)
         let transcript = TranscriptAssembler.coalesce(
-            transcriptItems(in: section("Transcript", in: markdown))
+            transcriptItems(in: body(of: "Transcript", in: blocks))
         )
         // Flagged moments only describe a recording timeline, which spoken
         // notes do not have.
@@ -196,11 +215,13 @@ enum MarkdownCodec {
             keyPoints: keyPoints,
             decisions: decisions,
             actionItems: actionItems,
+            completedActionItems: completedActionItems,
             personalNotes: personalNotes,
             transcript: transcript,
             moments: moments,
             sessions: sessions,
             audioStart: audioStart,
+            extraSections: preservedSections(in: blocks),
             fileURL: fileURL
         )
     }
@@ -332,7 +353,7 @@ struct ActionItemLine: Hashable, Sendable {
     }
 
     static func strippingDueSuffix(from text: String) -> String {
-        var result = text.replacingOccurrences(
+        let result = text.replacingOccurrences(
             of: duePattern,
             with: "",
             options: .regularExpression,
@@ -663,61 +684,199 @@ extension MarkdownCodec {
     /// field was saved back from the truncated model. Only a line whose entire
     /// content is the marker counts as a boundary.
     static func section(_ title: String, in markdown: String) -> String {
-        let marker = "## \(title)"
-        let lines = markdown.split(
-            separator: "\n",
-            omittingEmptySubsequences: false
-        )
-        guard let start = lines.firstIndex(where: {
-            $0.trimmingCharacters(in: .whitespaces)
-                .caseInsensitiveCompare(marker) == .orderedSame
-        }) else {
-            return ""
-        }
-
-        var collected: [Substring] = []
-        for line in lines[lines.index(after: start)...] {
-            if line.trimmingCharacters(in: .whitespaces).hasPrefix("## ") {
-                break
-            }
-            collected.append(line)
-        }
-        return collected.joined(separator: "\n")
+        body(of: title, in: bodyBlocks(in: markdown))
     }
 
-    /// Everything under the "My notes" heading, to the next section Nook
-    /// itself writes.
+    /// One top-level piece of a note's body: a "## " heading and the lines
+    /// beneath it, or the lines above the first heading.
+    struct BodyBlock: Hashable, Sendable {
+        /// The heading line exactly as written, or nil for the leading block.
+        let heading: String?
+        /// That heading lowercased, for `recognizedHeadings` lookups.
+        let normalizedHeading: String?
+        /// The lines under the heading, verbatim.
+        let body: String
+    }
+
+    /// Splits a note's body into its top-level blocks.
     ///
-    /// This field is user-authored free text, and people write their own
-    /// "## " sub-headings in it. Treating those as boundaries used to cut the
-    /// field short on decode, and saving from the truncated model then
-    /// deleted everything past the first one permanently. Only headings the
-    /// encoder produces act as boundaries here; anything else belongs to the
-    /// user's notes and survives the round-trip.
-    static func personalNotesContent(in markdown: String) -> String {
+    /// Frontmatter and the title are skipped by position rather than by
+    /// searching for a heading, so a file whose "# " line somebody deleted is
+    /// still read as a body instead of decoding to nothing.
+    static func bodyBlocks(in markdown: String) -> [BodyBlock] {
         let lines = markdown.split(
             separator: "\n",
             omittingEmptySubsequences: false
         )
-        guard let start = lines.firstIndex(where: {
-            $0.trimmingCharacters(in: .whitespaces)
-                .lowercased() == "## my notes"
+        var blocks: [BodyBlock] = []
+        var heading: String?
+        var buffer: [Substring] = []
+
+        func flush() {
+            let body = buffer.joined(separator: "\n")
+            let isEmptyLead = heading == nil
+                && body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if !isEmptyLead {
+                blocks.append(
+                    BodyBlock(
+                        heading: heading,
+                        normalizedHeading: heading?.lowercased(),
+                        body: body
+                    )
+                )
+            }
+            buffer = []
+        }
+
+        for line in lines[bodyLineStart(of: lines)...] {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("## ") {
+                flush()
+                heading = trimmed
+                continue
+            }
+            buffer.append(line)
+        }
+        flush()
+        return blocks
+    }
+
+    /// Where a note's body starts: past the frontmatter, then past the title.
+    private static func bodyLineStart(of lines: [Substring]) -> Int {
+        var start = lines.startIndex
+        if lines.first?.trimmingCharacters(in: .whitespaces) == "---",
+           let close = lines.dropFirst().firstIndex(where: {
+               $0.trimmingCharacters(in: .whitespaces) == "---"
+           }) {
+            start = lines.index(after: close)
+        }
+        if let title = lines[start...].firstIndex(where: {
+            !$0.trimmingCharacters(in: .whitespaces).isEmpty
+        }), lines[title].trimmingCharacters(in: .whitespaces).hasPrefix("# ") {
+            start = lines.index(after: title)
+        }
+        return start
+    }
+
+    /// The verbatim body of one named section, or "" when the file has none.
+    static func body(of title: String, in blocks: [BodyBlock]) -> String {
+        let marker = "## \(title.lowercased())"
+        return blocks.first { $0.normalizedHeading == marker }?.body ?? ""
+    }
+
+    /// A prose section's text, including any "## " sub-headings written inside
+    /// it, to the next section Nook itself writes.
+    ///
+    /// Summary and My notes are user-authored free text, and people write
+    /// their own sub-headings in them. Treating those as boundaries cut the
+    /// field short on decode, and saving from the truncated model then deleted
+    /// everything past the first one permanently. Only headings the encoder
+    /// produces act as boundaries here.
+    static func proseSection(_ title: String, in blocks: [BodyBlock]) -> String {
+        let marker = "## \(title.lowercased())"
+        guard let start = blocks.firstIndex(where: {
+            $0.normalizedHeading == marker
         }) else {
             return ""
         }
 
-        var collected: [Substring] = []
-        for line in lines[lines.index(after: start)...] {
-            let heading = line.trimmingCharacters(in: .whitespaces)
-                .lowercased()
-            if MarkdownCodec.recognizedHeadings.contains(heading) {
-                break
-            }
-            collected.append(line)
+        var pieces = [blocks[start].body]
+        for block in blocks[blocks.index(after: start)...] {
+            guard let normalized = block.normalizedHeading,
+                  !recognizedHeadings.contains(normalized)
+            else { break }
+            pieces.append(block.heading ?? "")
+            pieces.append(block.body)
         }
-        let content = collected.joined(separator: "\n")
+        return pieces.joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func personalNotesContent(in blocks: [BodyBlock]) -> String {
+        let content = proseSection("My notes", in: blocks)
         return content == "_No personal notes._" ? "" : content
+    }
+
+    /// The sections Nook models as lists, whose non-list lines would otherwise
+    /// be dropped by the list parser.
+    private static let listSectionHeadings: Set<String> = [
+        "## key points",
+        "## decisions",
+        "## action items"
+    ]
+
+    /// Everything in the body that no field models, in file order.
+    ///
+    /// Without this, a hand-written "## Agenda" and any prose sitting inside a
+    /// list section vanished the next time anything saved the whole note,
+    /// because encoding rebuilds the document from the fields alone.
+    static func preservedSections(in blocks: [BodyBlock]) -> [ExtraSection] {
+        var extras: [ExtraSection] = []
+        var anchor: String?
+        // Summary and My notes keep their own sub-headings as part of their
+        // text, so those blocks are already accounted for.
+        var anchorKeepsItsSubheadings = false
+
+        for block in blocks {
+            guard let normalized = block.normalizedHeading else {
+                let body = block.body.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                )
+                if !body.isEmpty {
+                    extras.append(
+                        ExtraSection(heading: nil, body: body, anchor: nil)
+                    )
+                }
+                continue
+            }
+            if recognizedHeadings.contains(normalized) {
+                anchor = normalized
+                anchorKeepsItsSubheadings = normalized == "## summary"
+                    || normalized == "## my notes"
+                if let loose = looseLines(in: block, under: normalized) {
+                    extras.append(
+                        ExtraSection(
+                            heading: nil,
+                            body: loose,
+                            anchor: normalized
+                        )
+                    )
+                }
+                continue
+            }
+            guard !anchorKeepsItsSubheadings else { continue }
+            extras.append(
+                ExtraSection(
+                    heading: block.heading,
+                    body: block.body,
+                    anchor: anchor
+                )
+            )
+        }
+        return extras
+    }
+
+    /// Lines inside a list section that the list parser would throw away.
+    ///
+    /// They are re-emitted below that section's items rather than at their
+    /// original offset, so a paragraph written above a list moves below it
+    /// once. Keeping the words in the wrong order beats deleting them.
+    private static func looseLines(
+        in block: BodyBlock,
+        under heading: String
+    ) -> String? {
+        guard listSectionHeadings.contains(heading) else { return nil }
+        let kept = block.body.split(
+            separator: "\n",
+            omittingEmptySubsequences: false
+        ).filter { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return !trimmed.isEmpty
+                && !trimmed.hasPrefix("- ")
+                && trimmed != "_None captured._"
+        }
+        guard !kept.isEmpty else { return nil }
+        return kept.joined(separator: "\n")
     }
 
     private static func parseFrontmatter(_ markdown: String) -> [String: String] {
@@ -743,18 +902,19 @@ extension MarkdownCodec {
     /// Reading to the end is deliberate. Stopping at the first "## " lost
     /// everything past any heading the prose itself contained, which an
     /// assistant action produced every single time it ran.
+    ///
+    /// The heading is found by position, not by searching for "\n# ". People
+    /// delete that line by hand, and a search-based read then returned nothing
+    /// for a file full of words, which the next save wrote back as an empty
+    /// note. Everything after the frontmatter is the body when there is no
+    /// title line to skip.
     private static func bodyText(in markdown: String) -> String {
-        guard let headingRange = markdown.range(
-            of: "\n# ",
-            options: []
-        ) else {
-            return ""
-        }
-        let afterHeading = markdown[headingRange.upperBound...]
-        guard let lineBreak = afterHeading.firstIndex(of: "\n") else {
-            return ""
-        }
-        let body = String(afterHeading[afterHeading.index(after: lineBreak)...])
+        let lines = markdown.split(
+            separator: "\n",
+            omittingEmptySubsequences: false
+        )
+        let body = lines[bodyLineStart(of: lines)...]
+            .joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return withoutLegacySpokenSections(body)
     }
@@ -809,14 +969,29 @@ extension MarkdownCodec {
     }
 
     private static func listItems(in section: String) -> [String] {
+        checklistItems(in: section).map(\.text)
+    }
+
+    /// List items with their checkbox state, in file order.
+    ///
+    /// The state is read here and carried on the model, because encoding
+    /// rebuilds every list from the model alone: a decode that dropped the box
+    /// meant the next whole-note save reopened every finished task.
+    private static func checklistItems(
+        in section: String
+    ) -> [(text: String, isChecked: Bool)] {
         section.split(separator: "\n").compactMap { rawLine in
             var line = rawLine.trimmingCharacters(in: .whitespaces)
             guard line.hasPrefix("- ") else { return nil }
             line.removeFirst(2)
-            if line.hasPrefix("[ ] ") || line.hasPrefix("[x] ") || line.hasPrefix("[X] ") {
+            var isChecked = false
+            if line.hasPrefix("[ ] ") {
                 line.removeFirst(4)
+            } else if line.hasPrefix("[x] ") || line.hasPrefix("[X] ") {
+                line.removeFirst(4)
+                isChecked = true
             }
-            return line
+            return (line, isChecked)
         }
     }
 
@@ -855,10 +1030,19 @@ extension MarkdownCodec {
         }
     }
 
-    private static func checklist(_ values: [String], checked: Bool?) -> String {
+    private static func bulletList(_ values: [String]) -> String {
         guard !values.isEmpty else { return "_None captured._" }
-        let prefix = checked.map { $0 ? "- [x] " : "- [ ] " } ?? "- "
-        return values.map { prefix + $0 }.joined(separator: "\n")
+        return values.map { "- " + $0 }.joined(separator: "\n")
+    }
+
+    private static func checklist(
+        _ values: [String],
+        completed: Set<String>
+    ) -> String {
+        guard !values.isEmpty else { return "_None captured._" }
+        return values
+            .map { "- [\(completed.contains($0) ? "x" : " ")] \($0)" }
+            .joined(separator: "\n")
     }
 
     private static func escape(_ value: String) -> String {

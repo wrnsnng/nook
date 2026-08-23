@@ -19,7 +19,17 @@ struct InterfaceCopyTests {
     func noUserFacingStringContainsAnEmDash() throws {
         var offenders: [String] = []
 
-        for file in try swiftFiles() {
+        let files = try swiftFiles()
+        // A scan that silently finds zero files (a moved source root, a
+        // broken path derived from #filePath) reports no offenders and
+        // passes for the wrong reason. Floor it well below the real count so
+        // the check fails loudly instead of vacuously.
+        #expect(
+            files.count > 20,
+            "Only found \(files.count) Swift files to scan; the source root is probably wrong."
+        )
+
+        for file in files {
             let name = file.lastPathComponent
             guard !Self.allowedFiles.contains(name) else { continue }
 
@@ -43,6 +53,37 @@ struct InterfaceCopyTests {
             """
             Em-dashes are not allowed in Nook's interface copy. Use a comma, a \
             colon, or two sentences instead.
+
+            \(offenders.joined(separator: "\n"))
+            """
+        )
+    }
+
+    /// The permission usage strings shown in macOS's system prompts are not
+    /// Swift source. They are authored directly as `project.yml` Info.plist
+    /// properties, so the Swift scan above never sees them.
+    @Test
+    func noPermissionUsageDescriptionContainsAnEmDash() throws {
+        let contents = try String(contentsOf: try projectYML(), encoding: .utf8)
+        var offenders: [String] = []
+
+        for (index, line) in contents.split(
+            separator: "\n",
+            omittingEmptySubsequences: false
+        ).enumerated() {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("NS"), trimmed.contains("UsageDescription:")
+            else { continue }
+            guard trimmed.contains("—") else { continue }
+            offenders.append("project.yml:\(index + 1): \(trimmed)")
+        }
+
+        #expect(
+            offenders.isEmpty,
+            """
+            Em-dashes are not allowed in Nook's interface copy, including the \
+            permission prompts declared in project.yml. Use a comma, a colon, \
+            or two sentences instead.
 
             \(offenders.joined(separator: "\n"))
             """
@@ -155,5 +196,19 @@ struct InterfaceCopyTests {
         }
         return enumerator.compactMap { $0 as? URL }
             .filter { $0.pathExtension == "swift" }
+    }
+
+    /// The repository's `project.yml`, found the same way `swiftFiles()`
+    /// finds the sources: by walking up from this file rather than assuming
+    /// a working directory.
+    private func projectYML() throws -> URL {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("project.yml")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        return url
     }
 }

@@ -6,6 +6,12 @@ options:
   xcodeVersion: "26.0"
 settings:
   base:
+    # Nook's own cobalt, so every system-drawn control agrees with the brand
+    # colour Nook draws by hand. Without it a window can show two blues at
+    # once: the user's system accent on checkboxes, insertion points and
+    # bordered buttons, and NookPalette.accent everywhere else. The values in
+    # Assets.xcassets/AccentColor.colorset match NookPalette.accent.
+    ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
     SWIFT_VERSION: "6.0"
     MACOSX_DEPLOYMENT_TARGET: "26.0"
     CODE_SIGN_STYLE: Automatic
@@ -51,6 +57,7 @@ targets:
         LSApplicationCategoryType: public.app-category.productivity
         LSMinimumSystemVersion: "$(MACOSX_DEPLOYMENT_TARGET)"
         LSUIElement: true
+        NSAccentColorName: AccentColor
         NSCalendarsFullAccessUsageDescription: "Nook reads your calendar, only on this Mac, to name meetings and remind you before they start."
         NSRemindersFullAccessUsageDescription: "Nook adds an action item to Reminders only when you ask it to."
         NSAudioCaptureUsageDescription: "Nook captures meeting audio from your Mac so it can create a private local transcript."

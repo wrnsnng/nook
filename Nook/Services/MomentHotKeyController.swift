@@ -22,7 +22,7 @@ final class MomentHotKeyController {
         guard hotKeyRef == nil else { return }
         installHandlerIfNeeded()
 
-        var eventID = EventHotKeyID(
+        let eventID = EventHotKeyID(
             signature: Self.signature,
             id: 1
         )
@@ -57,8 +57,8 @@ final class MomentHotKeyController {
             eventClass: OSType(kEventClassKeyboard),
             eventKind: UInt32(kEventHotKeyPressed)
         )
-        let callback: EventHandlerUPP = { _, event, userData in
-            guard let event, let userData else { return noErr }
+        let callback: EventHandlerUPP = { _, _, userData in
+            guard let userData else { return noErr }
             let controller = Unmanaged<MomentHotKeyController>
                 .fromOpaque(userData)
                 .takeUnretainedValue()

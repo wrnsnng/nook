@@ -87,18 +87,39 @@ final class MarkdownStore: ObservableObject {
     func save(_ note: MeetingNote) throws -> MeetingNote {
         ensureDirectory()
         var saved = note
-        let destination = note.fileURL ?? availableDestination(for: note)
-        try MarkdownCodec.encode(note).write(to: destination, atomically: true, encoding: .utf8)
+        let known = notes.first(where: { $0.id == note.id })
+        // A note keeps the file it was written to. Deriving the destination
+        // from the title again meant a caller that had not held on to the URL,
+        // and a title that grew as words were dictated, scattered one note
+        // across several files. The filename is an address, not a label: a
+        // rename deliberately does not move the file.
+        let destination = note.fileURL
+            ?? known?.fileURL
+            ?? availableDestination(for: note)
+        try refuseIfChangedElsewhere(
+            destination,
+            lastSeen: note.fileModified ?? known?.fileModified
+        )
+
+        let markdown = MarkdownCodec.encode(note)
+        try refuseIfItWouldEmpty(destination, with: note)
+        try markdown.write(to: destination, atomically: true, encoding: .utf8)
         protectSensitiveFile(at: destination)
         saved.fileURL = destination
+        saved.fileModified = Self.modificationDate(of: destination)
         invalidateReloadSnapshot()
         upsert(saved)
         lastError = nil
         return saved
     }
 
-    /// Updates personal notes from the freshest in-memory copy and verifies the
-    /// Markdown round-trip before the UI reports success.
+    /// Updates personal notes from the freshest in-memory copy, checking the
+    /// Markdown round-trip before anything is written and reading the file back
+    /// afterwards.
+    ///
+    /// The order matters for what the failure can honestly say. A round-trip
+    /// checked only after the write left the user reading that their file was
+    /// untouched at the exact moment it had just been rewritten.
     @discardableResult
     func updatePersonalNotes(
         _ personalNotes: String,
@@ -108,6 +129,14 @@ final class MarkdownStore: ObservableObject {
         updated.personalNotes = personalNotes.trimmingCharacters(
             in: .whitespacesAndNewlines
         )
+
+        guard
+            let rehearsed = MarkdownCodec.decode(MarkdownCodec.encode(updated)),
+            rehearsed.personalNotes == updated.personalNotes
+        else {
+            throw MarkdownStoreError.writeVerificationFailed
+        }
+
         let saved = try save(updated)
 
         guard
@@ -122,9 +151,58 @@ final class MarkdownStore: ObservableObject {
             ),
             persisted.personalNotes == saved.personalNotes
         else {
-            throw MarkdownStoreError.writeVerificationFailed
+            throw MarkdownStoreError.saveReadBackFailed
         }
         return saved
+    }
+
+    /// Refuses a whole-note save when the file changed after Nook last read
+    /// it, and reloads so the library shows what is really there.
+    ///
+    /// Nook is not the only writer of these files. Encoding rebuilds the whole
+    /// document from a model, so writing over an edit made elsewhere deletes it
+    /// completely rather than merging it.
+    private func refuseIfChangedElsewhere(
+        _ destination: URL,
+        lastSeen: Date?
+    ) throws {
+        guard let lastSeen,
+              let current = Self.modificationDate(of: destination),
+              // Second granularity on some volumes, so the same tolerance the
+              // Markdown editor uses.
+              current.timeIntervalSince(lastSeen) > 1
+        else { return }
+        reload()
+        lastError = MarkdownStoreError.fileChangedElsewhere.errorDescription
+        throw MarkdownStoreError.fileChangedElsewhere
+    }
+
+    /// Refuses a save that would replace a file's contents with nothing.
+    ///
+    /// A note with no content is a legitimate thing to create, but never a
+    /// legitimate thing to turn a written file into. Whenever those two meet,
+    /// the cause is a decode that failed to find the body, so the file wins.
+    private func refuseIfItWouldEmpty(
+        _ destination: URL,
+        with note: MeetingNote
+    ) throws {
+        guard note.hasNoContent,
+              let existing = try? String(contentsOf: destination, encoding: .utf8),
+              !existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let decoded = MarkdownCodec.decode(existing),
+              !decoded.hasNoContent
+        else { return }
+        lastError = MarkdownStoreError.wouldEmptyNote.errorDescription
+        throw MarkdownStoreError.wouldEmptyNote
+    }
+
+    private static func modificationDate(of url: URL) -> Date? {
+        guard let attributes = try? FileManager.default.attributesOfItem(
+            atPath: url.path
+        ) else {
+            return nil
+        }
+        return attributes[.modificationDate] as? Date
     }
 
     @discardableResult
@@ -177,6 +255,9 @@ final class MarkdownStore: ObservableObject {
         try markdown.write(to: url, atomically: true, encoding: .utf8)
         protectSensitiveFile(at: url)
         decoded.fileURL = url
+        // Our own write is not an external change, so the whole-note save path
+        // must see this timestamp as the one it last read.
+        decoded.fileModified = Self.modificationDate(of: url)
         invalidateReloadSnapshot()
         upsert(decoded)
         loadIssues.removeAll { $0.fileURL == url }
@@ -413,7 +494,7 @@ final class MarkdownStore: ObservableObject {
 
                 do {
                     let markdown = try String(contentsOf: url, encoding: .utf8)
-                    guard let note = MarkdownCodec.decode(
+                    guard var note = MarkdownCodec.decode(
                         markdown,
                         fileURL: url
                     ) else {
@@ -425,6 +506,10 @@ final class MarkdownStore: ObservableObject {
                         )
                         continue
                     }
+                    // Remembering what the file looked like when it was read is
+                    // what lets a later whole-note save notice somebody else
+                    // edited it in between.
+                    note.fileModified = modified
                     if let modified {
                         cache?.store(note, for: url, modified: modified)
                     }
@@ -453,13 +538,22 @@ final class MarkdownStore: ObservableObject {
 enum MarkdownStoreError: LocalizedError {
     case invalidDocument
     case writeVerificationFailed
+    case saveReadBackFailed
+    case fileChangedElsewhere
+    case wouldEmptyNote
 
     var errorDescription: String? {
         switch self {
         case .invalidDocument:
             "The Markdown frontmatter is missing or invalid. Your changes haven’t been written."
         case .writeVerificationFailed:
-            "Nook couldn’t verify the saved note. Your Markdown file was left untouched."
+            "Nook couldn’t verify these changes would survive the Markdown round-trip, so your file was left untouched."
+        case .saveReadBackFailed:
+            "Nook saved this note but couldn’t read it back. Check the file before making more changes."
+        case .fileChangedElsewhere:
+            "This file changed outside Nook, so it was reloaded instead of overwritten. Try your change again."
+        case .wouldEmptyNote:
+            "Saving would have emptied this note, so nothing was written. Open the file to check it."
         }
     }
 }

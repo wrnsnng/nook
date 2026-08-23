@@ -58,8 +58,11 @@ enum DigestBuilder {
             )
         }
 
+        let meetingCountLabel = covered.count == 1
+            ? "1 meeting"
+            : "\(covered.count) meetings"
         var summary = """
-            \(covered.count) meetings between \
+            \(meetingCountLabel) between \
             \(window.start.formatted(date: .abbreviated, time: .omitted)) and \
             \(window.end.formatted(date: .abbreviated, time: .omitted)). \
             \(stats.joined(separator: ", ")).

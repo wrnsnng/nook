@@ -90,6 +90,12 @@ enum MeetingTerminationState: Equatable, Sendable {
     case processing
 }
 
+/// One part of a long summary, out of the parts in the current round.
+struct SummaryProgress: Equatable, Sendable {
+    let part: Int
+    let total: Int
+}
+
 @MainActor
 final class MeetingCoordinator: ObservableObject {
     @Published private(set) var phase: MeetingPhase = .idle
@@ -98,6 +104,17 @@ final class MeetingCoordinator: ObservableObject {
     @Published private(set) var liveInsights: MeetingInsights?
     @Published private(set) var liveSummaryIsRefreshing = false
     @Published private(set) var liveSummaryUpdatedAt: Date?
+    /// How far the final summary has got through a long transcript, while it
+    /// is being condensed in parts.
+    @Published private(set) var summaryProgress: SummaryProgress?
+    /// The meeting currently being recorded or processed, named by the
+    /// identifier its recording files carry.
+    ///
+    /// The recovery list offers recordings that belong to no saved note, and
+    /// an in-flight recording matches that description for its whole life.
+    /// Publishing the identifier lets that list leave it alone rather than
+    /// inviting somebody to recover a meeting still being written.
+    @Published private(set) var activeRecordingID: UUID?
     @Published var liveNotes = ""
     @Published private(set) var liveNotesDetached = false
     @Published private(set) var audioLevel = 0.0
@@ -138,7 +155,15 @@ final class MeetingCoordinator: ObservableObject {
     private let transcriber = TranscriptionService()
     private let liveTranscriber = LiveTranscriptionService()
     private let summarizer = SummaryService()
-    private var activeDraft: MeetingDraft?
+    /// Every path that starts, finishes, fails, or discards a meeting already
+    /// assigns this. Deriving the published identifier here rather than at
+    /// each of those sites is what keeps the two from drifting apart.
+    private var activeDraft: MeetingDraft? {
+        didSet {
+            guard activeRecordingID != activeDraft?.id else { return }
+            activeRecordingID = activeDraft?.id
+        }
+    }
     private var elapsedTask: Task<Void, Never>?
     private var meterTask: Task<Void, Never>?
     private var processingTask: Task<Void, Never>?
@@ -152,6 +177,10 @@ final class MeetingCoordinator: ObservableObject {
     private var liveTranscriptIsComplete = false
     private var lastSummarizedSegmentCount = 0
     private var lastSummaryAt = Date.distantPast
+    /// A refresh the user asked for. Held rather than acted on immediately so
+    /// it survives until the pass already running finishes.
+    private var liveSummaryForceRequested = false
+    private var lastStallCheckAt = Date.distantPast
     private var pendingStartRequest: PendingStartRequest?
     private var accumulatedElapsed: TimeInterval = 0
     private var activeElapsedStartedAt: Date?
@@ -261,6 +290,23 @@ final class MeetingCoordinator: ObservableObject {
         processingTask = Task { [weak self] in
             await self?.finishRecording()
         }
+    }
+
+    /// The sentence shown under the current processing step.
+    ///
+    /// Long meetings are condensed in parts, and several minutes of
+    /// "Distilling the conversation" with nothing moving reads as a hang, so
+    /// the part counter is appended here. Both the panel and the workspace
+    /// read this one property, which is what keeps a step from being worded
+    /// two ways.
+    var processingDetail: String {
+        guard case .processing(let step) = phase else { return "" }
+        guard step == .summarizing, let summaryProgress else {
+            return step.displaySentence
+        }
+        return step.displaySentence
+            + " Working through part \(summaryProgress.part)"
+            + " of \(summaryProgress.total)."
     }
 
     var terminationState: MeetingTerminationState {
@@ -671,6 +717,9 @@ final class MeetingCoordinator: ObservableObject {
         liveNotes = ""
         lastSummarizedSegmentCount = 0
         lastSummaryAt = .distantPast
+        liveSummaryForceRequested = false
+        lastStallCheckAt = .distantPast
+        summaryProgress = nil
         liveCaptionNotice = nil
         liveTranscriptIsComplete = false
         isPaused = false
@@ -787,6 +836,63 @@ final class MeetingCoordinator: ObservableObject {
     /// shorter deadline than it gets during ordinary use.
     private var isTerminating = false
 
+    /// How long the final summary is allowed to take.
+    ///
+    /// It had no bound at all, so a wedged on-device model held the save, and
+    /// therefore a quit, open indefinitely. The budget scales with the
+    /// transcript because a long meeting legitimately needs several condensing
+    /// rounds, and collapses on quit because nobody waits minutes for an
+    /// application to close.
+    static func summaryDeadline(
+        forTranscriptCharacters characters: Int,
+        isTerminating: Bool
+    ) -> TimeInterval {
+        if isTerminating { return summaryQuitDeadline }
+        return min(900, max(90, 60 + Double(characters) / 200))
+    }
+
+    static let summaryQuitDeadline: TimeInterval = 25
+
+    /// Summarizes within a bound, falling back to the deterministic insights
+    /// and saying so when the deadline wins.
+    private func summarizedWithinDeadline(
+        transcript: [TranscriptSegment],
+        fallbackTitle: String
+    ) async -> SummaryResult {
+        let characters = transcript.reduce(0) { $0 + $1.text.count }
+        let seconds = Self.summaryDeadline(
+            forTranscriptCharacters: characters,
+            isTerminating: isTerminating
+        )
+        summaryProgress = nil
+        let result = await withDeadline(seconds: seconds) {
+            [weak self, summarizer] () -> SummaryResult in
+            await summarizer.summarizeReportingFailure(
+                transcript: transcript,
+                fallbackTitle: fallbackTitle,
+                onProgress: { part, total in
+                    await MainActor.run {
+                        self?.summaryProgress = SummaryProgress(
+                            part: part,
+                            total: total
+                        )
+                    }
+                }
+            )
+        }
+        summaryProgress = nil
+        if let result { return result }
+        NookEventLog.write(.summaryTimedOut)
+        return SummaryResult(
+            insights: SummaryService.fallbackInsights(
+                transcript: transcript,
+                fallbackTitle: fallbackTitle,
+                reason: .timedOut
+            ),
+            failure: .timedOut
+        )
+    }
+
     private func finishRecording() async {
         guard let draft = activeDraft else {
             phase = .failed("Nook lost track of the active meeting.")
@@ -801,6 +907,10 @@ final class MeetingCoordinator: ObservableObject {
             in: .whitespacesAndNewlines
         )
         var recordingURLs: [URL] = []
+        // Kept outside the do block because a failure anywhere after this
+        // point still has to be able to save them: they are the only
+        // transcript of the meeting that survives a finalize that went wrong.
+        var liveSegments: [TranscriptSegment] = []
         // Total unpaused seconds of captured audio, as of the moment stop was
         // requested. The live transcript timeline only advances with delivered
         // audio (ingest is gated off while paused), so this is the reference
@@ -818,7 +928,7 @@ final class MeetingCoordinator: ObservableObject {
                     ? CaptureService.quitFinalizationTimeout
                     : nil
             )
-            let liveSegments = await liveTranscriber.stop()
+            liveSegments = await liveTranscriber.stop()
             try Task.checkCancellation()
             phase = .processing(.preparing)
             try await AudioExtractor.extractAudio(
@@ -865,10 +975,10 @@ final class MeetingCoordinator: ObservableObject {
             }
 
             phase = .processing(.summarizing)
-            let insights = await summarizer.summarize(
+            let insights = await summarizedWithinDeadline(
                 transcript: transcript,
                 fallbackTitle: draft.title
-            )
+            ).insights
             try Task.checkCancellation()
 
             phase = .processing(.saving)
@@ -911,7 +1021,24 @@ final class MeetingCoordinator: ObservableObject {
             liveSummaryTask?.cancel()
             liveSummaryTask = nil
             liveSummaryIsRefreshing = false
-            await liveTranscriber.cancel()
+            summaryProgress = nil
+            // The live captions are the only transcript that survives a
+            // failed finalize, so the track is stopped for its words rather
+            // than cancelled. Cancelling threw an hour of already-recognised
+            // conversation away and left the user a failure notice for a
+            // meeting Nook had, in fact, heard.
+            if liveSegments.isEmpty, liveTranscriber.isRunning {
+                liveSegments = await liveTranscriber.stop()
+            } else if liveTranscriber.isRunning {
+                await liveTranscriber.cancel()
+            }
+            if await saveLiveCaptionNote(
+                draft: draft,
+                segments: liveSegments,
+                personalNotes: personalNotes
+            ) {
+                return
+            }
             // The recording is deliberately kept.
             //
             // Deleting it here treated every failure as though the audio were
@@ -943,6 +1070,126 @@ final class MeetingCoordinator: ObservableObject {
         }
     }
 
+    /// What a note says when its words came from the live captions rather
+    /// than from the recording Nook could not finish.
+    static let liveCaptionNoteMarker = """
+        This note was built from the live captions. Nook could not finish the \
+        recording, so the saved audio was not used and words near the end may \
+        be missing. The recording was kept, so a full transcript can still be \
+        recovered from it.
+        """
+
+    /// Saves what the live captions heard when finalizing the recording
+    /// failed. Returns false when there was nothing worth saving, or saving
+    /// it also failed.
+    ///
+    /// Everything up to the failure is real conversation Nook already
+    /// recognised. Discarding it because the capture file would not close, or
+    /// because the saved-audio pass threw, is the worst outcome available: the
+    /// meeting is over, and those words are the only copy of it left. The
+    /// recording still stays on disk, so a better transcript remains
+    /// recoverable.
+    private func saveLiveCaptionNote(
+        draft: MeetingDraft,
+        segments: [TranscriptSegment],
+        personalNotes: String
+    ) async -> Bool {
+        let transcript = TranscriptAssembler.coalesce(segments)
+        guard transcript.reduce(0, { $0 + $1.text.count }) >= 40 else {
+            return false
+        }
+
+        phase = .processing(.summarizing)
+        let insights = await summarizedWithinDeadline(
+            transcript: transcript,
+            fallbackTitle: draft.title
+        ).insights
+        phase = .processing(.saving)
+
+        do {
+            let saved: MeetingNote
+            if let attachedNoteID = draft.attachedNoteID,
+               let target = store.notes.first(where: { $0.id == attachedNoteID }) {
+                saved = try store.save(
+                    Self.appendingLiveCaptions(
+                        transcript: transcript,
+                        moments: liveMoments,
+                        personalNotes: personalNotes,
+                        startedAt: draft.startedAt,
+                        to: target
+                    )
+                )
+            } else {
+                // A fresh identifier on purpose: the recording keeps the
+                // draft's, and the recovery list only offers recordings whose
+                // identifier belongs to no saved note. Reusing it here would
+                // save the words and quietly hide the audio that could still
+                // produce better ones.
+                saved = try store.save(
+                    MeetingNote(
+                        id: UUID(),
+                        title: insights.title,
+                        startedAt: draft.startedAt,
+                        endedAt: Date(),
+                        sourceApp: draft.sourceApp,
+                        summary: Self.liveCaptionNoteMarker
+                            + "\n\n"
+                            + insights.summary,
+                        keyPoints: insights.keyPoints,
+                        decisions: insights.decisions,
+                        actionItems: insights.actionItems,
+                        personalNotes: personalNotes,
+                        transcript: transcript,
+                        moments: liveMoments
+                    )
+                )
+            }
+            NookEventLog.write(.meetingSavedFromLiveCaptions)
+            completeSuccessfulProcessing(
+                cleanupFailures: [],
+                title: saved.title
+            )
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Joins live-caption material onto an existing note without touching its
+    /// audio, which is exactly what could not be finalized.
+    static func appendingLiveCaptions(
+        transcript: [TranscriptSegment],
+        moments: [MeetingMoment],
+        personalNotes: String,
+        startedAt: Date,
+        to target: MeetingNote
+    ) -> MeetingNote {
+        var promoted = target
+        NoteSessionAppend.promoteSpokenToMeeting(&promoted)
+        var updated = NoteSessionAppend.appending(
+            material: NoteSessionAppend.Material(
+                startedAt: startedAt,
+                endedAt: Date(),
+                transcript: transcript,
+                moments: moments,
+                personalNotes: personalNotes
+            ),
+            to: promoted,
+            offset: NoteSessionAppend.continuationOffset(
+                for: promoted,
+                priorAudioDuration: nil
+            ),
+            audioStart: promoted.audioStart
+        )
+        let existing = updated.summary.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        updated.summary = existing.isEmpty
+            ? liveCaptionNoteMarker
+            : existing + "\n\n" + liveCaptionNoteMarker
+        return updated
+    }
+
     /// Shared tail of every successful finalize, whether the recording
     /// created a note or joined one.
     private func completeSuccessfulProcessing(
@@ -961,6 +1208,7 @@ final class MeetingCoordinator: ObservableObject {
         liveNotes = ""
         liveInsights = nil
         liveSummaryUpdatedAt = nil
+        summaryProgress = nil
         topPanelHidden = false
         processingCancellationRequested = false
         stopRequestedDuringPauseTransition = false
@@ -976,13 +1224,46 @@ final class MeetingCoordinator: ObservableObject {
         onPresentationRequested?()
     }
 
+    /// What happens to the note's kept audio when a sitting is appended.
+    enum KeptAudioPlan: Equatable, Sendable {
+        /// No audio is kept for this note, and none is being added.
+        case none
+        /// This sitting's audio becomes the note's kept file.
+        case adoptSession
+        /// This sitting's audio is joined onto the file already there.
+        case concatenate
+        /// Earlier audio stays exactly as it is, and this sitting adds none.
+        case keepPriorOnly
+    }
+
+    /// Decides what to do with audio when a sitting joins a note.
+    ///
+    /// Two rules make this less obvious than it looks. Audio kept under an
+    /// earlier promise is never destroyed, including a file that exists but
+    /// cannot be measured, which the previous shape deleted outright. And
+    /// turning audio retention off means this sitting's audio is not kept,
+    /// so it is not concatenated onto the note's file either.
+    static func keptAudioPlan(
+        keepAudio: Bool,
+        priorAudioExists: Bool,
+        priorAudioIsReadable: Bool
+    ) -> KeptAudioPlan {
+        let usablePrior = priorAudioExists && priorAudioIsReadable
+        if usablePrior {
+            return keepAudio ? .concatenate : .keepPriorOnly
+        }
+        if keepAudio { return .adoptSession }
+        return priorAudioExists ? .keepPriorOnly : .none
+    }
+
     /// Finishes a recording that was started from an existing note.
     ///
     /// The sitting joins the note on one continuous timeline: kept audio is
     /// concatenated onto what was there (or becomes the note's first audio),
-    /// transcript offsets continue where the note left off, and the summary
-    /// and title are regenerated over the combined material. Personal notes,
-    /// including everything typed during this sitting, are never rewritten.
+    /// transcript offsets continue where the note left off, and the summary is
+    /// regenerated over the combined material. Personal notes, including
+    /// everything typed during this sitting, are never rewritten. Neither is a
+    /// title the user chose, nor an action item they are still tracking.
     private func appendFinalizedSession(
         to target: MeetingNote,
         draft: MeetingDraft,
@@ -993,7 +1274,9 @@ final class MeetingCoordinator: ObservableObject {
         let recordingsDirectory = store.recordingsDirectory()
         let priorAudioURL = recordingsDirectory
             .appendingPathComponent("\(target.id.uuidString).m4a")
-        let priorAudioExists = FileManager.default.fileExists(atPath: priorAudioURL.path)
+        let priorAudioExists = FileManager.default.fileExists(
+            atPath: priorAudioURL.path
+        )
         let priorAudioDuration = priorAudioExists
             ? await NoteSessionAppend.audioDuration(of: priorAudioURL)
             : nil
@@ -1001,6 +1284,11 @@ final class MeetingCoordinator: ObservableObject {
         // safely either, so it is treated like absent audio rather than
         // trusted with the timeline.
         let hadUsablePriorAudio = priorAudioExists && priorAudioDuration != nil
+        let plan = Self.keptAudioPlan(
+            keepAudio: keepAudio,
+            priorAudioExists: priorAudioExists,
+            priorAudioIsReadable: priorAudioDuration != nil
+        )
 
         // Audio time is the clock moments play back against, so when kept
         // audio exists its length decides where this sitting begins. Any gap
@@ -1024,38 +1312,12 @@ final class MeetingCoordinator: ObservableObject {
                 in: .whitespacesAndNewlines
             )
         )
-        // Without usable earlier audio this sitting's own audio becomes the
-        // note's kept file, starting mid-timeline at exactly the offset the
-        // transcript continued from.
-        let combinedAudioStart = hadUsablePriorAudio ? target.audioStart : offset
-
-        phase = .processing(.preparing)
-        var preserve: Set<URL> = []
-        if keepAudio || hadUsablePriorAudio {
-            let finalAudioURL = recordingsDirectory
-                .appendingPathComponent("\(target.id.uuidString).m4a")
-            if hadUsablePriorAudio {
-                let combinedTemporaryURL = recordingsDirectory
-                    .appendingPathComponent("combined-\(draft.id.uuidString).m4a")
-                try await AudioExtractor.extractAudio(
-                    from: [priorAudioURL, sessionAudioURL],
-                    to: combinedTemporaryURL
-                )
-                try FileManager.default.replaceItemAt(
-                    finalAudioURL,
-                    withItemAt: combinedTemporaryURL
-                )
-            } else {
-                try? FileManager.default.removeItem(at: finalAudioURL)
-                try FileManager.default.moveItem(
-                    at: sessionAudioURL,
-                    to: finalAudioURL
-                )
-            }
-            // Previously kept audio survives even when keeping new audio is
-            // switched off; it was kept under an earlier promise.
-            preserve.insert(finalAudioURL)
-        }
+        // Only an adopted session file starts the note's audio partway along
+        // the timeline. Every other plan leaves the note's audio, and so its
+        // start, exactly where it already was.
+        let combinedAudioStart = plan == .adoptSession
+            ? offset
+            : target.audioStart
 
         phase = .processing(.summarizing)
         let appended = NoteSessionAppend.appending(
@@ -1064,7 +1326,7 @@ final class MeetingCoordinator: ObservableObject {
             offset: offset,
             audioStart: combinedAudioStart
         )
-        let insights = await summarizer.summarize(
+        let result = await summarizedWithinDeadline(
             transcript: appended.transcript,
             fallbackTitle: target.title.isEmpty ? draft.title : target.title
         )
@@ -1072,19 +1334,154 @@ final class MeetingCoordinator: ObservableObject {
 
         phase = .processing(.saving)
         var updated = appended
-        updated.title = insights.title
-        updated.summary = insights.summary
-        updated.keyPoints = insights.keyPoints
-        updated.decisions = insights.decisions
-        updated.actionItems = insights.actionItems
+        updated.title = Self.mergedTitle(
+            existing: promotedTarget.title,
+            proposed: result.insights.title
+        )
+        // A fallback summary is Nook explaining that it has nothing, which is
+        // strictly worse than the summary the note already had.
+        if !result.usedFallback {
+            updated.summary = result.insights.summary
+            updated.keyPoints = result.insights.keyPoints
+            updated.decisions = result.insights.decisions
+        } else if updated.summary.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        ).isEmpty {
+            updated.summary = result.insights.summary
+        }
+        updated.actionItems = Self.unionedActionItems(
+            existing: appended.actionItems,
+            proposed: result.insights.actionItems
+        )
         let saved = try store.save(updated)
+
+        // Every irreversible move happens after the note is safely on disk.
+        // Rewriting the note's audio first meant a failed save left the file
+        // describing a sitting no note mentioned.
+        var preserve: Set<URL> = []
+        var audioFailures: [URL] = []
+        do {
+            try await placeKeptAudio(
+                plan,
+                priorAudioURL: priorAudioURL,
+                sessionAudioURL: sessionAudioURL,
+                asideURL: recordingsDirectory.appendingPathComponent(
+                    "\(target.id.uuidString)-unreadable-\(draft.id.uuidString).m4a"
+                )
+            )
+            if plan != .none { preserve.insert(priorAudioURL) }
+        } catch {
+            // The note is already saved, so audio that would not move is
+            // reported like any other file the user may have to handle, not
+            // turned into a failed meeting. It is also kept rather than swept
+            // up, because keeping it was the point.
+            audioFailures.append(sessionAudioURL)
+            if keepAudio { preserve.insert(sessionAudioURL) }
+        }
 
         let cleanupFailures = RecordingArtifactCleanup.removeArtifacts(
             for: draft,
             additionalURLs: recordingURLs + [sessionAudioURL],
             preserving: preserve
         )
-        return (saved, cleanupFailures)
+        return (saved, audioFailures + cleanupFailures)
+    }
+
+    private func placeKeptAudio(
+        _ plan: KeptAudioPlan,
+        priorAudioURL: URL,
+        sessionAudioURL: URL,
+        asideURL: URL
+    ) async throws {
+        let manager = FileManager.default
+        switch plan {
+        case .none, .keepPriorOnly:
+            return
+        case .concatenate:
+            let combinedTemporaryURL = priorAudioURL
+                .deletingLastPathComponent()
+                .appendingPathComponent(
+                    "combined-\(UUID().uuidString).m4a"
+                )
+            do {
+                try await AudioExtractor.extractAudio(
+                    from: [priorAudioURL, sessionAudioURL],
+                    to: combinedTemporaryURL
+                )
+                _ = try manager.replaceItemAt(
+                    priorAudioURL,
+                    withItemAt: combinedTemporaryURL
+                )
+            } catch {
+                try? manager.removeItem(at: combinedTemporaryURL)
+                throw error
+            }
+        case .adoptSession:
+            // An unreadable file is moved aside rather than deleted. Its stem
+            // is deliberately not a bare identifier, so neither the recovery
+            // scan nor artifact cleanup mistakes it for a loose recording.
+            if manager.fileExists(atPath: priorAudioURL.path) {
+                try manager.moveItem(at: priorAudioURL, to: asideURL)
+            }
+            try manager.moveItem(at: sessionAudioURL, to: priorAudioURL)
+        }
+    }
+
+    /// Whether a title is Nook's own placeholder rather than something the
+    /// user named or accepted.
+    ///
+    /// Compared against no fallback on purpose. Recording into a note starts
+    /// the draft with that note's title, so passing the draft's title here
+    /// would call every title a placeholder and quietly overwrite names people
+    /// chose.
+    static func isPlaceholderTitle(_ title: String) -> Bool {
+        MeetingTitleGenerator.isFallbackTitle(title, fallbackTitle: "")
+    }
+
+    /// Keeps the title the note already has unless it was never really named.
+    static func mergedTitle(existing: String, proposed: String) -> String {
+        guard isPlaceholderTitle(existing) else { return existing }
+        return isPlaceholderTitle(proposed) ? existing : proposed
+    }
+
+    /// Joins newly generated actions onto the ones already in the note.
+    ///
+    /// Replacing them lost work: an item the user had edited, dated, or ticked
+    /// off simply vanished because a second sitting did not mention it again.
+    /// Existing strings are kept byte for byte, including any `[due: ...]`
+    /// suffix and checkbox state, and only genuinely new items are added.
+    static func unionedActionItems(
+        existing: [String],
+        proposed: [String]
+    ) -> [String] {
+        var seen: Set<String> = []
+        var result: [String] = []
+        for item in existing + proposed {
+            let trimmed = item.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let key = actionItemKey(trimmed)
+            guard !key.isEmpty, seen.insert(key).inserted else { continue }
+            result.append(trimmed)
+        }
+        return result
+    }
+
+    /// Matches two wordings of the same commitment: the due suffix and the
+    /// checkbox marker are Nook's bookkeeping, not part of what was said.
+    private static func actionItemKey(_ item: String) -> String {
+        item
+            .replacingOccurrences(
+                of: #"^\s*(?:[-*]\s*)?(?:\[[ xX]\])?\s*"#,
+                with: "",
+                options: .regularExpression
+            )
+            .replacingOccurrences(
+                of: #"\s*\[due:\s*\d{4}-\d{2}-\d{2}\]\s*"#,
+                with: "",
+                options: .regularExpression
+            )
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
     }
 
     /// Tells the user where the audio went when processing could not finish.
@@ -1110,8 +1507,27 @@ final class MeetingCoordinator: ObservableObject {
                     max($0, $1.startTime + $1.duration)
                 }
             }
-        return coverageEndBySource.values.allSatisfy {
+        guard coverageEndBySource.values.allSatisfy({
             $0 >= recordedSeconds * 0.75
+        }) else {
+            return false
+        }
+        // The ratio alone still accepts a track that stalls inside the last
+        // quarter, and a quarter of a two hour meeting is half an hour of
+        // conversation missing.
+        //
+        // The tail window is measured against the track that lasted longest,
+        // not against the recording. Everyone falling quiet at the end is
+        // ordinary and ends both tracks together, so measuring from the
+        // recording would condemn every meeting with a long closing silence.
+        // One recognizer dying while the other keeps producing does not look
+        // like that, and is what this catches.
+        guard let latestEnd = coverageEndBySource.values.max() else {
+            return true
+        }
+        let tailWindow = max(90, recordedSeconds * 0.10)
+        return coverageEndBySource.values.allSatisfy {
+            $0 >= latestEnd - tailWindow
         }
     }
 
@@ -1209,51 +1625,134 @@ final class MeetingCoordinator: ObservableObject {
 
     private func receiveLiveTranscript(_ state: LiveTranscriptState) {
         liveTranscript = state
+        noteStalledLiveTrack(in: state)
         scheduleLiveSummary(force: false)
     }
 
+    /// How long the live summary waits between passes.
+    ///
+    /// Each refresh costs more as the meeting grows while adding less, so the
+    /// interval backs off. Without it a long meeting spends most of its time
+    /// summarizing itself and the panel never settles.
+    static func liveSummaryInterval(forSegmentCount count: Int) -> TimeInterval {
+        switch count {
+        case ..<60: 28
+        case ..<200: 60
+        case ..<500: 120
+        default: 240
+        }
+    }
+
+    /// Starts a live summary pass, or queues one behind the pass already
+    /// running.
+    ///
+    /// Every caption publish used to cancel the in-flight pass and restart its
+    /// delay, so on a meeting where anybody was talking the summary never
+    /// completed and `liveSummaryIsRefreshing`, set before the pass and
+    /// cleared only on completion, span for the entire meeting. A running pass
+    /// is now left alone; new material simply asks for the next one.
     private func scheduleLiveSummary(force: Bool) {
         guard phase.isRecording else { return }
+        if force { liveSummaryForceRequested = true }
         let segments = liveTranscript.segments
-        guard !segments.isEmpty else { return }
+        guard !segments.isEmpty, liveSummaryTask == nil else { return }
 
         let enoughNewMaterial = segments.count >= lastSummarizedSegmentCount + 4
-        let enoughTimePassed = Date().timeIntervalSince(lastSummaryAt) >= 28
-        guard force || (enoughNewMaterial && enoughTimePassed) else { return }
+        let enoughTimePassed = Date().timeIntervalSince(lastSummaryAt)
+            >= Self.liveSummaryInterval(forSegmentCount: segments.count)
+        guard liveSummaryForceRequested
+            || (enoughNewMaterial && enoughTimePassed)
+        else {
+            return
+        }
 
-        liveSummaryTask?.cancel()
-        liveSummaryIsRefreshing = true
+        let isForced = liveSummaryForceRequested
+        liveSummaryForceRequested = false
         let fallbackTitle = activeDraft?.title ?? "Meeting so far"
         let snapshotCount = segments.count
+        let previous = liveInsights
+        let tail = SummaryService.liveTail(of: segments)
         liveSummaryTask = Task { [weak self] in
             guard let self else { return }
-            if !force {
+            if !isForced {
                 try? await Task.sleep(for: .milliseconds(900))
             }
-            guard !Task.isCancelled else { return }
-            let insights = await summarizer.summarize(
-                transcript: segments,
+            guard !Task.isCancelled, phase.isRecording else {
+                liveSummaryTask = nil
+                return
+            }
+            // The flag brackets the model call and nothing else, so the
+            // spinner describes work that is actually happening.
+            liveSummaryIsRefreshing = true
+            let result = await summarizer.summarizeLive(
+                tail: tail,
+                fullTranscript: segments,
+                previous: previous,
                 fallbackTitle: fallbackTitle
             )
+            liveSummaryIsRefreshing = false
+            liveSummaryTask = nil
             guard !Task.isCancelled, phase.isRecording else { return }
-            liveInsights = insights
+            liveInsights = result.insights
             if case .recording(_, let startedAt) = phase,
                !MeetingTitleGenerator.isFallbackTitle(
-                    insights.title,
+                    result.insights.title,
                     fallbackTitle: fallbackTitle
                ) {
                 phase = .recording(
-                    title: insights.title,
+                    title: result.insights.title,
                     startedAt: startedAt
                 )
             }
             liveSummaryUpdatedAt = Date()
-            liveSummaryIsRefreshing = false
             lastSummarizedSegmentCount = snapshotCount
             lastSummaryAt = Date()
-            liveSummaryTask = nil
+            // Material that arrived while this pass ran gets its turn now,
+            // rather than having interrupted it.
+            if liveSummaryForceRequested
+                || liveTranscript.segments.count > snapshotCount {
+                scheduleLiveSummary(force: false)
+            }
         }
     }
+
+    /// Notices a caption track that has stopped producing while the other one
+    /// keeps going.
+    ///
+    /// A recognizer can die without reporting anything, and the coverage check
+    /// at stop time then decides the whole meeting. Clearing the flag while
+    /// the meeting is still running means the saved-audio pass is already the
+    /// plan by the time it matters. Judged on the audio clock the segments
+    /// already carry, and only every few seconds, because this runs behind
+    /// every caption update.
+    private func noteStalledLiveTrack(in state: LiveTranscriptState) {
+        guard liveTranscriptIsComplete else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastStallCheckAt) >= 15 else { return }
+        lastStallCheckAt = now
+        guard Self.liveTrackHasStalled(state.segments) else { return }
+        liveTranscriptIsComplete = false
+    }
+
+    /// Whether one source's words stop far behind the other's.
+    ///
+    /// Silence on one side is ordinary, so only a gap longer than any natural
+    /// pause counts, and a source that never produced a word at all is not
+    /// judged: a meeting where nobody speaks into the microphone is normal.
+    static func liveTrackHasStalled(_ segments: [TranscriptSegment]) -> Bool {
+        let endBySource = Dictionary(grouping: segments, by: \.source)
+            .mapValues { values in
+                values.reduce(TimeInterval(0)) {
+                    max($0, $1.startTime + $1.duration)
+                }
+            }
+        guard endBySource.count > 1, let newest = endBySource.values.max() else {
+            return false
+        }
+        return endBySource.values.contains { newest - $0 > stalledTrackGap }
+    }
+
+    static let stalledTrackGap: TimeInterval = 300
 
     func setPreviewState(
         phase: MeetingPhase,
@@ -1284,6 +1783,8 @@ final class MeetingCoordinator: ObservableObject {
         liveSummaryTask?.cancel()
         liveSummaryTask = nil
         liveSummaryIsRefreshing = false
+        liveSummaryForceRequested = false
+        summaryProgress = nil
         elapsedTask?.cancel()
         meterTask?.cancel()
 
@@ -1338,6 +1839,49 @@ final class MeetingCoordinator: ObservableObject {
 
     func completePauseTransitionForTesting() {
         completePauseTransition()
+    }
+
+    var liveSummaryIsRunningForTesting: Bool {
+        liveSummaryTask != nil
+    }
+
+    var liveSummaryForceIsQueuedForTesting: Bool {
+        liveSummaryForceRequested
+    }
+
+    func receiveLiveTranscriptForTesting(_ state: LiveTranscriptState) {
+        receiveLiveTranscript(state)
+    }
+
+    var liveTranscriptIsCompleteForTesting: Bool {
+        liveTranscriptIsComplete
+    }
+
+    func setLiveTranscriptCompleteForTesting(_ complete: Bool) {
+        liveTranscriptIsComplete = complete
+        lastStallCheckAt = .distantPast
+    }
+
+    func setSummaryProgressForTesting(_ progress: SummaryProgress?) {
+        summaryProgress = progress
+    }
+
+    @discardableResult
+    func startDraftForTesting() -> UUID {
+        let id = UUID()
+        activeDraft = MeetingDraft(
+            id: id,
+            title: "Review",
+            sourceApp: "Manual",
+            startedAt: Date(),
+            recordingURL: store.recordingsDirectory()
+                .appendingPathComponent("\(id.uuidString).mp4")
+        )
+        return id
+    }
+
+    func clearDraftForTesting() {
+        activeDraft = nil
     }
     #endif
 

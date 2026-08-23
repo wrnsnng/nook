@@ -21,6 +21,7 @@ struct SettingsView: View {
     @EnvironmentObject private var calendar: CalendarContextService
     @State private var pendingStorageURL: URL?
     @State private var storageMessage: String?
+    @State private var orphanPendingDeletion: OrphanedRecording?
     @State private var selectedPane: SettingsPane
     @State private var accessibilityGranted = TextInsertionService.isTrusted
 
@@ -398,6 +399,11 @@ struct SettingsView: View {
                                 Text(orphan.sizeLabel)
                                     .font(NookType.micro)
                                     .foregroundStyle(.secondary)
+                                if orphan.isAudioOnly {
+                                    Text("Audio only. This may be the kept audio of a note you deleted.")
+                                        .font(NookType.micro)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                             Spacer(minLength: 0)
                             Button("Save as Note") {
@@ -411,7 +417,7 @@ struct SettingsView: View {
                             Button("Reveal") { recovery.reveal(orphan) }
                                 .controlSize(.small)
                             Button("Delete", role: .destructive) {
-                                recovery.delete(orphan)
+                                orphanPendingDeletion = orphan
                             }
                             .controlSize(.small)
                             .disabled(recovery.isWorking)
@@ -438,7 +444,7 @@ struct SettingsView: View {
                         systemImage: "waveform.badge.exclamationmark"
                     )
                 } footer: {
-                    Text("These are meetings Nook recorded but could not finish writing up, usually because processing was interrupted. The audio was kept so nothing was lost. Save one as a note, or delete it once you are done with it.")
+                    Text("These are recordings Nook has no note for, usually because processing was interrupted before the write-up finished. The audio was kept so nothing was lost. Save one as a note, or delete it once you are done with it: deleting moves it to the Trash, where you can still get it back.")
                 }
             }
 
@@ -473,6 +479,25 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .alert(
+            "Move this recording to the Trash?",
+            isPresented: Binding(
+                get: { orphanPendingDeletion != nil },
+                set: { if !$0 { orphanPendingDeletion = nil } }
+            )
+        ) {
+            Button("Move to Trash", role: .destructive) {
+                if let orphan = orphanPendingDeletion {
+                    recovery.delete(orphan)
+                }
+                orphanPendingDeletion = nil
+            }
+            Button("Cancel", role: .cancel) {
+                orphanPendingDeletion = nil
+            }
+        } message: {
+            Text("This recording is the only copy of that conversation. It moves to the Trash and can be restored from there, or you can save it as a note first.")
+        }
     }
 
     private var aboutPane: some View {
@@ -733,26 +758,32 @@ private struct AudioRetentionSettingsRow: View {
     }
 }
 
-/// Per-app dictation styles: the frontmost app can have its own habit.
+/// Per-app dictation styles: an app can have its own habit.
 private struct PerAppDictationStylesSection: View {
     @State private var overrides: [String] = DictationStyle.overriddenBundleIDs
     @State private var pickedStyle: DictationStyle = .cleanUp
+    @State private var pickedApp = ""
+    @State private var openApps: [OpenApp] = []
 
     var body: some View {
         Section {
             HStack {
-                Button("Add for Frontmost App") {
-                    guard let app = NSWorkspace.shared.frontmostApplication,
-                          let bundleID = app.bundleIdentifier
-                    else { return }
-                    DictationStyle.setOverride(pickedStyle, forBundleID: bundleID)
-                    overrides = DictationStyle.overriddenBundleIDs
+                // The app is chosen from a list rather than taken from
+                // whichever app is frontmost. Pressing a button in Settings
+                // makes Nook itself frontmost, so the old control recorded an
+                // override for Nook every single time.
+                Picker("App", selection: $pickedApp) {
+                    Text("Choose an app").tag("")
+                    ForEach(openApps) { app in
+                        appLabel(bundleID: app.id, name: app.name)
+                            .tag(app.id)
+                    }
                 }
-                .disabled(NSWorkspace.shared.frontmostApplication == nil)
+                .labelsHidden()
+                .accessibilityLabel("App to give its own dictation style")
+                .frame(maxWidth: 200)
 
-                Spacer()
-
-                Picker("", selection: $pickedStyle) {
+                Picker("Style", selection: $pickedStyle) {
                     ForEach(DictationStyle.allCases) { option in
                         Text(option.title).tag(option)
                     }
@@ -760,10 +791,21 @@ private struct PerAppDictationStylesSection: View {
                 .labelsHidden()
                 .accessibilityLabel("Style used for new per-app overrides")
                 .frame(width: 130)
+
+                Button("Add") {
+                    DictationStyle.setOverride(
+                        pickedStyle,
+                        forBundleID: pickedApp
+                    )
+                    overrides = DictationStyle.overriddenBundleIDs
+                    pickedApp = ""
+                }
+                .disabled(pickedApp.isEmpty)
+                .help("Give this app its own dictation style")
             }
 
             ForEach(overrides, id: \.self) { bundleID in
-                LabeledContent(bundleID) {
+                LabeledContent {
                     Text(
                         DictationStyle.override(forBundleID: bundleID)?.title
                             ?? ""
@@ -774,12 +816,101 @@ private struct PerAppDictationStylesSection: View {
                         overrides = DictationStyle.overriddenBundleIDs
                     }
                     .controlSize(.small)
+                    .accessibilityLabel(
+                        "Remove the style for \(OpenApp.name(forBundleID: bundleID))"
+                    )
+                } label: {
+                    appLabel(
+                        bundleID: bundleID,
+                        name: OpenApp.name(forBundleID: bundleID)
+                    )
                 }
             }
         } header: {
             Label("Per-app styles", systemImage: "square.stack.3d.up")
         } footer: {
-            Text("An app listed here always gets its own style, wherever you are when you hold the shortcut. Switch to that app first, then press Add.")
+            Text("An app listed here always gets its own style, wherever you are when you hold the shortcut.")
         }
+        .onAppear { openApps = OpenApp.current() }
+        .onReceive(
+            NSWorkspace.shared.notificationCenter.publisher(
+                for: NSWorkspace.didLaunchApplicationNotification
+            )
+        ) { _ in
+            openApps = OpenApp.current()
+        }
+        .onReceive(
+            NSWorkspace.shared.notificationCenter.publisher(
+                for: NSWorkspace.didTerminateApplicationNotification
+            )
+        ) { _ in
+            openApps = OpenApp.current()
+            // A quit app keeps its override: the habit belongs to the app, not
+            // to this session of it.
+        }
+    }
+
+    private func appLabel(bundleID: String, name: String) -> some View {
+        Label {
+            Text(name)
+        } icon: {
+            if let icon = OpenApp.icon(forBundleID: bundleID) {
+                Image(nsImage: icon)
+                    .resizable()
+                    .frame(width: 16, height: 16)
+            } else {
+                Image(systemName: "app.dashed")
+            }
+        }
+    }
+}
+
+/// An app the user could dictate into, and the name to call it by.
+private struct OpenApp: Identifiable, Hashable {
+    /// The bundle identifier, which is what an override is stored under.
+    let id: String
+    let name: String
+
+    /// Apps with a Dock icon, which are the ones with a text field to dictate
+    /// into. Nook is left out: an override for Nook would only ever apply to
+    /// the quick note pad, which has its own controls.
+    static func current() -> [OpenApp] {
+        let own = Bundle.main.bundleIdentifier
+        var seen: Set<String> = []
+        return NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular }
+            .compactMap { app in
+                guard let id = app.bundleIdentifier, id != own,
+                      seen.insert(id).inserted
+                else { return nil }
+                return OpenApp(id: id, name: app.localizedName ?? id)
+            }
+            .sorted {
+                $0.name.localizedStandardCompare($1.name) == .orderedAscending
+            }
+    }
+
+    /// Looked up when the row is drawn rather than stored alongside the
+    /// override. An app can be renamed, moved, or removed between the day the
+    /// style was set and today, and a name written into defaults would go on
+    /// insisting on the old one.
+    static func name(forBundleID bundleID: String) -> String {
+        guard let url = NSWorkspace.shared.urlForApplication(
+            withBundleIdentifier: bundleID
+        ) else {
+            return bundleID
+        }
+        let displayed = FileManager.default.displayName(atPath: url.path)
+        guard displayed.hasSuffix(".app") else { return displayed }
+        return String(displayed.dropLast(4))
+    }
+
+    static func icon(forBundleID bundleID: String) -> NSImage? {
+        guard let url = NSWorkspace.shared.urlForApplication(
+            withBundleIdentifier: bundleID
+        ) else {
+            return nil
+        }
+        return NSWorkspace.shared.icon(forFile: url.path)
     }
 }

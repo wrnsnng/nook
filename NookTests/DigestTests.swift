@@ -37,7 +37,7 @@ struct DigestTests {
         )
 
         #expect(digest.kind == .digest)
-        #expect(digest.summary.contains("1 meetings between"))
+        #expect(digest.summary.contains("1 meeting between"))
         // Each helper meeting runs an hour; the week's conversation time is
         // stated plainly.
         #expect(digest.summary.contains("1h of conversation"))
@@ -83,6 +83,8 @@ struct DigestTests {
         )
 
         #expect(digest.decisions == ["Hold pricing until q4", "Ship friday"])
+        // A week with more than one meeting stays plural.
+        #expect(digest.summary.contains("2 meetings between"))
         // Two highlights per meeting maximum, labelled with their source.
         #expect(
             digest.keyPoints == [

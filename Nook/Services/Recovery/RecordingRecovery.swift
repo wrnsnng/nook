@@ -33,6 +33,17 @@ struct OrphanedRecording: Identifiable, Hashable, Sendable {
         urls.filter { $0.pathExtension.lowercased() == "mp4" }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
+
+    /// True when extracted audio is all that is left, with no capture beside
+    /// it.
+    ///
+    /// Two different histories end up looking like this: a recording whose
+    /// write-up failed after extraction, and audio kept for a note the user
+    /// has since deleted. Nothing in the folder tells them apart, so the pane
+    /// says as much rather than claiming the recording failed.
+    var isAudioOnly: Bool {
+        captures.isEmpty && extractedAudio != nil
+    }
 }
 
 /// Finds, recovers, and removes recordings that never became notes.
@@ -41,6 +52,26 @@ final class RecordingRecovery: ObservableObject {
     @Published private(set) var orphans: [OrphanedRecording] = []
     @Published private(set) var isWorking = false
     @Published private(set) var message: String?
+
+    /// A recording something else is still using.
+    ///
+    /// A meeting being recorded right now looks exactly like a stranded one:
+    /// audio in the folder with no note beside it. Offering a Delete button
+    /// for the meeting the user is still in is the worst thing this pane could
+    /// do, so whoever owns the live recording says so here. `.inFlight(nil)`
+    /// is the honest answer when the identifier is not known: the list stays
+    /// empty for the length of the meeting rather than being wrong about it.
+    enum ActiveRecording: Equatable, Sendable {
+        case none
+        case inFlight(UUID?)
+    }
+
+    var activeRecording: ActiveRecording = .none {
+        didSet {
+            guard oldValue != activeRecording else { return }
+            scan()
+        }
+    }
 
     private let store: MarkdownStore
     private let transcriber = TranscriptionService()
@@ -62,8 +93,17 @@ final class RecordingRecovery: ObservableObject {
     /// A recording is named for the note it was going to become, so anything
     /// whose identifier matches a saved note has already served its purpose and
     /// is left alone: it belongs to the user's audio-retention choice, not
-    /// here.
+    /// here. A recording still being made or still being written up is not
+    /// stranded either, and is excluded by `activeRecording`.
     func scan() {
+        if case .inFlight(let activeID) = activeRecording, activeID == nil {
+            orphans = []
+            return
+        }
+        var inFlightIDs: Set<UUID> = []
+        if case .inFlight(let activeID) = activeRecording, let activeID {
+            inFlightIDs.insert(activeID)
+        }
         let directory = store.recordingsDirectory()
         let manager = FileManager.default
         guard let entries = try? manager.contentsOfDirectory(
@@ -84,7 +124,10 @@ final class RecordingRecovery: ObservableObject {
             // "<uuid>.mp4" and "<uuid>.part-2.mp4" belong to the same meeting.
             let stem = url.deletingPathExtension().lastPathComponent
                 .components(separatedBy: ".part-").first ?? ""
-            guard let id = UUID(uuidString: stem), !savedIDs.contains(id) else {
+            guard let id = UUID(uuidString: stem),
+                  !savedIDs.contains(id),
+                  !inFlightIDs.contains(id)
+            else {
                 continue
             }
             grouped[id, default: []].append(url)
@@ -112,11 +155,29 @@ final class RecordingRecovery: ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([first])
     }
 
+    /// Moves a stranded recording to the Trash.
+    ///
+    /// This pane exists because the audio was kept so nothing was lost, and
+    /// unlinking it here would be the one place Nook takes that back. Trashing
+    /// keeps the deletion reversible from the Finder, exactly as deleting a
+    /// note does. Volumes without a Trash still deserve a working delete.
     func delete(_ orphan: OrphanedRecording) {
-        for url in orphan.urls {
-            try? FileManager.default.removeItem(at: url)
+        let manager = FileManager.default
+        var failure: String?
+        for url in orphan.urls where manager.fileExists(atPath: url.path) {
+            do {
+                try manager.trashItem(at: url, resultingItemURL: nil)
+            } catch {
+                do {
+                    try manager.removeItem(at: url)
+                } catch {
+                    failure = failure
+                        ?? "Couldn’t remove \(url.lastPathComponent): "
+                            + error.localizedDescription
+                }
+            }
         }
-        message = nil
+        message = failure
         scan()
     }
 

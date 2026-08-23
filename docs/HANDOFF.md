@@ -6,13 +6,13 @@ contribute.
 
 ## Current release
 
-Nook 1.7.4 (build 17) is the current public release.
+Nook 1.12.1 (build 26) is the current public release.
 
 - Release builds use stable Xcode 26 and the macOS 26 SDK.
 - Distributed builds are Developer ID signed, notarized, stapled, and delivered
   through a signed Sparkle feed.
 - The release is available from the
-  [binary releases repository](https://github.com/wrnsnng/nook-releases/releases/tag/v1.7.4).
+  [binary releases repository](https://github.com/wrnsnng/nook-releases/releases/tag/v1.12.1).
 - User-facing changes are mapped in [CHANGELOG.md](../CHANGELOG.md).
 
 ## Durable constraints
@@ -92,7 +92,34 @@ live system audio, or an installed update. Before an official release, verify:
   dark appearance;
 - notched and non-notched panel geometry;
 - official bundle identity, exact entitlements, code signatures, notarization,
-  stapling, and Gatekeeper assessment; and
+  stapling, and Gatekeeper assessment;
+- turning on calendar context, confirming the macOS permission prompt appears
+  and a detected meeting is named after its nearby event;
+- exporting an action item to Reminders, confirming the Reminders permission
+  prompt and that the exported task carries its due date;
+- the audio retention sweep, confirming kept audio older than the chosen
+  window moves to the Trash on launch and notes are left untouched;
+- the quick note pad: opening it by holding the dictation shortcut with no
+  text field focused, Return inserting a newline rather than submitting,
+  quitting with unsaved text present and confirming it is saved rather than
+  discarded, and hands-free capture keeping the microphone live across
+  chunks until turned off;
+- recording into an existing note across more than one sitting, confirming
+  the appended transcript, kept audio, and regenerated summary and title,
+  and that personal notes are not rewritten;
+- flagging a moment while recording and, when audio is kept, finding and
+  playing it back from the note;
+- compiling a weekly digest, confirming it refuses an empty week and states
+  real counts and conversation time for a week that has meetings;
+- asking a question in "Ask your library", confirming a weak match is
+  refused rather than guessed and a good match cites the meetings it drew
+  from;
+- an approaching calendar event with earlier sittings, confirming the prep
+  brief card and notification action quote real decisions, key points, and
+  past sittings;
+- merging two saved notes in both orderings (earlier into later, and later
+  into earlier), confirming the combined transcript and kept audio land in
+  the correct sequence either way; and
 - full-archive update from the previous supported release without losing macOS
   permission grants.
 

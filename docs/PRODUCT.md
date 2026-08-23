@@ -79,6 +79,15 @@ conversations, or reorganising their workflow around a new service.
   off in place, given a due date that shows as an overdue chip when it lapses,
   and exported to Reminders with its date on request.
 - Dictate into any text field on the Mac with a customisable global shortcut.
+- Catch a thought with nowhere to type it: holding the dictation shortcut
+  with no text field focused opens a quick note pad instead, with hands-free
+  capture that keeps the microphone live across chunks until turned off.
+- Start a note from a template, such as 1:1, Standup, or Interview, instead
+  of a blank page.
+- Reach any verb, note, or open action through a `⌘K` command palette with
+  full keyboard navigation.
+- Automatically retire kept meeting audio older than a chosen window, opt-in
+  and off by default.
 - Receive signed and notarized updates through Sparkle.
 
 ## Dictation

@@ -155,7 +155,7 @@ final class CalendarContextService: ObservableObject {
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                await self.pollOnce()
+                self.pollOnce()
                 try? await Task.sleep(for: .seconds(60))
             }
         }

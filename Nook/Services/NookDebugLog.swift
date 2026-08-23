@@ -19,11 +19,24 @@ enum NookEventLog {
         case dictationStarted = "dictation.started"
         case meetingProcessingFailed = "meeting.processing-failed"
         case meetingSaved = "meeting.saved"
+        case meetingSavedFromLiveCaptions = "meeting.saved-from-live-captions"
         case meetingStopDeferred = "meeting.stop-deferred"
         case meetingStopStarted = "meeting.stop-started"
         case summaryGenerated = "summary.generated"
         case summaryGenerationFailed = "summary.generation-failed"
         case summaryModelUnavailable = "summary.model-unavailable"
+        // A summary that failed used to journal one line for every cause, so
+        // a diagnostic could not tell "Apple Intelligence is off" from "the
+        // transcript did not fit" or "the model refused".
+        case summaryContextExceeded = "summary.context-exceeded"
+        case summaryDeclined = "summary.declined"
+        case summaryDeviceNotEligible = "summary.device-not-eligible"
+        case summaryIntelligenceDisabled = "summary.intelligence-disabled"
+        case summaryLanguageUnsupported = "summary.language-unsupported"
+        case summaryModelBusy = "summary.model-busy"
+        case summaryModelNotReady = "summary.model-not-ready"
+        case summaryRejectedAsUngrounded = "summary.rejected-as-ungrounded"
+        case summaryTimedOut = "summary.timed-out"
     }
 
     private static let maximumBytes = 512 * 1_024

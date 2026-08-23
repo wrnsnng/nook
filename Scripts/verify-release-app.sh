@@ -124,7 +124,34 @@ MAIN_MICROPHONE=$(
 )
 [[ "$MAIN_MICROPHONE" == "true" || "$MAIN_MICROPHONE" == "1" ]] \
   || fail "Nook is missing its microphone entitlement."
+
+MAIN_CALENDARS=$(
+  entitlement_value "$APP_PATH" com.apple.security.personal-information.calendars \
+    || true
+)
+[[ "$MAIN_CALENDARS" == "true" || "$MAIN_CALENDARS" == "1" ]] \
+  || fail "Nook is missing its calendars entitlement."
+
+MAIN_REMINDERS=$(
+  entitlement_value "$APP_PATH" com.apple.security.personal-information.reminders \
+    || true
+)
+[[ "$MAIN_REMINDERS" == "true" || "$MAIN_REMINDERS" == "1" ]] \
+  || fail "Nook is missing its reminders entitlement."
+
 assert_no_entitlement "$APP_PATH" com.apple.security.get-task-allow
+
+CALENDARS_USAGE_DESCRIPTION=$(
+  read_plist_value "$INFO_PLIST" NSCalendarsFullAccessUsageDescription
+)
+[[ -n "$CALENDARS_USAGE_DESCRIPTION" ]] \
+  || fail "Info.plist is missing NSCalendarsFullAccessUsageDescription."
+
+REMINDERS_USAGE_DESCRIPTION=$(
+  read_plist_value "$INFO_PLIST" NSRemindersFullAccessUsageDescription
+)
+[[ -n "$REMINDERS_USAGE_DESCRIPTION" ]] \
+  || fail "Info.plist is missing NSRemindersFullAccessUsageDescription."
 
 NESTED_CODE=(
   "$SPARKLE_VERSION_DIR/XPCServices/Installer.xpc"

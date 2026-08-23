@@ -779,19 +779,50 @@ struct LibraryView: View {
                     recordingsDirectory: store.recordingsDirectory(),
                     summarizer: SummaryService()
                 )
+                // Markdown first. Until the merged note is on disk every file
+                // this touches can still be left exactly as it was, so a
+                // failure up to here means the merge can simply be tried
+                // again. Joining the audio is the irreversible half and runs
+                // only once the text is safe.
                 let saved = try store.save(result.merged)
+                var audioProblem: String?
+                do {
+                    try await result.commitAudio()
+                } catch {
+                    audioProblem = error.localizedDescription
+                }
+                // The merge itself is done either way: leaving the absorbed
+                // note behind would show the same conversation twice.
                 store.delete(result.absorbed)
                 requestSelection(.note(saved.id))
-                if result.audioOutcome == .targetOnly {
+                if let audioProblem {
                     showCopyNotice(
-                        "Merged. Kept audio from the other note stayed in your recordings folder."
+                        "Merged into “\(saved.title)”, but the recordings could not be joined: \(audioProblem)",
+                        severity: .failure
                     )
                 } else {
-                    showCopyNotice("Notes merged")
+                    showCopyNotice(mergeNotice(for: result.audioOutcome, title: saved.title))
                 }
             } catch {
                 store.lastError = error.localizedDescription
             }
+        }
+    }
+
+    /// Names the note that survived, because it is not always the one the
+    /// user picked: the combined note is filed under whichever meeting
+    /// started first.
+    private func mergeNotice(
+        for audioOutcome: NoteCombiner.AudioOutcome,
+        title: String
+    ) -> String {
+        switch audioOutcome {
+        case .concatenated:
+            "Merged into “\(title)”. Both recordings were joined into one, and the other note moved to the Trash."
+        case .adoptedFromAbsorbed:
+            "Merged into “\(title)”. The other note's recording came with it, and that note moved to the Trash."
+        case .targetOnly, .none:
+            "Merged into “\(title)”. The other note moved to the Trash."
         }
     }
 
@@ -1194,7 +1225,7 @@ private struct NoteMergePickerView: View {
                     .font(NookType.title)
                     .lineLimit(2)
                 Text(
-                    "The other note's transcript, moments, and personal notes join this one, and its summary is rewritten over everything."
+                    "Both notes become one. Transcripts, moments, personal notes, and action items are combined, kept audio is joined into a single recording, and the summary is written again from everything. A title you typed is kept. The combined note is filed under whichever meeting started first, and the other note moves to the Trash."
                 )
                 .font(.callout)
                 .foregroundStyle(.secondary)

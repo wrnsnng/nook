@@ -7,6 +7,7 @@ struct QuickNoteView: View {
     /// The paragraph the user declined; it stays declined until the words
     /// change.
     @State private var dismissedSuggestion: String?
+    @State private var showsFilingPicker = false
 
     private var taskSuggestion: QuickCaptureTaskParser.Suggestion? {
         let candidate = QuickCaptureTaskParser.suggestion(in: note.text)
@@ -16,12 +17,52 @@ struct QuickNoteView: View {
         return candidate
     }
 
+    /// What is worth saying above the bar right now, at most two things.
+    private var rows: [QuickNotePadRow] {
+        QuickNotePadLayout.rows(
+            outboundProvider: note.engine.provider,
+            notice: note.message,
+            noticeIsFailure: !note.messageIsAdvisory,
+            hearing: isHearing ? dictation.volatileText : nil,
+            hasSuggestion: taskSuggestion != nil,
+            hasAssistant: !note.availableEngines.isEmpty
+        )
+    }
+
+    private var isHearing: Bool {
+        dictation.phase == .listening && note.isFrontmost
+            && !dictation.volatileText.isEmpty
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             editor
-            actionBar
+            bar
         }
         .background(NookPalette.paper)
+        // One accent for the whole pad. Without this the system controls here
+        // carry the user's system accent while Nook's own chrome carries the
+        // brand colour, and the pad shows two different blues at once.
+        .tint(NookPalette.accent)
+        .background { closeShortcut }
+        // Escape leaves the pad the way every other exit does, by saving.
+        .onExitCommand { note.done() }
+        .onChange(of: note.text) { _, _ in
+            note.scheduleSave()
+        }
+        .onChange(of: note.isContinuous) { _, continuous in
+            guard note.isFrontmost else { return }
+            if continuous {
+                dictation.startContinuousSession()
+            } else {
+                dictation.stopContinuousSession()
+            }
+        }
+        .onChange(of: dictation.phase) { _, phase in
+            // A failed session leaves nothing listening, so a still-ticked box
+            // would be claiming a session that is not running.
+            if case .failed = phase { note.isContinuous = false }
+        }
     }
 
     private var editor: some View {
@@ -40,96 +81,20 @@ struct QuickNoteView: View {
         )
     }
 
-    /// The recognizer's live guess while the pad is where words are going.
-    /// Revision stays here, where it costs nothing; only settled text enters
-    /// the buffer.
-    @ViewBuilder
-    private var partialLine: some View {
-        if dictation.phase == .listening, note.isFrontmost,
-           !dictation.volatileText.isEmpty {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Circle()
-                    .fill(NookPalette.accent)
-                    .frame(width: 5, height: 5)
-                Text(dictation.volatileText)
-                    .font(NookType.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                Spacer(minLength: 0)
+    // MARK: - Bar
+
+    /// Everything below the editor: at most two rows saying what is going on,
+    /// then one row of controls.
+    private var bar: some View {
+        VStack(alignment: .leading, spacing: NookSpacing.xSmall) {
+            ForEach(rows, id: \.self) { row in
+                rowView(row)
             }
-            .padding(.horizontal, NookSpacing.large)
-            .padding(.bottom, 6)
-            .transition(.opacity)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Hearing: \(dictation.volatileText)")
-        }
-    }
-
-    // MARK: - Action bar
-
-    private var actionBar: some View {
-        VStack(alignment: .leading, spacing: NookSpacing.small) {
-            if let provider = note.engine.provider {
-                outboundBanner(provider: provider)
-            }
-
-            if let message = note.message {
-                Label(message, systemImage: "exclamationmark.triangle.fill")
-                    .font(NookType.caption)
-                    .foregroundStyle(NookPalette.warning)
-                    .lineLimit(3)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .transition(.opacity)
-            }
-
-            if let suggestion = taskSuggestion {
-                taskSuggestionChip(suggestion)
-            }
-
-            partialLine
-
-            HStack(spacing: NookSpacing.xSmall) {
-                Button {
-                    note.insertChecklistLine()
-                } label: {
-                    Image(systemName: "checklist")
-                        .font(.system(size: 11, weight: .semibold))
-                        .frame(width: 26, height: 24)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .keyboardShortcut("l", modifiers: [.command, .shift])
-                .help("Start a checklist line")
-                .accessibilityLabel("Start a checklist line")
-
-                ForEach(NoteAction.allCases) { action in
-                    NoteActionButton(
-                        action: action,
-                        isRunning: note.runningAction == action,
-                        isEnabled: canAct,
-                        help: helpText(for: action)
-                    ) {
-                        note.run(action)
-                    }
-                }
-                Spacer(minLength: 0)
-            }
-
-            HStack(spacing: NookSpacing.small) {
-                continuousToggle
-                engineControl
-                Spacer(minLength: NookSpacing.small)
-                status
-                filingMenu
-                Button("Open in Library") {
-                    note.saveAndOpenInLibrary()
-                }
-                .controlSize(.small)
-                .disabled(note.text.isEmpty)
-            }
+            controlRow
         }
         .padding(.horizontal, NookSpacing.large)
-        .padding(.vertical, NookSpacing.medium)
+        .padding(.vertical, NookSpacing.small)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background {
             // A distinct surface rather than a hairline, so the bar reads as a
             // place for controls instead of a stray row under the text.
@@ -141,164 +106,211 @@ struct QuickNoteView: View {
                         .frame(height: NookSpacing.hairline)
                 }
         }
-        .animation(NookMotion.quick, value: note.message)
-        .animation(NookMotion.quick, value: note.engine)
-        .animation(NookMotion.quick, value: dictation.phase == .listening)
-        .onChange(of: note.isContinuous) { _, continuous in
-            guard note.isFrontmost else { return }
-            if continuous {
-                dictation.startContinuousSession()
-            } else {
-                dictation.stopContinuousSession()
+        .animation(NookMotion.quick, value: rows)
+    }
+
+    @ViewBuilder
+    private func rowView(_ row: QuickNotePadRow) -> some View {
+        switch row {
+        case .outbound(let provider):
+            outboundRow(provider: provider)
+        case .notice(let text, let isFailure):
+            noticeRow(text, isFailure: isFailure)
+        case .hearing(let text):
+            hearingRow(text)
+        case .suggestion:
+            if let suggestion = taskSuggestion {
+                suggestionRow(suggestion)
             }
+        case .noAssistant:
+            noAssistantRow
         }
     }
 
-    /// Deterministic-first assist: the date is in the user's own words, so
-    /// the chip only offers to write down what was already said.
-    private func taskSuggestionChip(
-        _ suggestion: QuickCaptureTaskParser.Suggestion
-    ) -> some View {
-        HStack(spacing: NookSpacing.small) {
-            Image(systemName: "calendar.badge.checkmark")
-                .foregroundStyle(NookPalette.accent)
-            Text("Make this a task due \(suggestion.cueLabel)?")
-                .font(NookType.caption)
-            Spacer(minLength: 0)
-            Button("Make Task") {
-                note.text = QuickCaptureTaskParser.applying(
-                    suggestion,
-                    to: note.text
-                )
-                dismissedSuggestion = suggestion.paragraph
-            }
-            .controlSize(.small)
-            .keyboardShortcut(.defaultAction)
-            Button("Not Now") {
-                dismissedSuggestion = suggestion.paragraph
-            }
-            .controlSize(.small)
-        }
-        .padding(.horizontal, NookSpacing.small + 2)
-        .padding(.vertical, NookSpacing.xSmall + 1)
-        .background(
-            RoundedRectangle(
-                cornerRadius: NookRadius.control,
-                style: .continuous
-            )
-            .fill(NookPalette.accent.opacity(0.10))
-        )
-        .accessibilityElement(children: .combine)
-    }
-
-    private var continuousToggle: some View {
-        Toggle(isOn: $note.isContinuous) {
-            Label("Hands-free", systemImage: "waveform.badge.mic")
-                .font(NookType.micro.weight(.medium))
-        }
-        .toggleStyle(.checkbox)
-        .help(
-            "Keep listening after each thought until you turn this off"
-        )
-    }
-
-    /// Files the buffer somewhere deliberate instead of promotion being a
-    /// discovery exercise later.
-    private var filingMenu: some View {
-        Menu {
-            Button("Append to a meeting's notes") {
-                showsFilingPicker = true
-            }
-        } label: {
-            Label("File into", systemImage: "text.badge.plus")
-                .font(NookType.micro.weight(.medium))
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .disabled(note.text.isEmpty || note.recentMeetingTargets.isEmpty)
-        .help("Add these words to a meeting's personal notes")
-        .popover(isPresented: $showsFilingPicker, arrowEdge: .bottom) {
-            filingPicker
-        }
-    }
-
-    @State private var showsFilingPicker = false
-
-    private var filingPicker: some View {
-        VStack(alignment: .leading, spacing: NookSpacing.xSmall) {
-            Text("Append to which meeting?")
-                .font(NookType.control)
-            ForEach(note.recentMeetingTargets) { meeting in
-                Button {
-                    showsFilingPicker = false
-                    note.fileIntoMeeting(meeting)
-                } label: {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(meeting.title)
-                            .lineLimit(1)
-                        Text(
-                            meeting.startedAt.formatted(
-                                date: .abbreviated,
-                                time: .shortened
-                            )
-                        )
-                        .font(NookType.caption)
-                        .foregroundStyle(.secondary)
-                    }
-                }
-                .buttonStyle(.plain)
-                .padding(.vertical, 2)
-            }
-        }
-        .padding(NookSpacing.medium + 2)
-        .frame(width: 280)
-    }
+    // MARK: - Rows
 
     /// States plainly, and permanently, that actions will send this note away.
     ///
     /// The engine is remembered between notes, so the choice can easily have
     /// been made days ago. A marker that only appears on hover would leave a
     /// user believing Nook's usual promise still holds while it no longer does.
-    private func outboundBanner(provider: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: NookSpacing.small) {
+    /// One line rather than a bordered box: a standing fact drawn as an alert
+    /// is an alarm that never stops, and those stop being read.
+    private func outboundRow(provider: String) -> some View {
+        HStack(spacing: NookSpacing.xSmall) {
             Image(systemName: "arrow.up.forward.app.fill")
-                .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(NookPalette.warning)
                 .accessibilityHidden(true)
 
-            Text("Running an action sends this note to \(provider).")
-                .font(NookType.micro)
+            Text("Actions send this note to \(provider).")
                 .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Spacer(minLength: 0)
+                .lineLimit(1)
+                .accessibilityLabel(
+                    "Warning. Actions send this note to \(provider)."
+                )
 
             Button("Keep on this Mac") {
                 note.selectEngine(.onDevice)
             }
-            .buttonStyle(.link)
-            .font(NookType.micro.weight(.medium))
+            .buttonStyle(.borderless)
+            .help("Switch back to the on-device model, which sends nothing.")
+
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, NookSpacing.small + 2)
-        .padding(.vertical, NookSpacing.xSmall + 2)
-        .background {
-            RoundedRectangle(cornerRadius: NookRadius.control, style: .continuous)
-                .fill(NookPalette.warning.opacity(0.12))
-                .overlay {
-                    RoundedRectangle(
-                        cornerRadius: NookRadius.control,
-                        style: .continuous
-                    )
-                    .strokeBorder(
-                        NookPalette.warning.opacity(0.3),
-                        lineWidth: NookSpacing.hairline
-                    )
-                }
+        .font(NookType.caption)
+    }
+
+    /// A failure and a decision Nook made on the user's behalf are different
+    /// things. Drawing the second one in warning colours told people something
+    /// had gone wrong when nothing had.
+    private func noticeRow(_ text: String, isFailure: Bool) -> some View {
+        Label {
+            Text(text)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            Image(
+                systemName: isFailure
+                    ? "exclamationmark.triangle.fill"
+                    : "info.circle"
+            )
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(
-            "Warning. Running an action sends this note to \(provider)."
+        .font(NookType.caption)
+        .foregroundStyle(
+            isFailure
+                ? AnyShapeStyle(NookPalette.warning)
+                : AnyShapeStyle(.secondary)
         )
+        .transition(.opacity)
+    }
+
+    /// The recognizer's live guess while the pad is where words are going.
+    /// Revision stays here, where it costs nothing; only settled text enters
+    /// the buffer.
+    private func hearingRow(_ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: NookSpacing.xSmall + 2) {
+            Circle()
+                .fill(NookPalette.accent)
+                .frame(width: 5, height: 5)
+            Text(text)
+                .font(NookType.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .transition(.opacity)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Hearing: \(text)")
+    }
+
+    /// Deterministic-first assist: the date is in the user's own words, so the
+    /// row only offers to write down what was already said.
+    ///
+    /// Inline and quiet, and Return is left to the editor. A suggestion that
+    /// owns the default action gets accepted by people who were only trying to
+    /// start a new line.
+    private func suggestionRow(
+        _ suggestion: QuickCaptureTaskParser.Suggestion
+    ) -> some View {
+        HStack(spacing: NookSpacing.xSmall) {
+            Image(systemName: "calendar.badge.clock")
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+
+            Text(suggestion.cueLabel)
+            Text("Make this a task?")
+                .foregroundStyle(.secondary)
+
+            Button("Make task") {
+                note.text = QuickCaptureTaskParser.applying(
+                    suggestion,
+                    to: note.text
+                )
+                dismissedSuggestion = suggestion.paragraph
+            }
+            .buttonStyle(.borderless)
+            .keyboardShortcut(.return, modifiers: .command)
+            .help(
+                "Make this a task due \(suggestion.cueLabel). Command-Return."
+            )
+
+            Button("Not now") {
+                dismissedSuggestion = suggestion.paragraph
+            }
+            .buttonStyle(.borderless)
+            .help("Leave these words as they are.")
+
+            Spacer(minLength: 0)
+        }
+        .font(NookType.caption)
+        .accessibilityLabel("Make this a task due \(suggestion.cueLabel)?")
+    }
+
+    /// The empty state for note actions. Four dead chips said the same thing
+    /// four times over and told nobody what to do about it.
+    private var noAssistantRow: some View {
+        Label(
+            "No assistant on this Mac. Turn on Apple Intelligence in System Settings, or install Claude Code or Codex.",
+            systemImage: "sparkles.slash"
+        )
+        .font(NookType.caption)
+        .foregroundStyle(.secondary)
+        .lineLimit(2)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    // MARK: - Controls
+
+    /// One row, one vocabulary: bordered controls for everything the pad does,
+    /// one prominent Done at the end, and the same target size for each.
+    ///
+    /// The ladder exists because the pad resizes down to 380pt and there is no
+    /// honest way to fit every label there. Labels are given up in order of
+    /// what they carry: the running total first, then the actions menu's
+    /// title, then the engine's, which is a privacy statement and so goes last.
+    private var controlRow: some View {
+        ViewThatFits(in: .horizontal) {
+            controls(BarDetail(status: .full))
+            controls(BarDetail(status: .short))
+            controls(BarDetail(showsActionsTitle: false, status: .short))
+            controls(BarDetail(showsActionsTitle: false, status: .hidden))
+            controls(
+                BarDetail(
+                    showsEngineTitle: false,
+                    showsActionsTitle: false,
+                    status: .hidden
+                )
+            )
+        }
+        .controlSize(.small)
+        .frame(height: 32)
+    }
+
+    private struct BarDetail {
+        var showsEngineTitle = true
+        var showsActionsTitle = true
+        var status: StatusDetail = .full
+    }
+
+    private enum StatusDetail {
+        case full
+        case short
+        case hidden
+    }
+
+    private func controls(_ detail: BarDetail) -> some View {
+        HStack(spacing: NookSpacing.xSmall) {
+            engineControl(showsTitle: detail.showsEngineTitle)
+            actionsMenu(showsTitle: detail.showsActionsTitle)
+            checklistButton
+            filingButton
+            handsFreeToggle
+            Spacer(minLength: NookSpacing.small)
+            status(detail.status)
+            Spacer(minLength: NookSpacing.small)
+            discardButton
+            doneButton
+        }
     }
 
     /// One control for the engine, carrying its own privacy marker.
@@ -307,12 +319,8 @@ struct QuickNoteView: View {
     /// thing twice, side by side. Where the work happens and whether it leaves
     /// the Mac are the same fact, so they belong to one control.
     @ViewBuilder
-    private var engineControl: some View {
-        if note.availableEngines.isEmpty {
-            Label("No assistant available", systemImage: "sparkles.slash")
-                .font(NookType.micro)
-                .foregroundStyle(.secondary)
-        } else {
+    private func engineControl(showsTitle: Bool) -> some View {
+        if note.availableEngines.count > 1 {
             Menu {
                 ForEach(note.availableEngines) { engine in
                     Button {
@@ -332,37 +340,284 @@ struct QuickNoteView: View {
                     }
                 }
             } label: {
-                Label {
-                    Text(note.engine.title)
-                        .font(NookType.micro.weight(.medium))
-                } icon: {
-                    Image(systemName: symbol(for: note.engine))
-                        .foregroundStyle(
-                            note.engine.leavesTheMac
-                                ? NookPalette.warning
-                                : NookPalette.success
-                        )
-                }
+                engineLabel(showsTitle: showsTitle)
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(.button)
+            .buttonStyle(.bordered)
             .fixedSize()
             .help(note.engine.detail)
-            .disabled(note.availableEngines.count < 2)
+            .accessibilityLabel("Assistant: \(note.engine.title)")
+        } else if !note.availableEngines.isEmpty {
+            // With one engine there is no choice to offer. A disabled menu
+            // would present a decision that does not exist, which reads as
+            // something being broken rather than settled.
+            engineLabel(showsTitle: showsTitle)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, NookSpacing.xSmall)
+                .fixedSize()
+                .help(note.engine.detail)
+                .accessibilityLabel("Assistant: \(note.engine.title)")
         }
     }
 
-    private var status: some View {
-        Text(statusText)
-            .font(NookType.micro)
-            .foregroundStyle(.tertiary)
-            .monospacedDigit()
-            .animation(NookMotion.quick, value: statusText)
+    @ViewBuilder
+    private func engineLabel(showsTitle: Bool) -> some View {
+        let label = Label {
+            Text(note.engine.title)
+        } icon: {
+            Image(systemName: symbol(for: note.engine))
+                .foregroundStyle(
+                    note.engine.leavesTheMac
+                        ? AnyShapeStyle(NookPalette.warning)
+                        : AnyShapeStyle(.secondary)
+                )
+        }
+        .frame(height: Self.controlLabelHeight)
+
+        if showsTitle {
+            label.labelStyle(.titleAndIcon)
+        } else {
+            label.labelStyle(.iconOnly)
+        }
     }
 
-    private var statusText: String {
+    /// Every note action in one place. They share an engine, a failure mode
+    /// and a privacy consequence, so four separate chips only made the bar
+    /// look like a toolbar for four unrelated things.
+    @ViewBuilder
+    private func actionsMenu(showsTitle: Bool) -> some View {
+        if !note.availableEngines.isEmpty {
+            Menu {
+                Section("Using \(note.engine.title)") {
+                    ForEach(NoteAction.allCases) { action in
+                        Button {
+                            note.run(action)
+                        } label: {
+                            Label(action.title, systemImage: action.symbol)
+                        }
+                        .help(helpText(for: action))
+                    }
+                }
+            } label: {
+                actionsLabel(showsTitle: showsTitle)
+            }
+            .menuStyle(.button)
+            .buttonStyle(.bordered)
+            .fixedSize()
+            .disabled(!canAct)
+            .help(actionsHelp)
+            .accessibilityLabel("Actions")
+        }
+    }
+
+    @ViewBuilder
+    private func actionsLabel(showsTitle: Bool) -> some View {
+        let label = Label {
+            Text("Actions")
+        } icon: {
+            // The running indicator lives on the menu button, because the
+            // button is what stays on screen once the menu has closed.
+            if note.isWorking {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Image(systemName: "wand.and.sparkles")
+            }
+        }
+        .frame(height: Self.controlLabelHeight)
+
+        if showsTitle {
+            label.labelStyle(.titleAndIcon)
+        } else {
+            label.labelStyle(.iconOnly)
+        }
+    }
+
+    private var actionsHelp: String {
+        if let running = note.runningAction {
+            return "\(running.title) is running."
+        }
+        return "Tidy up, summarise, find actions, or expand, using "
+            + "\(note.engine.title)."
+    }
+
+    private var checklistButton: some View {
+        Button {
+            note.insertChecklistLine()
+        } label: {
+            Image(systemName: "checklist")
+                .frame(height: Self.controlLabelHeight)
+        }
+        .buttonStyle(.bordered)
+        .keyboardShortcut("l", modifiers: [.command, .shift])
+        .help("Start a checklist line. Shift-Command-L.")
+        .accessibilityLabel("Start a checklist line")
+    }
+
+    /// Files the buffer somewhere deliberate instead of promotion being a
+    /// discovery exercise later. A button rather than a menu holding one item,
+    /// which only added a click in front of the choice that mattered.
+    private var filingButton: some View {
+        Button {
+            showsFilingPicker = true
+        } label: {
+            Image(systemName: "text.badge.plus")
+                .frame(height: Self.controlLabelHeight)
+        }
+        .buttonStyle(.bordered)
+        .disabled(note.text.isEmpty)
+        .help("Add to meeting, or open in Library.")
+        .accessibilityLabel("Add to meeting, or open in Library")
+        .popover(isPresented: $showsFilingPicker, arrowEdge: .bottom) {
+            filingPicker
+        }
+    }
+
+    /// Only offered when dictation is on. A toggle for something that cannot
+    /// run is a promise the pad has no way to keep.
+    @ViewBuilder
+    private var handsFreeToggle: some View {
+        if dictation.isEnabled {
+            Toggle(isOn: $note.isContinuous) {
+                Image(systemName: "waveform.badge.mic")
+                    .frame(height: Self.controlLabelHeight)
+            }
+            .toggleStyle(.button)
+            .buttonStyle(.bordered)
+            .help(
+                "Hands-free. Keep listening after each thought until you turn this off."
+            )
+            .accessibilityLabel("Hands-free")
+        }
+    }
+
+    private var discardButton: some View {
+        Button {
+            note.discardWithConfirmation()
+        } label: {
+            Image(systemName: "trash")
+                .frame(height: Self.controlLabelHeight)
+        }
+        .buttonStyle(.bordered)
+        .keyboardShortcut(.delete, modifiers: .command)
+        .disabled(note.text.isEmpty)
+        .help("Discard this note. Command-Delete.")
+        .accessibilityLabel("Discard this note")
+    }
+
+    /// Saves and closes. Return belongs to the editor, so this is on
+    /// Command-Return, and it steps aside to Shift-Command-Return while the
+    /// suggestion row is showing and has claimed Command-Return.
+    private var doneButton: some View {
+        Button {
+            note.done()
+        } label: {
+            Text("Done")
+                .frame(height: Self.controlLabelHeight)
+        }
+        .buttonStyle(.borderedProminent)
+        .keyboardShortcut(
+            .return,
+            modifiers: rows.contains(.suggestion)
+                ? [.command, .shift]
+                : [.command]
+        )
+        .help(
+            rows.contains(.suggestion)
+                ? "Save and close. Shift-Command-Return while a suggestion is showing."
+                : "Save and close. Command-Return."
+        )
+    }
+
+    /// Every control in the bar is sized from its label, so one height here
+    /// keeps them level and keeps each of them a target worth aiming at: 22pt
+    /// of label plus the small control's own padding lands just under the
+    /// 32pt row.
+    private static let controlLabelHeight: CGFloat = 22
+
+    /// Command-W has to close the pad like any other window, and this panel is
+    /// built by hand rather than declared as a scene, so the pad carries the
+    /// shortcut itself. It leaves the way every other exit does, by saving.
+    private var closeShortcut: some View {
+        Button("Close Quick Note") {
+            note.done()
+        }
+        .keyboardShortcut("w", modifiers: .command)
+        .hidden()
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
+    }
+
+    private var filingPicker: some View {
+        VStack(alignment: .leading, spacing: NookSpacing.xSmall) {
+            Text("Add these words to")
+                .font(NookType.control)
+            if note.recentMeetingTargets.isEmpty {
+                Text("No meetings have been recorded yet.")
+                    .font(NookType.caption)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(note.recentMeetingTargets) { meeting in
+                Button {
+                    showsFilingPicker = false
+                    note.fileIntoMeeting(meeting)
+                } label: {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(meeting.title)
+                            .lineLimit(1)
+                        Text(
+                            meeting.startedAt.formatted(
+                                date: .abbreviated,
+                                time: .shortened
+                            )
+                        )
+                        .font(NookType.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(QuickNotePickerRowStyle())
+            }
+
+            Divider()
+                .padding(.vertical, 2)
+
+            Button("Open in Library") {
+                showsFilingPicker = false
+                note.saveAndOpenInLibrary()
+            }
+            .buttonStyle(.borderless)
+            .help("Save this note and show it in the library.")
+        }
+        .padding(NookSpacing.medium + 2)
+        .frame(width: 280)
+    }
+
+    @ViewBuilder
+    private func status(_ detail: StatusDetail) -> some View {
+        let text = statusText(detail)
+        if !text.isEmpty {
+            Text(text)
+                .font(NookType.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+                .lineLimit(1)
+                .accessibilityLabel(statusText(.full))
+                .animation(NookMotion.quick, value: text)
+        }
+    }
+
+    /// The running total, and whether the words are safe yet. "Saved" is only
+    /// shown once a save has actually landed and nothing has been typed since,
+    /// so it is a fact rather than a reassurance.
+    private func statusText(_ detail: StatusDetail) -> String {
         guard note.wordCount > 0 else { return "" }
+        let saved = note.lastSavedAt != nil && !note.hasUnsavedEdits
         let words = "\(note.wordCount) word\(note.wordCount == 1 ? "" : "s")"
-        return note.lastSavedAt == nil ? words : "\(words) · Saved"
+        switch detail {
+        case .full: return saved ? "\(words) · Saved" : words
+        case .short: return saved ? "Saved" : words
+        case .hidden: return ""
+        }
     }
 
     private var canAct: Bool {
@@ -383,68 +638,96 @@ struct QuickNoteView: View {
     }
 }
 
-/// One note action, styled as a quiet chip that lights up under the pointer.
-private struct NoteActionButton: View {
-    let action: NoteAction
-    let isRunning: Bool
-    let isEnabled: Bool
-    let help: String
-    let perform: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: perform) {
-            HStack(spacing: NookSpacing.xSmall + 1) {
-                Group {
-                    if isRunning {
-                        ProgressView()
-                            .controlSize(.small)
-                            .scaleEffect(0.55)
-                    } else {
-                        Image(systemName: action.symbol)
-                            .font(.system(size: 11, weight: .semibold))
-                    }
-                }
-                .frame(width: 13, height: 13)
-
-                Text(action.title)
-                    .font(NookType.micro.weight(.medium))
-            }
-            .foregroundStyle(isEnabled ? Color.primary : Color.secondary)
-            .padding(.horizontal, NookSpacing.small + 2)
-            .padding(.vertical, NookSpacing.xSmall + 2)
-            .background {
-                RoundedRectangle(cornerRadius: NookRadius.control, style: .continuous)
-                    .fill(fill)
-                    .overlay {
-                        RoundedRectangle(
-                            cornerRadius: NookRadius.control,
-                            style: .continuous
-                        )
-                        .strokeBorder(
-                            NookPalette.accent.opacity(isHovering && isEnabled ? 0.35 : 0),
-                            lineWidth: NookSpacing.hairline
-                        )
-                    }
-            }
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .disabled(!isEnabled || isRunning)
-        .onHover { isHovering = $0 }
-        .animation(NookMotion.quick, value: isHovering)
-        .animation(NookMotion.quick, value: isRunning)
-        .help(help)
-        .accessibilityLabel(action.title)
-        .accessibilityHint(help)
+/// The meeting rows in the filing popover, which are the pad's only piece of
+/// custom chrome. They owe the user the same states as every system control
+/// beside them: something under the pointer, something when pressed, and a
+/// focus ring for anyone who never touches the pointer at all.
+private struct QuickNotePickerRowStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        RowBody(configuration: configuration)
     }
 
-    private var fill: Color {
-        guard isEnabled else { return .clear }
-        if isRunning { return NookPalette.accent.opacity(0.16) }
-        return isHovering
-            ? NookPalette.accent.opacity(0.12)
-            : Color.primary.opacity(0.05)
+    private struct RowBody: View {
+        let configuration: Configuration
+        @State private var isHovering = false
+        @Environment(\.isFocused) private var isFocused
+
+        private var shape: RoundedRectangle {
+            RoundedRectangle(
+                cornerRadius: NookRadius.control,
+                style: .continuous
+            )
+        }
+
+        var body: some View {
+            configuration.label
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, NookSpacing.small)
+                .padding(.vertical, NookSpacing.xSmall + 1)
+                .background { shape.fill(fill) }
+                .nookFocusRing(shape, isVisible: isFocused)
+                .contentShape(.rect)
+                .onHover { isHovering = $0 }
+                .animation(NookMotion.quick, value: isHovering)
+        }
+
+        private var fill: Color {
+            if configuration.isPressed {
+                return NookPalette.accent.opacity(0.18)
+            }
+            return isHovering ? NookPalette.accent.opacity(0.10) : .clear
+        }
+    }
+}
+
+/// One thing the pad has to say above its bar.
+enum QuickNotePadRow: Hashable {
+    /// Persistent while an off-device engine is chosen. A privacy fact, not a
+    /// hint, so it is never traded away for something more recent.
+    case outbound(provider: String)
+    case notice(text: String, isFailure: Bool)
+    case hearing(text: String)
+    case suggestion
+    case noAssistant
+}
+
+/// Which of those rows are shown, and in what order.
+///
+/// A reducer rather than a stack of `if`s in the view: five things can want
+/// that space, there is only ever room for two, and which two win is a product
+/// decision worth being able to read and test on its own. The pad grew three
+/// stacked banners the last time this lived inline.
+enum QuickNotePadLayout {
+    /// Above this the bar stops being a bar and the editor starts shrinking
+    /// under a wall of notices.
+    static let maximumRows = 2
+
+    static func rows(
+        outboundProvider: String?,
+        notice: String?,
+        noticeIsFailure: Bool,
+        hearing: String?,
+        hasSuggestion: Bool,
+        hasAssistant: Bool
+    ) -> [QuickNotePadRow] {
+        var rows: [QuickNotePadRow] = []
+        // Order is priority. The privacy warning is first because it is the
+        // only one whose absence would mislead, and last to be dropped.
+        if let outboundProvider {
+            rows.append(.outbound(provider: outboundProvider))
+        }
+        if let notice, !notice.isEmpty {
+            rows.append(.notice(text: notice, isFailure: noticeIsFailure))
+        }
+        if let hearing, !hearing.isEmpty {
+            rows.append(.hearing(text: hearing))
+        }
+        if hasSuggestion {
+            rows.append(.suggestion)
+        }
+        if !hasAssistant {
+            rows.append(.noAssistant)
+        }
+        return Array(rows.prefix(maximumRows))
     }
 }

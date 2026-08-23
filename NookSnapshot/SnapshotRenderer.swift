@@ -8,7 +8,7 @@ struct SnapshotRenderer {
         let arguments = CommandLine.arguments
         guard (2...3).contains(arguments.count) else {
             FileHandle.standardError.write(
-                Data("Usage: NookSnapshot <output.png> [library|library-light|library-compact|welcome-light|welcome-dark|welcome-permission-light|welcome-permission-dark|welcome-ready-light|welcome-ready-dark|detail-transcript-light|detail-transcript-dark|detail-markdown-light|detail-markdown-dark|settings-about-light|settings-about-dark|live|notch|external-panel|summary-light|summary-dark|notes-light|notes-dark|detected-light|detected-dark|processing-light|processing-dark|completed-light|completed-dark|failure-light|failure-dark]\n".utf8)
+                Data("Usage: NookSnapshot <output.png> [library|library-light|library-compact|welcome-light|welcome-dark|welcome-permission-light|welcome-permission-dark|welcome-ready-light|welcome-ready-dark|welcome-microphone-light|welcome-microphone-dark|welcome-speech-light|welcome-speech-dark|welcome-calendar-light|welcome-calendar-dark|welcome-dictation-light|welcome-dictation-dark|detail-transcript-light|detail-transcript-dark|detail-markdown-light|detail-markdown-dark|detail-notes-light|detail-notes-dark|settings-about-light|settings-about-dark|settings-listening-light|settings-listening-dark|settings-dictation-light|settings-dictation-dark|settings-privacy-light|settings-privacy-dark|settings-updates-light|settings-updates-dark|quick-note-light|quick-note-dark|quick-note-filled-light|quick-note-filled-dark|prep-light|prep-dark|ask-light|ask-dark|palette-light|palette-dark|floating-notes-light|floating-notes-dark|library-recording-light|library-recording-dark|live|notch|external-panel|summary-light|summary-dark|notes-light|notes-dark|detected-light|detected-dark|processing-light|processing-dark|completed-light|completed-dark|failure-light|failure-dark]\n".utf8)
             )
             Foundation.exit(64)
         }
@@ -65,6 +65,15 @@ struct SnapshotRenderer {
             persistsSelection: false
         )
         let updateController = NookUpdateController(startingUpdater: false)
+        let calendar = CalendarContextService(provider: SnapshotCalendarProvider())
+        calendar.onUpcomingEvent = { _ in }
+        let prep = PrepBriefController(store: store, calendar: calendar)
+        let dictation = DictationCoordinator(localeIdentifier: "en_US", registersShortcut: false)
+        let quickNote = QuickNoteController(store: store)
+        let recovery = RecordingRecovery(store: store)
+        if mode.contains("prep") || mode.contains("library") {
+            Task { @MainActor in await calendar.setEnabled(true) }
+        }
         let transcriptState = LiveTranscriptState(
             segments: [
                 TranscriptSegment(
@@ -94,47 +103,157 @@ struct SnapshotRenderer {
         let canvasSize: CGSize
         let content: AnyView
         switch mode {
-        case "welcome-light", "welcome-dark",
-             "welcome-permission-light", "welcome-permission-dark",
-             "welcome-ready-light", "welcome-ready-dark":
+        case _ where mode.hasPrefix("welcome"):
             canvasSize = CGSize(width: 680, height: 560)
-            let welcomeStep: WelcomeStep = mode.contains("permission")
-                ? .screenRecording
-                : (mode.contains("ready") ? .ready : .introduction)
+            let welcomeStep: WelcomeStep
+            if mode.contains("permission") || mode.contains("screen") { welcomeStep = .screenRecording }
+            else if mode.contains("ready") { welcomeStep = .ready }
+            else if mode.contains("microphone") { welcomeStep = .microphone }
+            else if mode.contains("speech") { welcomeStep = .speechRecognition }
+            else if mode.contains("calendar") { welcomeStep = .calendar }
+            else if mode.contains("dictation") { welcomeStep = .dictation }
+            else { welcomeStep = .introduction }
             content = AnyView(
                 WelcomeView(detector: detector, initialStep: welcomeStep)
                     .frame(width: canvasSize.width, height: canvasSize.height)
                     .environment(\.colorScheme, snapshotColorScheme)
                     .transaction { $0.disablesAnimations = true }
             )
-        case "detail-transcript-light", "detail-transcript-dark",
-             "detail-markdown-light", "detail-markdown-dark":
+        case _ where mode.hasPrefix("detail"):
             canvasSize = CGSize(width: 1_100, height: 700)
             let initialTab: DetailTab = mode.contains("transcript")
                 ? .transcript
-                : .markdown
+                : (mode.contains("markdown") ? .markdown : .notes)
+            meeting.setPreviewState(phase: .idle, elapsed: 0, liveTranscript: .empty, audioLevel: 0)
             content = AnyView(
                 MeetingDetailView(
                     note: roundTripped,
                     initialTab: initialTab
                 )
                 .environmentObject(store)
+                .environmentObject(meeting)
                 .environmentObject(markdownDraft)
                 .frame(width: canvasSize.width, height: canvasSize.height)
                 .environment(\.colorScheme, snapshotColorScheme)
                 .transaction { $0.disablesAnimations = true }
             )
-        case "settings-about-light", "settings-about-dark":
+        case _ where mode.hasPrefix("settings"):
             canvasSize = CGSize(width: 620, height: 540)
+            let pane: SettingsPane
+            if mode.contains("about") { pane = .about }
+            else if mode.contains("dictation") { pane = .dictation }
+            else if mode.contains("privacy") { pane = .privacy }
+            else if mode.contains("updates") { pane = .updates }
+            else { pane = .listening }
+            meeting.setPreviewState(phase: .idle, elapsed: 0, liveTranscript: .empty, audioLevel: 0)
             content = AnyView(
-                SettingsView(initialPane: .about)
+                SettingsView(initialPane: pane)
                     .environmentObject(store)
                     .environmentObject(detector)
                     .environmentObject(meeting)
                     .environmentObject(appearanceController)
                     .environmentObject(updateController)
+                    .environmentObject(dictation)
+                    .environmentObject(quickNote)
+                    .environmentObject(recovery)
+                    .environmentObject(calendar)
                     .frame(width: canvasSize.width, height: canvasSize.height)
                     .background(Color(nsColor: .windowBackgroundColor))
+                    .environment(\.colorScheme, snapshotColorScheme)
+                    .transaction { $0.disablesAnimations = true }
+            )
+        case "quick-note-light", "quick-note-dark", "quick-note-filled-light", "quick-note-filled-dark":
+            canvasSize = CGSize(width: 460, height: 340)
+            if mode.hasPrefix("quick-note-filled") {
+                quickNote.text = "Call Priya about the vendor contract by Thursday.\nShe wants the revised scope before the board meeting.\n\n- [ ] Send the scope doc"
+            }
+            content = AnyView(
+                QuickNoteView()
+                    .environmentObject(quickNote)
+                    .environmentObject(dictation)
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .environment(\.colorScheme, snapshotColorScheme)
+                    .transaction { $0.disablesAnimations = true }
+            )
+        case "prep-light", "prep-dark":
+            canvasSize = CGSize(width: 1_100, height: 700)
+            let brief = PrepBriefBuilder.build(
+                eventTitle: "Research synthesis",
+                startDate: Date().addingTimeInterval(5 * 60),
+                notes: store.notes
+            )
+            guard let brief else { throw SnapshotError.fixtureValidationFailed }
+            content = AnyView(
+                PrepBriefView(brief: brief, onSelectNote: { _ in })
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .environment(\.colorScheme, snapshotColorScheme)
+                    .transaction { $0.disablesAnimations = true }
+            )
+        case "ask-light", "ask-dark":
+            canvasSize = CGSize(width: 560, height: 420)
+            content = AnyView(
+                LibraryAskView(notes: store.notes, onSelectNote: { _ in }, onClose: {})
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .environment(\.colorScheme, snapshotColorScheme)
+                    .transaction { $0.disablesAnimations = true }
+            )
+        case "palette-light", "palette-dark":
+            canvasSize = CGSize(width: 1_220, height: 760)
+            meeting.setPreviewState(phase: .idle, elapsed: 0, liveTranscript: .empty, audioLevel: 0)
+            content = AnyView(
+                ZStack {
+                    LibraryView(initialNoteID: fixtures[0].id)
+                        .environmentObject(store)
+                        .environmentObject(meeting)
+                        .environmentObject(markdownDraft)
+                        .environmentObject(prep)
+                    CommandPaletteView(
+                        isPresented: .constant(true),
+                        openActionEntries: [],
+                        createNote: { _ in },
+                        createWeeklyDigest: {},
+                        showAskSheet: {}
+                    )
+                    .environmentObject(store)
+                    .environmentObject(meeting)
+                }
+                .frame(width: canvasSize.width, height: canvasSize.height)
+                .environment(\.colorScheme, snapshotColorScheme)
+                .transaction { $0.disablesAnimations = true }
+            )
+        case "floating-notes-light", "floating-notes-dark":
+            canvasSize = CGSize(width: 440, height: 500)
+            meeting.setPreviewState(
+                phase: .recording(title: "Nook design weekly", startedAt: Date().addingTimeInterval(-13 * 60 - 42)),
+                elapsed: 13 * 60 + 42,
+                liveTranscript: transcriptState,
+                audioLevel: 0.64,
+                liveNotes: "Ask Ana to test the new meeting prompt.\nRevisit the transition timing before Friday."
+            )
+            content = AnyView(
+                FloatingNotesView()
+                    .environmentObject(meeting)
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .environment(\.colorScheme, snapshotColorScheme)
+                    .transaction { $0.disablesAnimations = true }
+            )
+        case "library-recording-light", "library-recording-dark":
+            canvasSize = CGSize(width: 1_220, height: 760)
+            meeting.setPreviewState(
+                phase: .recording(title: "Nook design weekly", startedAt: Date().addingTimeInterval(-13 * 60 - 42)),
+                elapsed: 13 * 60 + 42,
+                liveTranscript: transcriptState,
+                audioLevel: 0.64
+            )
+            content = AnyView(
+                LibraryView(initialNoteID: fixtures[0].id)
+                    .environmentObject(store)
+                    .environmentObject(meeting)
+                    .environmentObject(markdownDraft)
+                    .environmentObject(prep)
+                    .frame(width: canvasSize.width, height: canvasSize.height)
                     .environment(\.colorScheme, snapshotColorScheme)
                     .transaction { $0.disablesAnimations = true }
             )
@@ -189,15 +308,15 @@ struct SnapshotRenderer {
                     .environmentObject(store)
                     .environmentObject(meeting)
                     .environmentObject(markdownDraft)
+                    .environmentObject(prep)
                     .frame(width: canvasSize.width, height: canvasSize.height)
                     .environment(\.colorScheme, snapshotColorScheme)
                     .transaction { $0.disablesAnimations = true }
             )
         }
 
-        if !mode.hasPrefix("library"),
-           !mode.hasPrefix("detail"),
-           !mode.hasPrefix("settings") {
+        let notchModes: Set<String> = ["notch","external-panel","summary-light","summary-dark","notes-light","notes-dark","detected-light","detected-dark","processing-light","processing-dark","completed-light","completed-dark","failure-light","failure-dark","live"]
+        if notchModes.contains(mode) {
             meeting.showLiveCaptions = mode != "external-panel"
             switch mode {
             case "detected-light", "detected-dark":
@@ -307,7 +426,7 @@ struct SnapshotRenderer {
         window.contentView = hostingView
         window.layoutIfNeeded()
         hostingView.layoutSubtreeIfNeeded()
-        RunLoop.current.run(until: Date().addingTimeInterval(0.35))
+        RunLoop.current.run(until: Date().addingTimeInterval(1.2))
         hostingView.layoutSubtreeIfNeeded()
         hostingView.displayIfNeeded()
 
@@ -480,5 +599,12 @@ private struct SimulatedCameraHousing: View {
         .fill(.black)
         .frame(width: 184, height: 32)
         .accessibilityHidden(true)
+    }
+}
+
+struct SnapshotCalendarProvider: CalendarEventProviding {
+    func requestAccess() async -> Bool { true }
+    func events(between start: Date, end: Date) -> [CalendarMeetingEvent] {
+        [CalendarMeetingEvent(title: "Research synthesis", attendeeCount: 4, startDate: Date().addingTimeInterval(5 * 60))]
     }
 }

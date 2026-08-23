@@ -65,6 +65,26 @@ struct MeetingSession: Hashable, Sendable {
     }
 }
 
+/// A piece of a note's file that Nook does not model, kept verbatim.
+///
+/// Encoding a note rebuilds the whole document from its fields, so anything
+/// the format has no field for is deleted by the next save. People do put
+/// their own `## Agenda` sections in these files, and a paragraph above a
+/// list is ordinary writing. Carrying those bytes through the model is what
+/// makes a rename or a personal-notes save non-destructive.
+struct ExtraSection: Hashable, Sendable {
+    /// The heading line exactly as written, or nil for loose lines that lived
+    /// inside a section Nook models as a list.
+    let heading: String?
+    /// The lines under that heading, verbatim.
+    let body: String
+    /// The recognised heading this followed, lowercased as in
+    /// `MarkdownCodec.recognizedHeadings`, or nil when it came before every
+    /// recognised section. Encoding puts the block back after that heading's
+    /// own content rather than dumping it at the end of the file.
+    let anchor: String?
+}
+
 struct MeetingNote: Identifiable, Hashable, Sendable {
     let id: UUID
     var kind: NoteKind = .default
@@ -76,6 +96,20 @@ struct MeetingNote: Identifiable, Hashable, Sendable {
     var keyPoints: [String]
     var decisions: [String]
     var actionItems: [String]
+    /// The action items that are ticked, keyed by the exact stored text of the
+    /// item, including any `[due: ...]` suffix.
+    ///
+    /// A parallel set rather than a richer item type: `actionItems` is read by
+    /// search, the digest, the prep brief and the summary pipeline as plain
+    /// strings, and every one of those stays correct while the completion bit
+    /// travels beside it. Without it, `actionItems` had nowhere to carry
+    /// "done", so every whole-note save re-encoded ticked items as `- [ ]` and
+    /// a title rename silently reopened the user's finished tasks.
+    ///
+    /// Two items with identical text share one entry, so ticking one ticks
+    /// both on the next whole-note save. Toggling goes through the line
+    /// rewriter, which addresses items by position and is unaffected.
+    var completedActionItems: Set<String> = []
     var personalNotes: String
     var transcript: [TranscriptSegment]
     /// Offsets the user flagged during the recording, in the order flagged.
@@ -90,7 +124,16 @@ struct MeetingNote: Identifiable, Hashable, Sendable {
     /// was appended after earlier audio was already gone, which leaves the
     /// kept file starting partway along the combined timeline.
     var audioStart: TimeInterval = 0
+    /// Sections and loose lines the file carries that no field models. Kept so
+    /// re-encoding a hand-edited note cannot delete somebody's writing.
+    var extraSections: [ExtraSection] = []
     var fileURL: URL?
+    /// The file's modification date when this note was last read or written.
+    ///
+    /// The store compares it against the file before a whole-note save, so an
+    /// edit made in another app between load and save is refused rather than
+    /// overwritten from a model that predates it.
+    var fileModified: Date?
 
     init(
         id: UUID = UUID(),
@@ -103,12 +146,15 @@ struct MeetingNote: Identifiable, Hashable, Sendable {
         keyPoints: [String] = [],
         decisions: [String] = [],
         actionItems: [String] = [],
+        completedActionItems: Set<String> = [],
         personalNotes: String = "",
         transcript: [TranscriptSegment] = [],
         moments: [MeetingMoment] = [],
         sessions: [MeetingSession] = [],
         audioStart: TimeInterval = 0,
-        fileURL: URL? = nil
+        extraSections: [ExtraSection] = [],
+        fileURL: URL? = nil,
+        fileModified: Date? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -120,12 +166,31 @@ struct MeetingNote: Identifiable, Hashable, Sendable {
         self.keyPoints = keyPoints
         self.decisions = decisions
         self.actionItems = actionItems
+        self.completedActionItems = completedActionItems
         self.personalNotes = personalNotes
         self.transcript = transcript
         self.moments = moments
         self.sessions = sessions
         self.audioStart = audioStart
+        self.extraSections = extraSections
         self.fileURL = fileURL
+        self.fileModified = fileModified
+    }
+
+    /// Whether this note carries nothing a reader would recognise as content.
+    ///
+    /// Used as a floor by the store: a save that would empty an existing file
+    /// is a decode gap, not an edit.
+    var hasNoContent: Bool {
+        summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && keyPoints.isEmpty
+            && decisions.isEmpty
+            && actionItems.isEmpty
+            && personalNotes.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ).isEmpty
+            && transcript.isEmpty
+            && extraSections.isEmpty
     }
 
     var duration: TimeInterval {

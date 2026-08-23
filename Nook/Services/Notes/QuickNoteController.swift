@@ -15,6 +15,21 @@ final class QuickNoteController: ObservableObject {
     @Published private(set) var isWorking = false
     @Published private(set) var message: String?
     @Published private(set) var lastSavedAt: Date?
+    /// Whether edits have landed since the last save, so the status line can
+    /// say "Saved" only while it is true.
+    @Published private(set) var hasUnsavedEdits = false
+
+    /// Nook keeping the user's own words is a decision, not a failure.
+    ///
+    /// The pad shows one message line, and drawing this one in warning colours
+    /// told people something had broken when the guard had worked exactly as
+    /// intended. Everything else that reaches `message` is a failure.
+    nonisolated static let keptYourOwnWordsNotice =
+        "The rewrite didn't stay close to your note, so your own words were kept."
+
+    var messageIsAdvisory: Bool {
+        message == Self.keptYourOwnWordsNotice
+    }
     /// Which action is running, so its own button can show it rather than a
     /// spinner floating somewhere else in the bar.
     @Published private(set) var runningAction: NoteAction?
@@ -115,7 +130,15 @@ final class QuickNoteController: ObservableObject {
     private var panel: NSPanel?
     private let windowDelegate = QuickNoteWindowDelegate()
     private var savedNoteID: UUID?
+    /// The file the pad's note already lives in.
+    ///
+    /// Held because the note is rebuilt from scratch on every save and its
+    /// title is regenerated from the words so far. Hands-free capture saves
+    /// after each spoken chunk, so a destination derived from the title again
+    /// wrote one thought into a new file every few seconds.
+    private var savedNoteURL: URL?
     private var startedAt = Date()
+    private var saveDebounce: Task<Void, Never>?
 
     init(store: MarkdownStore) {
         self.store = store
@@ -155,8 +178,16 @@ final class QuickNoteController: ObservableObject {
         if !isPresenting {
             text = ""
             savedNoteID = nil
+            savedNoteURL = nil
             message = nil
+            hasUnsavedEdits = false
             startedAt = Date()
+            // Hands-free is a session, not a preference. The stored value
+            // outlives the session that set it, so restoring it would show a
+            // ticked box with nothing listening. Nook also must not open the
+            // microphone because a pad appeared: the tick follows a session
+            // the user starts here, and starts off every time.
+            isContinuous = false
             isPresenting = true
             showWindow()
             refreshEngines()
@@ -197,11 +228,84 @@ final class QuickNoteController: ObservableObject {
         // Speaking into a window and having it vanish unsaved would be the
         // worst possible behaviour for something whose whole purpose is to
         // catch a thought.
+        saveDebounce?.cancel()
+        saveDebounce = nil
         saveIfNeeded()
+        hasUnsavedEdits = false
         isPresenting = false
         panel?.orderOut(nil)
         panel = nil
     }
+
+    /// Saves shortly after typing stops, so "Saved" is a fact rather than a
+    /// promise the user has to trigger.
+    ///
+    /// Debounced rather than saved per keystroke: the store rewrites the whole
+    /// Markdown file, and the pad is often being dictated into a word at a
+    /// time.
+    func scheduleSave() {
+        hasUnsavedEdits = true
+        saveDebounce?.cancel()
+        saveDebounce = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled, let self else { return }
+            self.saveIfNeeded()
+            self.hasUnsavedEdits = false
+        }
+    }
+
+    /// Saves and closes, from the pad's own button or its keyboard shortcut.
+    func done() {
+        close()
+    }
+
+    /// Throws the note away, asking first when there is enough of it to miss.
+    ///
+    /// A debounced save may already have written the file, so discarding has
+    /// to delete what was written rather than merely closing the window.
+    func discardWithConfirmation() {
+        guard wordCount <= Self.discardConfirmationWordCount
+            || confirmDiscard()
+        else { return }
+        discard()
+    }
+
+    func discard() {
+        saveDebounce?.cancel()
+        saveDebounce = nil
+        if let savedNoteID,
+           let saved = store.notes.first(where: { $0.id == savedNoteID }) {
+            _ = store.delete(saved)
+        }
+        savedNoteID = nil
+        savedNoteURL = nil
+        text = ""
+        lastSavedAt = nil
+        hasUnsavedEdits = false
+        message = nil
+        isPresenting = false
+        panel?.orderOut(nil)
+        panel = nil
+    }
+
+    private func confirmDiscard() -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Discard this note?"
+        alert.informativeText =
+            "These words are not kept anywhere else, and this cannot be undone."
+        alert.addButton(withTitle: "Keep It")
+        alert.addButton(withTitle: "Discard")
+        // The safe option is the default, so a reflexive Return keeps the
+        // note rather than destroying it.
+        alert.buttons.first?.keyEquivalent = "\r"
+        alert.buttons.last?.keyEquivalent = ""
+        panel?.makeKeyAndOrderFront(nil)
+        return alert.runModal() == .alertSecondButtonReturn
+    }
+
+    /// Short enough to be a stray thought rather than work worth confirming.
+    private static let discardConfirmationWordCount = 12
 
     // MARK: - Saving
 
@@ -217,11 +321,13 @@ final class QuickNoteController: ObservableObject {
             startedAt: startedAt,
             endedAt: Date(),
             sourceApp: "Spoken note",
-            summary: body
+            summary: body,
+            fileURL: savedNoteURL
         )
         do {
             let saved = try store.save(note)
             savedNoteID = saved.id
+            savedNoteURL = saved.fileURL
             lastSavedAt = Date()
             message = nil
             return saved
@@ -258,6 +364,7 @@ final class QuickNoteController: ObservableObject {
             _ = try store.updatePersonalNotes(joined, for: target)
             text = ""
             savedNoteID = nil
+            savedNoteURL = nil
             lastSavedAt = Date()
             message = nil
             isPresenting = false
@@ -339,7 +446,7 @@ final class QuickNoteController: ObservableObject {
                 text = rewritten
                 saveIfNeeded()
             case .reject:
-                message = "The rewrite didn't stay close to your note, so your own words were kept."
+                message = Self.keptYourOwnWordsNotice
             }
         } else {
             // Appended under a heading so the note keeps the spoken words and
@@ -365,6 +472,9 @@ final class QuickNoteController: ObservableObject {
             defer: false
         )
         panel.title = "Quick note"
+        // Small enough to sit beside whatever the user is working in, large
+        // enough that the bar's controls never collapse into each other.
+        panel.contentMinSize = NSSize(width: 380, height: 240)
         panel.isFloatingPanel = true
         panel.level = .floating
         panel.hidesOnDeactivate = false
@@ -381,7 +491,14 @@ final class QuickNoteController: ObservableObject {
                 .environmentObject(self)
                 .environmentObject(AppModel.shared.dictation)
         )
-        panel.center()
+        // Where the pad was left is where the next thought should land. The
+        // window is rebuilt on every present, so without an autosaved frame it
+        // would walk back to the middle of the screen each time and cover
+        // whatever the user was reading.
+        panel.setFrameAutosaveName(Self.frameAutosaveName)
+        if !panel.setFrameUsingName(Self.frameAutosaveName) {
+            panel.center()
+        }
         // `NSWindow.delegate` is weak, so the delegate is owned here.
         windowDelegate.onClose = { [weak self] in
             self?.close()
@@ -389,6 +506,8 @@ final class QuickNoteController: ObservableObject {
         panel.delegate = windowDelegate
         self.panel = panel
     }
+
+    private static let frameAutosaveName = "QuickNote"
 
     private enum Keys {
         static let engine = "quickNoteEngine"
