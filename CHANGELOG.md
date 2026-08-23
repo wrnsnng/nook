@@ -4,6 +4,22 @@ Nook follows a user-facing release-note model. Each published version has a
 Markdown note in [`Releases/`](Releases/) and a matching `v<version>` release in
 the [binary releases repository](https://github.com/wrnsnng/nook-releases/releases).
 
+## 1.12.0
+
+- Quick note gains hands-free capture, a live partial line while
+  speaking, and a "File into" menu that appends words to a meeting's
+  personal notes.
+- Checklist lines in quick notes are real action items: parsed wherever
+  they sit in the body, surfaced in the sidebar, datable, and
+  exportable to Reminders.
+- Deterministic task suggestions turn spoken dates into one-tap dated
+  tasks without inventing or reordering words.
+- New note templates: 1:1, Standup, Interview.
+- ⌘K command palette over verbs, notes, and open actions with full
+  keyboard navigation.
+- Today scope in the library sidebar; action items tick from inside the
+  note through the same single-line file rewrite as the sidebar.
+
 ## 1.11.0
 
 - Record into an existing note or merge two saved notes: one continuous
