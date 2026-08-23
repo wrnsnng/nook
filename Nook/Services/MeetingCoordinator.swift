@@ -115,7 +115,19 @@ final class MeetingCoordinator: ObservableObject {
     /// Publishing the identifier lets that list leave it alone rather than
     /// inviting somebody to recover a meeting still being written.
     @Published private(set) var activeRecordingID: UUID?
-    @Published var liveNotes = ""
+    /// Notes typed by hand while the meeting runs.
+    ///
+    /// Mirrored to a file beside the recording as it changes. They used to
+    /// exist only here, so a crash, a force quit, or a flat battery during a
+    /// meeting took every word of them: recovering the recording afterwards
+    /// rebuilt the transcript and the summary and silently dropped the one
+    /// part the user had written themselves.
+    @Published var liveNotes = "" {
+        didSet {
+            guard liveNotes != oldValue else { return }
+            scheduleLiveNotesSave()
+        }
+    }
     @Published private(set) var liveNotesDetached = false
     @Published private(set) var audioLevel = 0.0
     /// Moments flagged during the live recording, in flag order.
@@ -132,7 +144,20 @@ final class MeetingCoordinator: ObservableObject {
         didSet { UserDefaults.standard.set(localeIdentifier, forKey: "transcriptionLocale") }
     }
     @Published var keepAudio: Bool {
-        didSet { UserDefaults.standard.set(keepAudio, forKey: "keepAudio") }
+        didSet {
+            UserDefaults.standard.set(keepAudio, forKey: Self.keepAudioKey)
+        }
+    }
+
+    nonisolated static let keepAudioKey = "keepAudio"
+
+    /// The audio-retention setting, readable without a coordinator.
+    ///
+    /// Recovery finishes a meeting this coordinator never got to, and it has
+    /// to answer the same question about the extracted audio: with retention
+    /// on, the `.m4a` is the note's kept audio, not a temporary file.
+    nonisolated static var keepAudioPreference: Bool {
+        UserDefaults.standard.bool(forKey: keepAudioKey)
     }
     @Published var showLiveCaptions: Bool {
         didSet { UserDefaults.standard.set(showLiveCaptions, forKey: "showLiveCaptions") }
@@ -162,8 +187,16 @@ final class MeetingCoordinator: ObservableObject {
         didSet {
             guard activeRecordingID != activeDraft?.id else { return }
             activeRecordingID = activeDraft?.id
+            if activeDraft == nil {
+                // Any write still queued belongs to a meeting that is over.
+                // Letting it land would recreate a file cleanup has just
+                // removed, and leave it behind as litter nobody looks for.
+                liveNotesSaveTask?.cancel()
+                liveNotesSaveTask = nil
+            }
         }
     }
+    private var liveNotesSaveTask: Task<Void, Never>?
     private var elapsedTask: Task<Void, Never>?
     private var meterTask: Task<Void, Never>?
     private var processingTask: Task<Void, Never>?
@@ -195,7 +228,7 @@ final class MeetingCoordinator: ObservableObject {
         self.detector = detector
         self.localeIdentifier = UserDefaults.standard.string(forKey: "transcriptionLocale")
             ?? Locale.current.identifier
-        self.keepAudio = UserDefaults.standard.bool(forKey: "keepAudio")
+        self.keepAudio = Self.keepAudioPreference
         self.showLiveCaptions = UserDefaults.standard.object(forKey: "showLiveCaptions") as? Bool
             ?? true
         let storedPanelMode = UserDefaults.standard.string(forKey: "meetingPanelMode")
@@ -1885,6 +1918,82 @@ final class MeetingCoordinator: ObservableObject {
     }
     #endif
 
+    // MARK: - Live notes on disk
+
+    /// Writes the meeting's typed notes beside its recording, shortly after
+    /// typing stops.
+    ///
+    /// Debounced rather than written per keystroke, and only while a meeting
+    /// is in flight: with no draft there is no recording for the notes to be
+    /// recovered alongside, so there is nothing to keep them for. The file
+    /// lives inside `.recordings`, which means the same artifact cleanup that
+    /// removes the capture removes this too, and the same folder permissions
+    /// cover it.
+    private func scheduleLiveNotesSave() {
+        guard let draft = activeDraft else { return }
+        let url = Self.liveNotesURL(
+            for: draft.id,
+            in: store.recordingsDirectory()
+        )
+        let body = liveNotes
+        liveNotesSaveTask?.cancel()
+        liveNotesSaveTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            // Cancelled means the meeting ended and its artifacts have been
+            // dealt with; gone means the app is going, and there is no
+            // meeting left for these to be recovered alongside.
+            guard !Task.isCancelled, self != nil else { return }
+            Self.writeLiveNotes(body, to: url)
+        }
+    }
+
+    /// Where a meeting's typed notes are held while it runs.
+    ///
+    /// Named for the meeting's own identifier so recovery, which knows only
+    /// that, can find them, and so artifact cleanup recognises them as
+    /// belonging to this meeting rather than to `.recordings` at large.
+    nonisolated static func liveNotesURL(
+        for id: UUID,
+        in directory: URL
+    ) -> URL {
+        directory.appendingPathComponent("\(id.uuidString).notes.txt")
+    }
+
+    nonisolated static func writeLiveNotes(_ body: String, to url: URL) {
+        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            // Emptying the field is the user deleting these words. Leaving a
+            // stale file behind would put them back on recovery.
+            try? FileManager.default.removeItem(at: url)
+            return
+        }
+        guard (try? Data(trimmed.utf8).write(to: url, options: .atomic))
+            != nil
+        else {
+            // The notes are still in the window and still go into the note
+            // when the meeting finishes normally. This file only covers the
+            // finish that never comes, so a failure here is not worth
+            // interrupting a meeting over.
+            return
+        }
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: url.path
+        )
+    }
+
+    /// The notes typed during a meeting that never became a note, if any.
+    nonisolated static func recoverableLiveNotes(
+        for id: UUID,
+        in directory: URL
+    ) -> String {
+        let url = liveNotesURL(for: id, in: directory)
+        guard let body = try? String(contentsOf: url, encoding: .utf8) else {
+            return ""
+        }
+        return body.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private static func cleanupNotice(for urls: [URL]) -> String {
         guard !urls.isEmpty else { return "" }
         return " Remove these files from the .recordings folder: "
@@ -1919,6 +2028,14 @@ enum RecordingArtifactCleanup {
             draft.recordingURL
                 .deletingPathExtension()
                 .appendingPathExtension("m4a")
+                .standardizedFileURL
+        )
+        // The typed notes are held beside the capture for the length of the
+        // meeting. Once the note exists they are inside it, so leaving the
+        // file behind would litter the folder with a second copy nobody
+        // reads and nothing removes.
+        candidates.insert(
+            MeetingCoordinator.liveNotesURL(for: draft.id, in: directory)
                 .standardizedFileURL
         )
 
@@ -1969,6 +2086,7 @@ enum RecordingArtifactCleanup {
         let filename = url.lastPathComponent
         return filename == "\(stem).mp4"
             || filename == "\(stem).m4a"
+            || filename == "\(stem).notes.txt"
             || (filename.hasPrefix("\(stem).part-") && url.pathExtension == "mp4")
     }
 }

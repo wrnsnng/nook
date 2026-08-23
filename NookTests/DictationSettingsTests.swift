@@ -200,6 +200,118 @@ struct DictationLifecycleTests {
     }
 }
 
+/// Where a finished dictation is allowed to land.
+///
+/// ⌘V is a system-wide keystroke: it goes wherever focus is at the instant it
+/// is posted, not where the run began. The rule below is the only thing
+/// standing between a dictation and the wrong window.
+struct DictationPasteTargetTests {
+    /// The words were aimed at the field the run started in. Once focus has
+    /// moved, they go to the note pad instead, where the user can read them
+    /// and put them where they meant to.
+    @Test
+    func aPasteIsRefusedOnceFocusHasLeftTheFieldTheRunStartedIn() {
+        #expect(
+            TextInsertionService.pasteRefusal(
+                hasRecordedTarget: true,
+                focusMatchesRecordedTarget: false,
+                focusIsSecure: false
+            ) == .focusMoved
+        )
+    }
+
+    /// No recorded target means nothing to compare against, so there is no
+    /// evidence the paste would land where it was meant to.
+    @Test
+    func aRunThatRecordedNoFieldNeverPastes() {
+        #expect(
+            TextInsertionService.pasteRefusal(
+                hasRecordedTarget: false,
+                focusMatchesRecordedTarget: false,
+                focusIsSecure: false
+            ) == .focusMoved
+        )
+    }
+
+    /// Words spoken into a password field are a secret. They are not typed
+    /// there, and they are not written to a note either: a note is a file.
+    @Test
+    func aRunThatStartedInAPasswordFieldIsRefusedOutright() {
+        #expect(
+            TextInsertionService.pasteRefusal(
+                hasRecordedTarget: true,
+                focusMatchesRecordedTarget: true,
+                focusIsSecure: true
+            ) == .secureField
+        )
+    }
+
+    /// Focus landing in a password field afterwards says nothing about the
+    /// words themselves, which still belong to the field the user left.
+    @Test
+    func focusMovingIntoAPasswordFieldStillLeavesTheWordsWithTheUser() {
+        #expect(
+            TextInsertionService.pasteRefusal(
+                hasRecordedTarget: true,
+                focusMatchesRecordedTarget: false,
+                focusIsSecure: true
+            ) == .focusMoved
+        )
+    }
+
+    @Test
+    func anOrdinaryFieldThatStillHasFocusIsPastedInto() {
+        #expect(
+            TextInsertionService.pasteRefusal(
+                hasRecordedTarget: true,
+                focusMatchesRecordedTarget: true,
+                focusIsSecure: false
+            ) == nil
+        )
+    }
+}
+
+/// How long one dictation may hold the microphone.
+///
+/// Hold-to-talk ends on key-up, and macOS Secure Input can swallow that key-up
+/// entirely, leaving nothing to end the run.
+struct DictationSessionCeilingTests {
+    @Test
+    func aHandsFreePadSessionGetsMoreRoomThanAHeldShortcut() {
+        let ceilings = DictationSessionCeilings.standard
+
+        #expect(ceilings.ceiling(isContinuous: false) == .seconds(300))
+        #expect(
+            ceilings.ceiling(isContinuous: true)
+                > ceilings.ceiling(isContinuous: false)
+        )
+    }
+
+    /// The sentence is derived from the ceiling in force so the two cannot
+    /// drift apart and tell the user a number that is not true.
+    @Test
+    func theExpirySentenceNamesTheCeilingActuallyInForce() {
+        #expect(
+            DictationSessionCeilings.expiryMessage(for: .seconds(300))
+                .contains("5 minutes")
+        )
+        #expect(
+            DictationSessionCeilings.expiryMessage(for: .seconds(60))
+                .contains("1 minute.")
+        )
+    }
+
+    /// A ceiling that ended a dictation has to say what to do next, or it
+    /// reads as the feature having broken.
+    @Test
+    func theExpirySentenceSaysHowToStartAgain() {
+        #expect(
+            DictationSessionCeilings.expiryMessage(for: .seconds(300))
+                .contains("Press the shortcut")
+        )
+    }
+}
+
 @MainActor
 private final class TestDictationAudioSource: DictationAudioCapturing {
     var onLevel: (@MainActor (Float) -> Void)?
@@ -221,11 +333,20 @@ private final class TestDictationRecognizer: DictationRecognizing {
     var onVolatile: (@MainActor (String) -> Void)?
     var onFinalized: (@MainActor (String) -> Void)?
     var onError: (@MainActor (String) -> Void)?
+    var onEnded: (@MainActor () -> Void)?
     private(set) var cancelCount = 0
+    private(set) var startCount = 0
+    private(set) var finishCount = 0
 
-    func start(localeIdentifier: String) async throws {}
+    func start(localeIdentifier: String) async throws {
+        startCount += 1
+    }
+
     func ingest(_ buffer: AVAudioPCMBuffer) {}
-    func finish() async {}
+
+    func finish() async {
+        finishCount += 1
+    }
 
     func cancel() {
         cancelCount += 1

@@ -18,6 +18,43 @@ enum DictationPhase: Equatable {
     }
 }
 
+/// How long one dictation may hold the microphone open.
+///
+/// Hold-to-talk ends on key-up, and macOS Secure Input can swallow that key-up
+/// entirely: the release never arrives, nothing calls `finish()`, and the
+/// microphone stays live until Nook quits. A ceiling turns that into a
+/// finished dictation carrying the words the user actually said.
+struct DictationSessionCeilings: Sendable, Equatable {
+    /// Hold and toggle. Long enough for a genuinely long dictation, short
+    /// enough that a lost key-up costs minutes rather than a working day.
+    var interactive: Duration
+    /// A hands-free pad session is meant to run long and has a visible toggle
+    /// to end it, so the same backstop sits much further out.
+    var continuous: Duration
+
+    static let standard = DictationSessionCeilings(
+        interactive: .seconds(300),
+        continuous: .seconds(1800)
+    )
+
+    func ceiling(isContinuous: Bool) -> Duration {
+        isContinuous ? continuous : interactive
+    }
+
+    /// What the indicator says when a ceiling ends a dictation. The number is
+    /// derived rather than written out so the sentence cannot drift from the
+    /// value actually in force.
+    static func expiryMessage(for ceiling: Duration) -> String {
+        let minutes = max(
+            1,
+            Int((Double(ceiling.components.seconds) / 60).rounded())
+        )
+        return "Dictation stopped after \(minutes) minute"
+            + (minutes == 1 ? "" : "s")
+            + ". Press the shortcut to start again."
+    }
+}
+
 /// Owns the dictation feature: the shortcut, the microphone, the recognizer,
 /// the optional rewrite, and delivery into the focused text field.
 @MainActor
@@ -84,6 +121,9 @@ final class DictationCoordinator: ObservableObject {
     private var isContinuousSession = false
     /// Polls for Accessibility access while a registration is waiting on it.
     private var trustWatch: Task<Void, Never>?
+    /// Ends a dictation that has outlived its ceiling.
+    private var sessionWatchdog: Task<Void, Never>?
+    private let ceilings: DictationSessionCeilings
     /// Loudest input seen this dictation, used to tell a silent microphone
     /// apart from speech that simply was not recognised.
     private var peakLevel: Float = 0
@@ -105,13 +145,26 @@ final class DictationCoordinator: ObservableObject {
     /// audio pipeline cannot hold dictation open.
     private static let captureDrainTimeout: Double = 2
 
+    /// How long a finish waits for setup to complete before giving up on it.
+    ///
+    /// Setup can genuinely stall: a first dictation in a language installs a
+    /// speech asset, and permission prompts sit in front of it. This has to
+    /// outlast the recognizer's own asset deadline, or the wait here would
+    /// expire while the start was still about to fail with a better sentence.
+    private static let startWaitTimeout: Double = 75
+
+    private static let startStalledMessage =
+        "Dictation couldn’t get started. Try again."
+
     init(
         localeIdentifier: String,
         audio: any DictationAudioCapturing = DictationAudioSource(),
         recognizer: any DictationRecognizing = DictationRecognizer(),
-        registersShortcut: Bool = true
+        registersShortcut: Bool = true,
+        ceilings: DictationSessionCeilings = .standard
     ) {
         let defaults = UserDefaults.standard
+        self.ceilings = ceilings
         self.localeIdentifier = localeIdentifier
         self.isEnabled = defaults.bool(forKey: Keys.enabled)
         self.style = defaults.string(forKey: Keys.style)
@@ -141,6 +194,9 @@ final class DictationCoordinator: ObservableObject {
         }
         recognizer.onError = { [weak self] message in
             self?.fail(message)
+        }
+        recognizer.onEnded = { [weak self] in
+            self?.endBecauseRecognizerStopped()
         }
 
         if registersShortcut {
@@ -324,6 +380,7 @@ final class DictationCoordinator: ObservableObject {
         sessionID += 1
         let session = sessionID
         NookEventLog.write(.dictationStarted)
+        startSessionWatchdog(for: session)
         startTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
@@ -359,6 +416,8 @@ final class DictationCoordinator: ObservableObject {
     private func finish() {
         guard phase.isActive, !isFinishing else { return }
         isFinishing = true
+        sessionWatchdog?.cancel()
+        sessionWatchdog = nil
         let session = sessionID
 
         finishTask = Task { @MainActor [weak self] in
@@ -370,7 +429,23 @@ final class DictationCoordinator: ObservableObject {
             }
             // Starting and stopping must not interleave: a release during
             // setup would otherwise race the recognizer's own start.
-            await self.startTask?.value
+            //
+            // Bounded, because setup is not guaranteed to finish. A speech
+            // asset download that never completes, or a permission prompt
+            // nobody answers, would otherwise leave this awaiting forever with
+            // the microphone already live and no way to stop it.
+            let started: Void? = await withDeadline(
+                seconds: Self.startWaitTimeout
+            ) { [weak self] () -> Void in
+                await self?.startTask?.value
+            }
+            // Cleared only once the wait succeeded: `fail` is what cancels a
+            // start that is still running, and it cannot cancel a handle this
+            // has already dropped.
+            guard started != nil else {
+                self.fail(Self.startStalledMessage)
+                return
+            }
             self.startTask = nil
 
             guard
@@ -401,11 +476,86 @@ final class DictationCoordinator: ObservableObject {
         }
     }
 
+    /// Starts the backstop that ends a dictation which has run past its
+    /// ceiling. One per session, so a stale one cannot end a newer run.
+    private func startSessionWatchdog(for session: Int) {
+        sessionWatchdog?.cancel()
+        // Read from the pad as well as the session flag: a hands-free session
+        // clears the flag before opening its next listening window, and those
+        // windows belong to the same long-running capture.
+        let ceiling = ceilings.ceiling(
+            isContinuous: isContinuousSession || quickNote?.isContinuous == true
+        )
+        sessionWatchdog = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: ceiling)
+            guard
+                !Task.isCancelled,
+                let self,
+                self.sessionID == session,
+                self.phase.isActive
+            else {
+                return
+            }
+            self.endBecauseCeilingPassed(
+                message: DictationSessionCeilings.expiryMessage(for: ceiling)
+            )
+        }
+    }
+
+    /// Ends a dictation that has held the microphone for longer than allowed.
+    ///
+    /// The words already heard are delivered rather than dropped. The ceiling
+    /// exists because a key release went missing, which is not the user's
+    /// mistake and not a reason to lose their sentence.
+    private func endBecauseCeilingPassed(message: String) {
+        guard phase != .preparing else {
+            // Never reached listening, so there is nothing to deliver, and the
+            // start it is still waiting on is exactly what has to be cancelled.
+            fail(message)
+            return
+        }
+        guard !isFinishing else { return }
+        finish()
+
+        // Said through the indicator once the delivery has settled. `.failed`
+        // carries the only sentence the indicator can show, and by this point
+        // the run has already ended cleanly, so this is a notice rather than a
+        // failure. A delivery that ended in a real failure keeps its own, more
+        // specific message.
+        Task { @MainActor [weak self] in
+            await self?.finishTask?.value
+            guard let self, self.phase == .idle else { return }
+            self.showNotice(message)
+        }
+    }
+
+    /// Puts a sentence in the indicator without tearing anything down.
+    private func showNotice(_ message: String) {
+        phase = .failed(message)
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(4))
+            guard let self, self.phase == .failed(message) else { return }
+            self.phase = .idle
+        }
+    }
+
+    /// The recognizer stopped by itself while the user was still speaking.
+    ///
+    /// A results stream that ends without an error leaves the microphone live
+    /// and no more words coming. Everything heard up to that point is real, so
+    /// the run is finished normally rather than failed.
+    private func endBecauseRecognizerStopped() {
+        guard phase.isActive, !isFinishing else { return }
+        finish()
+    }
+
     func cancel() {
         guard phase.isActive || isFinishing || isFailed else { return }
         sessionID += 1
         isFinishing = false
         isContinuousSession = false
+        sessionWatchdog?.cancel()
+        sessionWatchdog = nil
         startTask?.cancel()
         startTask = nil
         finishTask?.cancel()
@@ -550,11 +700,15 @@ final class DictationCoordinator: ObservableObject {
             // Nothing was written while the user spoke, so the finished
             // sentence goes in now, in one piece.
             guard insertion.append(finalText) else {
-                let pasted = await insertion.pasteOnce(finalText)
-                if !pasted {
-                    fail("Nook couldn’t type into that app.")
-                } else {
+                switch await deliverByPasting(
+                    finalText,
+                    padText: finalText,
+                    failureMessage: "Nook couldn’t type into that app."
+                ) {
+                case .delivered:
                     concludeDelivery()
+                case .failed(let message):
+                    fail(message)
                 }
                 return
             }
@@ -576,24 +730,32 @@ final class DictationCoordinator: ObservableObject {
             // fragment.
             let remainder = undeliveredChunks.joined(separator: " ")
             if !remainder.isEmpty {
-                let pasted = await insertion.pasteOnce(" " + remainder)
-                #if DEBUG
-                NookDebugLog.write(
-                    "[dictation] remainder paste \(pasted ? "ok" : "FAILED")"
+                // The pasted remainder carries a leading space so it joins what
+                // is already in the field. A note starts empty, so it does not.
+                let delivery = await deliverByPasting(
+                    " " + remainder,
+                    padText: remainder,
+                    failureMessage: "Nook couldn’t finish typing into that app."
                 )
+                #if DEBUG
+                NookDebugLog.write("[dictation] remainder paste \(delivery)")
                 #endif
-                guard pasted else {
-                    fail("Nook couldn’t finish typing into that app.")
+                if case .failed(let message) = delivery {
+                    fail(message)
                     return
                 }
             }
         case .pasteOnly:
-            let pasted = await insertion.pasteOnce(finalText)
+            let delivery = await deliverByPasting(
+                finalText,
+                padText: finalText,
+                failureMessage: "Nook couldn’t paste into that app."
+            )
             #if DEBUG
-            NookDebugLog.write("[dictation] paste \(pasted ? "ok" : "FAILED")")
+            NookDebugLog.write("[dictation] paste \(delivery)")
             #endif
-            guard pasted else {
-                fail("Nook couldn’t paste into that app.")
+            if case .failed(let message) = delivery {
+                fail(message)
                 return
             }
         case .noTextField:
@@ -614,6 +776,8 @@ final class DictationCoordinator: ObservableObject {
     /// and a hands-free pad session opens its next listening window.
     private func concludeDelivery() {
         insertion.endRun()
+        sessionWatchdog?.cancel()
+        sessionWatchdog = nil
         isFinishing = false
         resetRunState()
         phase = .idle
@@ -679,12 +843,15 @@ final class DictationCoordinator: ObservableObject {
         case .pasteOnly:
             // Handled on the next turn so the paste can wait for the shortcut
             // modifiers to be released.
-            Task { @MainActor [insertion, quickNote] in
-                guard await insertion.pasteOnce(finalText) else {
-                    quickNote?.present()
-                    quickNote?.append(finalText)
-                    quickNote?.saveIfNeeded()
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                switch await self.insertion.pasteOnce(finalText) {
+                case .pasted:
                     return
+                case .refused(.secureField):
+                    self.fail(Self.secureFieldMessage)
+                case .refused(.focusMoved), .failed:
+                    self.routeToQuickNotePad(finalText)
                 }
             }
             return
@@ -692,10 +859,50 @@ final class DictationCoordinator: ObservableObject {
             break
         }
 
+        routeToQuickNotePad(finalText)
+    }
+
+    /// The no-field path: the pad opens holding the words, and saves them.
+    private func routeToQuickNotePad(_ text: String) {
         quickNote?.present()
-        quickNote?.append(finalText)
+        quickNote?.append(text)
         quickNote?.saveIfNeeded()
     }
+
+    private enum PasteDelivery {
+        case delivered
+        case failed(String)
+    }
+
+    /// Pastes `text`, and sends the words to the pad when focus has moved on.
+    ///
+    /// `padText` is what the pad receives, which is not always what would have
+    /// been pasted.
+    private func deliverByPasting(
+        _ text: String,
+        padText: String,
+        failureMessage: String
+    ) async -> PasteDelivery {
+        switch await insertion.pasteOnce(text) {
+        case .pasted:
+            return .delivered
+        case .refused(.focusMoved):
+            // The words belong to the field the run started in, and that field
+            // no longer has focus. They go somewhere the user can read and move
+            // them deliberately rather than into whatever is in front now.
+            routeToQuickNotePad(padText)
+            return .delivered
+        case .refused(.secureField):
+            return .failed(Self.secureFieldMessage)
+        case .failed:
+            return .failed(failureMessage)
+        }
+    }
+
+    /// Shown rather than written anywhere: words spoken into a password field
+    /// are a secret, and the note pad is a file on disk.
+    private static let secureFieldMessage =
+        "Nook won’t type into a password field."
 
     private var isFailed: Bool {
         if case .failed = phase { return true }
@@ -708,6 +915,8 @@ final class DictationCoordinator: ObservableObject {
         // teardown the audio tap can keep the microphone live after the
         // indicator disappears, and the failed phase then rejects `cancel()`.
         sessionID += 1
+        sessionWatchdog?.cancel()
+        sessionWatchdog = nil
         startTask?.cancel()
         startTask = nil
         finishTask?.cancel()

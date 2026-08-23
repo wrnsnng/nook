@@ -22,7 +22,8 @@ struct NotchPanelView: View {
             for: meeting.phase,
             showsCaptions: meeting.showLiveCaptions,
             panelMode: meeting.panelMode,
-            isHidden: meeting.topPanelHidden
+            isHidden: meeting.topPanelHidden,
+            detectionPromptIsCompact: geometry.detectionPromptIsCompact
         )
         return CGSize(
             width: min(preferred.width, geometry.maximumPanelWidth),
@@ -358,7 +359,64 @@ struct NotchPanelView: View {
         }
     }
 
+    @ViewBuilder
     private func detectedContent(_ detection: DetectedMeeting) -> some View {
+        if geometry.detectionPromptIsCompact {
+            compactDetectedContent(detection)
+        } else {
+            expandedDetectedContent(detection)
+        }
+    }
+
+    /// The prompt after it has been on screen for a while.
+    ///
+    /// It shrinks rather than disappearing. A prompt that vanishes has answered
+    /// itself on the user's behalf, and the answer it picked was "not now":
+    /// someone who looked away for a moment came back to an unrecorded meeting
+    /// with no sign Nook had ever offered. Both answers stay one click away.
+    private func compactDetectedContent(_ detection: DetectedMeeting) -> some View {
+        HStack(spacing: 4) {
+            NookPresence(
+                state: .detected,
+                size: 18,
+                showsSurface: false
+            )
+
+            Button {
+                meeting.startDetectedMeeting()
+            } label: {
+                Label("Record", systemImage: "waveform")
+            }
+            .buttonStyle(PanelTextButtonStyle(isPrimary: true))
+            .keyboardShortcut(.defaultAction)
+            .focused($detectedAction, equals: .record)
+            // The collapsed prompt has no room for the meeting title, so the
+            // tooltip carries what the panel dropped.
+            .help("Record \(detection.suggestedTitle) in \(detection.appName)")
+            .accessibilityHint("Starts recording \(detection.suggestedTitle) locally")
+
+            Button {
+                meeting.dismissPrompt()
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(PanelIconButtonStyle())
+            .keyboardShortcut(.cancelAction)
+            .focused($detectedAction, equals: .dismiss)
+            .help("Not now")
+            .accessibilityLabel("Not now")
+            .accessibilityHint("Leaves this meeting unrecorded")
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Record \(detection.suggestedTitle) in \(detection.appName)?")
+        .onAppear {
+            guard !rendersForSnapshot else { return }
+            // Return still answers the prompt, so focus stays on Record.
+            detectedAction = .record
+        }
+    }
+
+    private func expandedDetectedContent(_ detection: DetectedMeeting) -> some View {
         HStack(spacing: 8) {
             NookPresence(
                 state: .detected,
@@ -539,7 +597,7 @@ struct NotchPanelView: View {
                     .frame(width: 78, height: 13)
                     .opacity(meeting.isPaused ? 0.34 : 0.88)
 
-                    Text(meeting.isPaused ? "PAUSED" : elapsedLabel)
+                    Text(meeting.isPaused ? "Paused" : elapsedLabel)
                         .font(NookType.code)
                         .foregroundStyle(
                             meeting.isPaused
@@ -566,7 +624,11 @@ struct NotchPanelView: View {
 
             HStack(spacing: 2) {
                 CompactMeetingControl(
-                    symbol: "chevron.up",
+                    // Distinct from the chevron that collapses the expanded
+                    // panel: hiding puts the whole surface away behind the
+                    // camera, collapsing only takes the workspace down a size,
+                    // and one glyph for both said they did the same thing.
+                    symbol: "arrow.up.to.line",
                     label: "Hide top panel",
                     action: meeting.hideTopPanel
                 )
@@ -805,8 +867,12 @@ struct NotchPanelView: View {
 
     private func processingDetail(for step: MeetingPhase.ProcessingStep) -> String {
         // One sentence source shared with the live workspace, so the same
-        // step never reads two different ways.
-        step.displaySentence
+        // step never reads two different ways. The coordinator's version adds
+        // the part counter while a long meeting is being condensed, without
+        // which several minutes of "Distilling the conversation" with nothing
+        // moving reads as a hang.
+        let detail = meeting.processingDetail
+        return detail.isEmpty ? step.displaySentence : detail
     }
 
     private func openLibrary() {
@@ -910,10 +976,20 @@ private struct PanelIconButtonStyle: ButtonStyle {
 }
 
 private struct HiddenRecordingIndicatorStyle: ButtonStyle {
+    @Environment(\.isFocused) private var isFocused
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .opacity(configuration.isPressed ? 0.82 : 1)
             .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            // The one control on a hidden panel, and the only way back to the
+            // recording without a pointer. It gets the same focus ring the
+            // other panel styles do; without it a keyboard user could reach it
+            // and not know they had.
+            .nookFocusRing(
+                RoundedRectangle(cornerRadius: 9, style: .continuous),
+                isVisible: isFocused
+            )
             .animation(
                 .timingCurve(0.22, 1, 0.36, 1, duration: 0.12),
                 value: configuration.isPressed
@@ -1154,7 +1230,7 @@ private struct LiveSummaryPanel: View {
                 Button(action: refresh) {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 10, weight: .semibold))
-                        .frame(width: 22, height: 22)
+                        .frame(width: 28, height: 28)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -1246,7 +1322,7 @@ private struct LiveNotesPanel: View {
                 Button(action: detach) {
                     Image(systemName: "macwindow.on.rectangle")
                         .font(.system(size: 10, weight: .semibold))
-                        .frame(width: 24, height: 24)
+                        .frame(width: 28, height: 28)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)

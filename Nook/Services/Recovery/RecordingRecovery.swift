@@ -202,9 +202,13 @@ final class RecordingRecovery: ObservableObject {
                     guard !orphan.captures.isEmpty else {
                         throw RecoveryError.nothingToRecover
                     }
-                    let destination = orphan.captures[0]
-                        .deletingPathExtension()
-                        .appendingPathExtension("m4a")
+                    // Named for the note rather than for whichever capture
+                    // segment happened to sort first. Retention looks kept
+                    // audio up by the note's identifier, so a meeting whose
+                    // first segment was a resumed part would otherwise extract
+                    // to a name nothing could find again.
+                    let destination = self.store.recordingsDirectory()
+                        .appendingPathComponent("\(orphan.id.uuidString).m4a")
                     try await AudioExtractor.extractAudio(
                         from: orphan.captures,
                         to: destination
@@ -227,6 +231,16 @@ final class RecordingRecovery: ObservableObject {
                     transcript: transcript,
                     fallbackTitle: fallbackTitle
                 )
+                let recordingsDirectory = self.store.recordingsDirectory()
+                // Anything typed into the meeting's notes while it was running
+                // was written beside the recording. It is the only part of a
+                // stranded meeting the user wrote themselves, and rebuilding
+                // the transcript and summary without it would recover
+                // everything except the part that was theirs.
+                let liveNotes = MeetingCoordinator.recoverableLiveNotes(
+                    for: orphan.id,
+                    in: recordingsDirectory
+                )
                 let note = MeetingNote(
                     id: orphan.id,
                     title: insights.title,
@@ -237,11 +251,25 @@ final class RecordingRecovery: ObservableObject {
                     keyPoints: insights.keyPoints,
                     decisions: insights.decisions,
                     actionItems: insights.actionItems,
+                    personalNotes: liveNotes,
                     transcript: transcript
                 )
                 _ = try self.store.save(note)
 
-                for url in orphan.urls {
+                // With retention on, the extracted audio is this note's kept
+                // audio, exactly as it would be had the meeting finished
+                // normally. Removing every source file here deleted it, so
+                // recovering a meeting was also the act that threw away the
+                // recording the user had asked Nook to keep.
+                for url in Self.filesToRemoveAfterRecovery(
+                    sources: orphan.urls,
+                    extractedAudio: audioURL,
+                    liveNotes: MeetingCoordinator.liveNotesURL(
+                        for: orphan.id,
+                        in: recordingsDirectory
+                    ),
+                    keepAudio: MeetingCoordinator.keepAudioPreference
+                ) {
                     try? FileManager.default.removeItem(at: url)
                 }
                 self.message = "Saved “\(note.title)”."
@@ -250,6 +278,30 @@ final class RecordingRecovery: ObservableObject {
                 self.message = error.localizedDescription
             }
         }
+    }
+
+    /// What a finished recovery no longer needs on disk.
+    ///
+    /// Kept audio is not on the list. With retention on, the extracted `.m4a`
+    /// becomes this note's audio exactly as it would have had the meeting
+    /// finished normally, and removing every source file here meant recovering
+    /// a meeting was also the act that destroyed the recording the user had
+    /// asked Nook to keep.
+    static func filesToRemoveAfterRecovery(
+        sources: [URL],
+        extractedAudio: URL,
+        liveNotes: URL,
+        keepAudio: Bool
+    ) -> Set<URL> {
+        var removable = Set(sources.map(\.standardizedFileURL))
+        // Extracted during this recovery, so the scan never listed it.
+        removable.insert(extractedAudio.standardizedFileURL)
+        // The typed notes are inside the note now.
+        removable.insert(liveNotes.standardizedFileURL)
+        if keepAudio {
+            removable.remove(extractedAudio.standardizedFileURL)
+        }
+        return removable
     }
 
     enum RecoveryError: LocalizedError {

@@ -140,4 +140,149 @@ struct RecordingRecoveryTests {
 
         #expect(recovery.orphans.isEmpty)
     }
+
+    // MARK: Notes typed during a meeting
+
+    @Test
+    func notesTypedDuringAMeetingAreOnDiskForRecoveryToFind() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        let recordings = store.recordingsDirectory()
+        let id = UUID()
+
+        MeetingCoordinator.writeLiveNotes(
+            "Ask Ana about the beta list.",
+            to: MeetingCoordinator.liveNotesURL(for: id, in: recordings)
+        )
+
+        #expect(
+            MeetingCoordinator.recoverableLiveNotes(for: id, in: recordings)
+                == "Ask Ana about the beta list."
+        )
+    }
+
+    @Test
+    func clearingTheNotesFieldDoesNotLeaveTheOldWordsToBeRecovered() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        let recordings = store.recordingsDirectory()
+        let id = UUID()
+        let url = MeetingCoordinator.liveNotesURL(for: id, in: recordings)
+
+        MeetingCoordinator.writeLiveNotes("A first thought.", to: url)
+        MeetingCoordinator.writeLiveNotes("   ", to: url)
+
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+        #expect(
+            MeetingCoordinator.recoverableLiveNotes(for: id, in: recordings)
+                .isEmpty
+        )
+    }
+
+    @Test
+    func aMeetingThatFinishesTakesItsNotesFileWithIt() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        let recordings = store.recordingsDirectory()
+        let id = UUID()
+        let draft = MeetingDraft(
+            id: id,
+            title: "Weekly review",
+            sourceApp: "Zoom",
+            startedAt: Date(timeIntervalSince1970: 1_780_000_000),
+            recordingURL: recordings
+                .appendingPathComponent("\(id.uuidString).mp4")
+        )
+        let notesURL = MeetingCoordinator.liveNotesURL(for: id, in: recordings)
+        MeetingCoordinator.writeLiveNotes("Inside the note now.", to: notesURL)
+        try writeRecording(id, extensionName: "mp4", in: recordings)
+
+        // The notes are in the saved note by this point, so a second copy in
+        // the recordings folder is litter nothing else would ever remove.
+        #expect(
+            RecordingArtifactCleanup.removeArtifacts(for: draft).isEmpty
+        )
+        #expect(!FileManager.default.fileExists(atPath: notesURL.path))
+    }
+
+    // MARK: What a recovery leaves behind
+
+    private func recoveryCleanup(
+        keepAudio: Bool,
+        in recordings: URL,
+        id: UUID
+    ) -> Set<URL> {
+        RecordingRecovery.filesToRemoveAfterRecovery(
+            sources: [
+                recordings.appendingPathComponent("\(id.uuidString).mp4"),
+                recordings.appendingPathComponent("\(id.uuidString).m4a")
+            ],
+            extractedAudio: recordings
+                .appendingPathComponent("\(id.uuidString).m4a"),
+            liveNotes: MeetingCoordinator.liveNotesURL(
+                for: id,
+                in: recordings
+            ),
+            keepAudio: keepAudio
+        )
+    }
+
+    @Test
+    func recoveringAMeetingKeepsItsAudioWhenRetentionIsOn() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        let recordings = store.recordingsDirectory()
+        let id = UUID()
+        let audio = recordings
+            .appendingPathComponent("\(id.uuidString).m4a")
+            .standardizedFileURL
+
+        let removable = recoveryCleanup(
+            keepAudio: true,
+            in: recordings,
+            id: id
+        )
+
+        #expect(!removable.contains(audio))
+        #expect(
+            removable.contains(
+                recordings
+                    .appendingPathComponent("\(id.uuidString).mp4")
+                    .standardizedFileURL
+            )
+        )
+        #expect(
+            removable.contains(
+                MeetingCoordinator.liveNotesURL(for: id, in: recordings)
+                    .standardizedFileURL
+            )
+        )
+    }
+
+    @Test
+    func recoveringAMeetingRemovesItsAudioWhenRetentionIsOff() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        let recordings = store.recordingsDirectory()
+        let id = UUID()
+
+        let removable = recoveryCleanup(
+            keepAudio: false,
+            in: recordings,
+            id: id
+        )
+
+        #expect(
+            removable.contains(
+                recordings
+                    .appendingPathComponent("\(id.uuidString).m4a")
+                    .standardizedFileURL
+            )
+        )
+    }
 }

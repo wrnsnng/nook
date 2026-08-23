@@ -125,4 +125,70 @@ struct LibraryAnswerTests {
         #expect((labels["Discussion"] ?? 0) > 3)
         #expect(chunks.allSatisfy { !$0.text.isEmpty })
     }
+
+    /// A summary or personal-notes paragraph is free-form prose that can run
+    /// to any length; six oversized excerpts of that kind sent to the
+    /// on-device model in one request could overflow its context window on
+    /// their own, so each is capped before it ever reaches embedding.
+    @Test
+    func summaryAndPersonalNotesChunksAreCappedForEmbedding() throws {
+        let longText = String(repeating: "word ", count: 1_000)
+        let note = MeetingNote(
+            title: "Long meeting",
+            startedAt: Date(timeIntervalSince1970: 1_000_000),
+            endedAt: Date(timeIntervalSince1970: 1_003_600),
+            sourceApp: "Zoom",
+            summary: longText,
+            personalNotes: longText
+        )
+
+        let chunks = LibraryAnswerService.chunks(from: [note])
+        let summaryChunk = chunks.first { $0.label == "Summary" }
+        let notesChunk = chunks.first { $0.label == "My notes" }
+
+        #expect(longText.count > LibraryAnswerService.maximumFreeTextChunkCharacters)
+        let summaryCount = try #require(summaryChunk?.text.count)
+        let notesCount = try #require(notesChunk?.text.count)
+        #expect(summaryCount <= LibraryAnswerService.maximumFreeTextChunkCharacters)
+        #expect(notesCount <= LibraryAnswerService.maximumFreeTextChunkCharacters)
+        #expect(summaryChunk?.text.hasSuffix("…") == true)
+    }
+
+    /// Ranking used to reload and rewrite the whole on-disk vector cache on
+    /// every question and never pruned it, so a library that had notes
+    /// edited or deleted still carried their vectors forever. A question
+    /// now leaves the cache holding only the chunks it was actually asked
+    /// about.
+    @Test
+    func rankingPrunesVectorsForChunksThatNoLongerExist() async throws {
+        let cacheURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("nook-ask-test-\(UUID().uuidString).json")
+        let design = chunk("Design", text: "The design review covered onboarding flows")
+        let pricing = chunk("Pricing", text: "We discussed pricing tiers and q3 revenue")
+
+        _ = try await LibraryAnswerService.rank(
+            question: "pricing",
+            among: [design, pricing],
+            embedding: WordVectorEmbedding(),
+            cacheURL: cacheURL
+        )
+        let afterFirstQuestion = try ChunkVectorCache.load(from: cacheURL)
+        #expect(afterFirstQuestion.count == 2)
+
+        // "Design" is no longer among the library's chunks, as if its note
+        // had been edited or deleted since the last question.
+        _ = try await LibraryAnswerService.rank(
+            question: "pricing",
+            among: [pricing],
+            embedding: WordVectorEmbedding(),
+            cacheURL: cacheURL
+        )
+        let afterSecondQuestion = try ChunkVectorCache.load(from: cacheURL)
+
+        #expect(afterSecondQuestion.count == 1)
+        #expect(
+            afterSecondQuestion[LibraryAnswerService.hash(of: pricing.embeddedText)]
+                != nil
+        )
+    }
 }

@@ -48,11 +48,17 @@ final class LibraryAnswerService: ObservableObject {
 
     struct NaturalLanguageEmbedding: TextEmbeddingProvider {
         func vector(for text: String) -> [Double]? {
-            guard let embedding = NLEmbedding.sentenceEmbedding(
-                for: .english
-            ) else { return nil }
-            return embedding.vector(for: text)
+            Self.sharedModel?.vector(for: text)
         }
+
+        // `NLEmbedding.sentenceEmbedding` loads a multi-megabyte on-device
+        // model from disk; building one per ranked chunk made every question
+        // pay that cost hundreds of times over. The model is immutable once
+        // constructed and Apple documents `vector(for:)` as safe to call
+        // concurrently, so a process-lifetime singleton is safe to share
+        // across the detached ranking task.
+        nonisolated(unsafe) private static let sharedModel: NLEmbedding? =
+            NLEmbedding.sentenceEmbedding(for: .english)
     }
 
     static let minimumMatchScore = 0.30
@@ -102,24 +108,34 @@ final class LibraryAnswerService: ObservableObject {
         isPreparing = true
         defer { isPreparing = false }
 
-        let chunks = Self.chunks(from: notes)
-        guard !chunks.isEmpty else {
-            return LibraryAnswer(
-                text: "",
-                citations: [],
-                refusedReason: "There are no notes to search yet."
-            )
-        }
-
         do {
-            let ranked = try await Task.detached(priority: .userInitiated) {
-                try await Self.rank(
-                    question: trimmed,
-                    among: chunks,
-                    embedding: self.embedding,
-                    cacheURL: self.cacheURL
+            // Chunking walks every note's transcript and splits it into
+            // passages; for a large library that is real work, so it runs
+            // inside the detached task rather than blocking the main actor
+            // before this function's first await.
+            let outcome = try await Task.detached(priority: .userInitiated) {
+                () async throws -> (Bool, [RankedChunk]) in
+                let chunks = Self.chunks(from: notes)
+                guard !chunks.isEmpty else { return (true, []) }
+                return (
+                    false,
+                    try await Self.rank(
+                        question: trimmed,
+                        among: chunks,
+                        embedding: self.embedding,
+                        cacheURL: self.cacheURL
+                    )
                 )
             }.value
+
+            let (libraryIsEmpty, ranked) = outcome
+            guard !libraryIsEmpty else {
+                return LibraryAnswer(
+                    text: "",
+                    citations: [],
+                    refusedReason: "There are no notes to search yet."
+                )
+            }
 
             guard let best = ranked.first, best.score >= Self.minimumMatchScore
             else {
@@ -204,23 +220,45 @@ final class LibraryAnswerService: ObservableObject {
                 citations: citations,
                 refusedReason: nil
             )
-        } catch {
-            // The model being unavailable must not lose the retrieval work:
-            // show the passages themselves, honestly labelled.
-            let passages = citations.map { citation in
-                "[\(citation.number)] \(citation.chunk.label): \(citation.chunk.text)"
+        } catch let error as LanguageModelSession.GenerationError {
+            // Distinct from the model being unavailable: retrieval matched
+            // real passages, but their combined length overran the model's
+            // context window. Telling the user to narrow the question is
+            // actionable in a way "model unavailable" is not.
+            guard case .exceededContextWindowSize = error else {
+                return Self.unavailableFallback(citations: citations)
             }
             return LibraryAnswer(
-                text: """
-                    The on-device model was unavailable, so here are the \
-                    closest passages instead:
-
-                    \(passages.joined(separator: "\n\n"))
-                    """,
-                citations: citations,
-                refusedReason: nil
+                text: "",
+                citations: [],
+                refusedReason: """
+                    That matched too much text for the on-device model to \
+                    read at once. Try a narrower question.
+                    """
             )
+        } catch {
+            return Self.unavailableFallback(citations: citations)
         }
+    }
+
+    private static func unavailableFallback(
+        citations: [LibraryCitation]
+    ) -> LibraryAnswer {
+        // The model being unavailable must not lose the retrieval work: show
+        // the passages themselves, honestly labelled.
+        let passages = citations.map { citation in
+            "[\(citation.number)] \(citation.chunk.label): \(citation.chunk.text)"
+        }
+        return LibraryAnswer(
+            text: """
+                The on-device model was unavailable, so here are the \
+                closest passages instead:
+
+                \(passages.joined(separator: "\n\n"))
+                """,
+            citations: citations,
+            refusedReason: nil
+        )
     }
 
     /// Removes citation markers pointing past the excerpts actually shown,
@@ -256,8 +294,28 @@ final class LibraryAnswerService: ObservableObject {
 
     // MARK: - Chunking
 
+    /// Free-form prose (a summary or a paragraph of personal notes) can run
+    /// to any length; every other label is inherently short. `compose()` can
+    /// send up to `maximumExcerpts` chunks to the on-device model in one
+    /// request, so six oversized excerpts here would be enough to overflow
+    /// its context window on their own.
+    nonisolated static let maximumFreeTextChunkCharacters = 1_500
+
+    nonisolated private static func cappedForEmbedding(_ text: String) -> String {
+        guard text.count > maximumFreeTextChunkCharacters else { return text }
+        let cutoff = text.index(
+            text.startIndex,
+            offsetBy: maximumFreeTextChunkCharacters
+        )
+        var truncated = String(text[..<cutoff])
+        if let lastSpace = truncated.lastIndex(of: " ") {
+            truncated = String(truncated[..<lastSpace])
+        }
+        return truncated + "…"
+    }
+
     /// Splits a note into labelled passages small enough to embed and cite.
-    static func chunks(from notes: [MeetingNote]) -> [LibraryChunk] {
+    nonisolated static func chunks(from notes: [MeetingNote]) -> [LibraryChunk] {
         notes.flatMap { note in
             var chunks: [LibraryChunk] = []
 
@@ -277,13 +335,13 @@ final class LibraryAnswerService: ObservableObject {
                 )
             }
 
-            add("Summary", note.summary)
+            add("Summary", cappedForEmbedding(note.summary))
             note.keyPoints.forEach { add("Key point", $0) }
             note.decisions.forEach { add("Decision", $0) }
             note.actionItems.forEach { add("Action item", $0) }
 
             for paragraph in note.personalNotes.split(separator: "\n\n") {
-                add("My notes", String(paragraph))
+                add("My notes", cappedForEmbedding(String(paragraph)))
             }
 
             addTranscript(of: note, into: &chunks)
@@ -291,7 +349,7 @@ final class LibraryAnswerService: ObservableObject {
         }
     }
 
-    private static func addTranscript(
+    nonisolated private static func addTranscript(
         of note: MeetingNote,
         into chunks: inout [LibraryChunk]
     ) {
@@ -353,48 +411,61 @@ extension LibraryAnswerService {
             .joined()
     }
 
-    /// Ranks every chunk against the question, reusing vectors from the
-    /// on-disk cache where the passage text is unchanged.
+    /// Ranks every chunk against the question, reusing vectors from an
+    /// in-memory index that is loaded from disk once per process and
+    /// written back at most once per question, pruned to the chunks that
+    /// still exist. Earlier this reloaded and rewrote the whole on-disk
+    /// cache unconditionally on every question, which never shrank as notes
+    /// were edited or deleted.
     static func rank(
         question: String,
         among chunks: [LibraryChunk],
         embedding: any TextEmbeddingProvider,
         cacheURL: URL
     ) async throws -> [RankedChunk] {
-        let cache = (try? ChunkVectorCache.load(from: cacheURL)) ?? [:]
-
         guard let questionVector = embedding.vector(for: question) else {
             throw LibraryAnswerError.embeddingsUnavailable
         }
 
+        let store = await ChunkVectorStoreRegistry.shared.store(for: cacheURL)
         var results: [RankedChunk] = []
-        var updated = cache
+        var validHashes: Set<String> = []
+        validHashes.reserveCapacity(chunks.count)
+
         for chunk in chunks {
+            guard !Task.isCancelled else { break }
+
             let embeddedText = chunk.embeddedText
             let hash = Self.hash(of: embeddedText)
-            let vector: [Double]?
-            if let cached = updated[hash] {
+            validHashes.insert(hash)
+
+            let vector: [Float]?
+            if let cached = await store.vector(for: hash) {
                 vector = cached
+            } else if let fresh = embedding.vector(for: embeddedText) {
+                let compact = fresh.map(Float.init)
+                await store.set(compact, for: hash)
+                vector = compact
             } else {
-                vector = embedding.vector(for: embeddedText)
-                if let vector {
-                    updated[hash] = vector
-                }
+                vector = nil
             }
             guard let vector else { continue }
             results.append(
                 RankedChunk(
                     chunk: chunk,
-                    score: Self.cosine(questionVector, vector)
+                    score: Self.cosine(questionVector, vector.map(Double.init))
                 )
             )
         }
 
+        // Chunks whose hash was not seen this question belong to notes that
+        // were edited or deleted since the last question; drop them so the
+        // cache does not grow forever.
+        await store.prune(keeping: validHashes)
         // The cache is an optimisation. Failing to persist it must never
         // fail an answer; the next search simply embeds again.
-        if updated != cache {
-            try? ChunkVectorCache.save(updated, to: cacheURL)
-        }
+        await store.persistIfNeeded()
+
         return results.sorted { $0.score > $1.score }
     }
 }
@@ -411,11 +482,19 @@ enum LibraryAnswerError: LocalizedError {
 }
 
 /// Passage hash to embedding vector, stored under Application Support.
-typealias ChunkVectorCache = [String: [Double]]
+///
+/// Vectors are stored as `Float` rather than `Double`: sentence embeddings do
+/// not need double precision, and halving each component roughly halves the
+/// JSON file's size once a library has thousands of chunks.
+typealias ChunkVectorCache = [String: [Float]]
 
 extension ChunkVectorCache {
     static func load(from url: URL) throws -> ChunkVectorCache {
         let data = try Data(contentsOf: url)
+        // A cache written by the previous `[String: [Double]]` format decodes
+        // here without change, since JSON numeric literals decode into
+        // `Float` just as readily; a genuinely unreadable file simply misses
+        // the cache from then on rather than failing an answer.
         return try JSONDecoder().decode(ChunkVectorCache.self, from: data)
     }
 
@@ -426,5 +505,68 @@ extension ChunkVectorCache {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         try encoder.encode(cache).write(to: url, options: .atomic)
+    }
+}
+
+/// One vector store per cache file, kept for the lifetime of the process so
+/// that a second question in the same session never re-reads or re-embeds
+/// what the first one already resolved.
+actor ChunkVectorStoreRegistry {
+    static let shared = ChunkVectorStoreRegistry()
+
+    private var stores: [URL: ChunkVectorStore] = [:]
+
+    func store(for url: URL) -> ChunkVectorStore {
+        if let existing = stores[url] { return existing }
+        let created = ChunkVectorStore(url: url)
+        stores[url] = created
+        return created
+    }
+}
+
+/// In-memory index of chunk hash to embedding vector, backed by a single
+/// on-disk file. Loaded lazily on first use and written only when dirty.
+actor ChunkVectorStore {
+    private let url: URL
+    private var vectors: ChunkVectorCache = [:]
+    private var isLoaded = false
+    private var isDirty = false
+
+    init(url: URL) {
+        self.url = url
+    }
+
+    private func loadIfNeeded() {
+        guard !isLoaded else { return }
+        isLoaded = true
+        vectors = (try? ChunkVectorCache.load(from: url)) ?? [:]
+    }
+
+    func vector(for hash: String) -> [Float]? {
+        loadIfNeeded()
+        return vectors[hash]
+    }
+
+    func set(_ vector: [Float], for hash: String) {
+        loadIfNeeded()
+        vectors[hash] = vector
+        isDirty = true
+    }
+
+    /// Drops entries for chunks that no longer exist, so the file does not
+    /// grow without bound as notes are edited or removed.
+    func prune(keeping validHashes: Set<String>) {
+        loadIfNeeded()
+        let before = vectors.count
+        vectors = vectors.filter { validHashes.contains($0.key) }
+        if vectors.count != before {
+            isDirty = true
+        }
+    }
+
+    func persistIfNeeded() {
+        guard isDirty else { return }
+        isDirty = false
+        try? ChunkVectorCache.save(vectors, to: url)
     }
 }

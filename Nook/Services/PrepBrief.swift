@@ -118,19 +118,27 @@ struct PrepBrief: Identifiable, Hashable, Sendable {
 enum PrepBriefBuilder {
     /// The brief for an upcoming event, or nil when the library holds no
     /// earlier sitting of that series.
+    ///
+    /// `noteSeriesKeys` lets a caller that already knows each note's series
+    /// key (see `SeriesKeyCache`) skip recomputing it here; without one,
+    /// every note's title is run through the matcher's regular expressions
+    /// on this call, exactly as before.
     static func build(
         eventTitle: String,
         startDate: Date,
-        notes: [MeetingNote]
+        notes: [MeetingNote],
+        noteSeriesKeys: [MeetingNote.ID: String]? = nil
     ) -> PrepBrief? {
+        // Computed once here rather than once per note, as `matches` used to
+        // do internally on every call.
         let key = SeriesMatcher.seriesKey(for: eventTitle)
         guard !key.isEmpty else { return nil }
         let sittings = notes
-            .filter {
-                $0.kind != .digest && SeriesMatcher.matches(
-                    noteTitle: $0.title,
-                    eventTitle: eventTitle
-                )
+            .filter { note in
+                guard note.kind != .digest else { return false }
+                let noteKey = noteSeriesKeys?[note.id]
+                    ?? SeriesMatcher.seriesKey(for: note.title)
+                return !noteKey.isEmpty && noteKey == key
             }
             .sorted { $0.startedAt > $1.startedAt }
         guard !sittings.isEmpty else { return nil }
@@ -143,6 +151,35 @@ enum PrepBriefBuilder {
     }
 }
 
+/// Caches each note's series key by id and title, so a title that has not
+/// changed since the last `store.notes` publish is not re-parsed through
+/// `SeriesMatcher`'s regular expressions again. An actor because it is
+/// populated from a detached task, off the main actor, on every publish.
+actor SeriesKeyCache {
+    private var entries: [MeetingNote.ID: (title: String, key: String)] = [:]
+
+    /// Every note's series key, computed fresh only for notes that are new
+    /// or whose title changed since the last call.
+    func keys(for notes: [MeetingNote]) -> [MeetingNote.ID: String] {
+        var result: [MeetingNote.ID: String] = [:]
+        result.reserveCapacity(notes.count)
+        for note in notes {
+            if let cached = entries[note.id], cached.title == note.title {
+                result[note.id] = cached.key
+            } else {
+                let key = SeriesMatcher.seriesKey(for: note.title)
+                entries[note.id] = (note.title, key)
+                result[note.id] = key
+            }
+        }
+        // Notes no longer in the library have nothing left to reuse their
+        // entry, so drop it rather than growing this forever.
+        let currentIDs = Set(notes.map(\.id))
+        entries = entries.filter { currentIDs.contains($0.key) }
+        return result
+    }
+}
+
 /// Owns the brief for whatever calendar event is currently approaching, so
 /// the library can show a quiet prep surface without polling anything.
 @MainActor
@@ -150,23 +187,43 @@ final class PrepBriefController: ObservableObject {
     @Published private(set) var current: PrepBrief?
 
     private var cancellables: Set<AnyCancellable> = []
+    private let seriesKeyCache = SeriesKeyCache()
+    /// Guards against an older publish's detached build finishing after a
+    /// newer one and overwriting it with stale history.
+    private var buildGeneration = 0
 
     init(store: MarkdownStore, calendar: CalendarContextService) {
         Publishers.CombineLatest(
             calendar.$currentUpcomingEvent.removeDuplicates(),
             store.$notes
         )
-        .sink { [weak self] event, notes in
+        .sink { [weak self, seriesKeyCache] event, notes in
             guard let self else { return }
             guard let event else {
+                buildGeneration += 1
                 current = nil
                 return
             }
-            current = PrepBriefBuilder.build(
-                eventTitle: event.title,
-                startDate: event.startDate,
-                notes: notes
-            )
+            buildGeneration += 1
+            let generation = buildGeneration
+            // Keying every note's title against the series matcher's
+            // regular expressions is real work once a library holds
+            // hundreds of notes, and `store.notes` can publish on every
+            // save across the whole app; do it off the main actor.
+            Task.detached(priority: .utility) {
+                let noteSeriesKeys = await seriesKeyCache.keys(for: notes)
+                let brief = PrepBriefBuilder.build(
+                    eventTitle: event.title,
+                    startDate: event.startDate,
+                    notes: notes,
+                    noteSeriesKeys: noteSeriesKeys
+                )
+                await MainActor.run { [weak self] in
+                    guard let self, self.buildGeneration == generation
+                    else { return }
+                    self.current = brief
+                }
+            }
         }
         .store(in: &cancellables)
     }

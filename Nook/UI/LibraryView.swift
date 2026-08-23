@@ -17,6 +17,7 @@ struct LibraryView: View {
     @EnvironmentObject private var store: MarkdownStore
     @EnvironmentObject private var meeting: MeetingCoordinator
     @EnvironmentObject private var markdownDraft: MarkdownDraftController
+    @EnvironmentObject private var personalNotesDraft: PersonalNotesDraftController
     @EnvironmentObject private var prep: PrepBriefController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
@@ -627,22 +628,43 @@ struct LibraryView: View {
         return false
     }
 
+    /// Changes what the detail pane shows, after settling what the pane it is
+    /// leaving still owes.
+    ///
+    /// Both editors are considered, not only the Markdown one. A meeting
+    /// starting by itself moves the selection to the live pane, so leaving My
+    /// notes unaccounted for meant a recording could delete a half-typed
+    /// follow-up while the user was still typing it.
     private func requestSelection(_ requestedSelection: LibrarySelection?) {
         guard requestedSelection != selection else { return }
-        let isLeavingEditedNote: Bool
-        if case .note(let selectedID) = selection {
-            isLeavingEditedNote = markdownDraft.noteID == selectedID
-                && markdownDraft.hasChanges
+        let selectedID: MeetingNote.ID?
+        if case .note(let id) = selection {
+            selectedID = id
         } else {
-            isLeavingEditedNote = false
+            selectedID = nil
         }
 
-        guard isLeavingEditedNote else {
+        switch LibraryLeaveGuard.decide(
+            hasMarkdownChanges: markdownDraft.hasChanges
+                && markdownDraft.noteID == selectedID,
+            hasPersonalNotesChanges: personalNotesDraft.hasChanges
+        ) {
+        case .leave:
             selection = requestedSelection
-            return
+        case .saveFirst:
+            // Written rather than queried: this field has one destination and
+            // no discard of its own, so an alert would only ask the user to
+            // confirm the obvious. A refusal from the store is different, and
+            // it keeps the selection where it is so the words stay reachable.
+            if let failure = personalNotesDraft.saveIfNeeded(store: store) {
+                showCopyNotice(failure, severity: .failure)
+                return
+            }
+            selection = requestedSelection
+        case .askAboutMarkdown:
+            pendingSelection = requestedSelection
+            showsUnsavedChangesAlert = true
         }
-        pendingSelection = requestedSelection
-        showsUnsavedChangesAlert = true
     }
 
     private func saveDraftAndContinue() {
@@ -663,6 +685,13 @@ struct LibraryView: View {
     }
 
     private func applyPendingSelection() {
+        // The alert settled the Markdown question. The notes field is still
+        // owed a write before the pane holding it is replaced; its words
+        // outlive the view either way, so a refusal is reported rather than
+        // blocking the selection the user already confirmed.
+        if let failure = personalNotesDraft.saveIfNeeded(store: store) {
+            showCopyNotice(failure, severity: .failure)
+        }
         selection = pendingSelection
         pendingSelection = nil
     }
@@ -738,22 +767,28 @@ struct LibraryView: View {
     ///
     /// A week with nothing in it produces a file whose every count is zero,
     /// so the action refuses and says so instead of saving an empty digest.
+    /// Clicking again for the same week updates that digest in place rather
+    /// than leaving a new, near-duplicate file behind each time.
     private func createWeeklyDigest() {
         let window = DigestBuilder.period()
-        let covered = store.notes.filter { note in
-            note.kind == .meeting
-                && note.startedAt >= window.start
-                && note.startedAt <= window.end
-        }
-        guard !covered.isEmpty else {
+        guard !DigestBuilder.coveredMeetings(from: store.notes).isEmpty else {
             showCopyNotice(
                 "No meetings from the last seven days to include yet.",
                 severity: .info
             )
             return
         }
+        let existing = store.notes.first {
+            $0.kind == .digest
+                && $0.startedAt >= window.start
+                && $0.startedAt <= window.end
+        }
         Task {
-            let digest = await DigestBuilder.build(from: store.notes)
+            let digest = await DigestBuilder.build(
+                from: store.notes,
+                id: existing?.id ?? UUID(),
+                fileURL: existing?.fileURL
+            )
             do {
                 let saved = try store.save(digest)
                 requestSelection(.note(saved.id))

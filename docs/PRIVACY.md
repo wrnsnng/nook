@@ -178,6 +178,28 @@ When a run is confirmed:
   Mac. Nook does not read, store, or transmit any credential; there is
   nothing for Nook to leak because it never holds one.
 
+Both tools are agents by default: they read and write files, run commands, and
+call whatever MCP servers, hooks, and custom instructions their user has
+configured, under the permissions that user already granted for their own work.
+A note is dictated speech and other people's writing, and it routinely reads as
+instructions. Nook therefore runs these tools stripped down to what a rewrite
+needs, rather than as the user's own configured agent:
+
+| Tool | What Nook adds |
+| --- | --- |
+| Claude Code | `--tools ""` (no built-in tools), `--strict-mcp-config` with no MCP configuration of its own (no MCP servers), `--permission-mode manual` (nothing runs unapproved, and a print-mode run has nobody there to approve it), `--safe-mode` (no CLAUDE.md, skills, plugins, hooks, or custom agents), `--no-session-persistence` |
+| Codex | `--sandbox read-only` (commands cannot write or reach the network), `--ignore-user-config` (no MCP servers, no user configuration), `--ignore-rules`, `--ephemeral` |
+
+`--no-session-persistence` and `--ephemeral` are the reason the note is not
+left behind in a session transcript inside `~/.claude` or `~/.codex` after the
+run. Authentication is untouched by all of these, which is what lets the bridge
+keep using the subscription the user already has.
+
+Nook reads each tool's own `--help` once per app run and uses only the flags
+that installed version advertises. If the help cannot be read, every flag above
+is passed anyway: a run that fails visibly is better than one that quietly runs
+without restriction.
+
 Handling of that text once it reaches the CLI tool, and any request the tool
 makes from there, is covered by that provider's own terms and privacy policy,
 not Nook's.

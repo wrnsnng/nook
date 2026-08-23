@@ -8,6 +8,9 @@ protocol DictationRecognizing: AnyObject {
     var onVolatile: (@MainActor (String) -> Void)? { get set }
     var onFinalized: (@MainActor (String) -> Void)? { get set }
     var onError: (@MainActor (String) -> Void)? { get set }
+    /// The recognizer stopped on its own, without an error and without being
+    /// asked to. Everything already finalized still stands.
+    var onEnded: (@MainActor () -> Void)? { get set }
     func start(localeIdentifier: String) async throws
     func ingest(_ buffer: AVAudioPCMBuffer)
     func finish() async
@@ -30,6 +33,7 @@ final class DictationRecognizer: DictationRecognizing {
     /// A span that will not change again. Append-only.
     var onFinalized: (@MainActor (String) -> Void)?
     var onError: (@MainActor (String) -> Void)?
+    var onEnded: (@MainActor () -> Void)?
 
     private var transcriber: SpeechTranscriber?
     private var analyzer: SpeechAnalyzer?
@@ -40,11 +44,23 @@ final class DictationRecognizer: DictationRecognizing {
     private var didReceiveInput = false
     private var reportedConversionFailure = false
     private var lastFinalizedStart: CMTime?
+    /// Set while `finish()` is draining, so the results stream ending is read
+    /// as the expected end of a flush rather than as the recognizer stopping.
+    private var isFinishing = false
+    /// Where an asset installation failure is parked, because the deadline
+    /// below can only carry a value across, not a thrown error.
+    private var assetInstallFailure: (any Error)?
 
     /// Dictation is interactive: nobody will wait eight seconds to find out
     /// their sentence is not coming. Past this, whatever was already finalized
     /// is used and the rest is dropped.
     private static let finalizationTimeout: Double = 3
+
+    /// A first dictation in a language downloads a speech asset, and that
+    /// download has no deadline of its own. Matches the ceiling the already
+    /// downloading branch of `SpeechAssets` uses, so the two cannot disagree
+    /// about how long is too long.
+    private static let assetInstallTimeout: Double = 60
 
     func start(localeIdentifier: String) async throws {
         // Asset installation and authorization can take seconds, during which
@@ -52,6 +68,7 @@ final class DictationRecognizer: DictationRecognizing {
         // leave the first one running with nothing able to stop it.
         if analyzer != nil { cancel() }
         lastFinalizedStart = nil
+        isFinishing = false
 
         try await SpeechAssets.requestAuthorization()
         let locale = try await SpeechAssets.supportedLocale(for: localeIdentifier)
@@ -63,10 +80,30 @@ final class DictationRecognizer: DictationRecognizing {
             locale: locale,
             preset: .timeIndexedProgressiveTranscription
         )
-        try await SpeechAssets.installIfNeeded(
-            for: [transcriber],
-            locale: locale
-        )
+        // Bounded, because the microphone is already the user's to lose. An
+        // install that never finishes, on a metered or unreachable network,
+        // would otherwise leave the shortcut looking pressed forever.
+        assetInstallFailure = nil
+        let installed: Void? = await withDeadline(
+            seconds: Self.assetInstallTimeout
+        ) { [weak self, transcriber, locale] () -> Void in
+            do {
+                try await SpeechAssets.installIfNeeded(
+                    for: [transcriber],
+                    locale: locale
+                )
+            } catch {
+                self?.assetInstallFailure = error
+            }
+        }
+        guard installed != nil else {
+            throw SpeechAssetError.installTimedOut
+        }
+        if let failure = assetInstallFailure {
+            assetInstallFailure = nil
+            throw failure
+        }
+
         guard let analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(
             compatibleWith: [transcriber]
         ) else {
@@ -96,6 +133,16 @@ final class DictationRecognizer: DictationRecognizing {
                     guard !Task.isCancelled else { return }
                     self?.accept(result)
                 }
+                // A sequence that ends cleanly while the run is still live is a
+                // recognizer that stopped without an error: no throw, no
+                // callback, and no more words however long the user keeps
+                // talking. Nothing else would notice, and in hold-to-talk the
+                // microphone would stay open until the key came back up.
+                // Ending the run here delivers what was actually heard.
+                guard let self, !self.isFinishing, !Task.isCancelled else {
+                    return
+                }
+                self.onEnded?()
             } catch {
                 self?.onError?("Dictation stopped hearing your microphone.")
             }
@@ -119,6 +166,7 @@ final class DictationRecognizer: DictationRecognizing {
     /// Flushes the recognizer and returns once every remaining finalized span
     /// has been delivered through `onFinalized`.
     func finish() async {
+        isFinishing = true
         guard didReceiveInput else {
             cancel()
             return
@@ -157,6 +205,9 @@ final class DictationRecognizer: DictationRecognizing {
 
     /// Drops the session without waiting on the Speech framework.
     func cancel() {
+        // Set before the stream is torn down: the results task ending because
+        // of this is not the recognizer stopping on its own.
+        isFinishing = true
         continuation?.finish()
         analysisTask?.cancel()
         resultsTask?.cancel()

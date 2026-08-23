@@ -36,6 +36,7 @@
 		27FB9A4EFDACCDFCA0256BBD /* TextInsertionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B298E8C21A364A8857152A57 /* TextInsertionService.swift */; };
 		2975F188D341272B55A0F5C5 /* RecordingRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8161483F1374BD8342076C40 /* RecordingRecovery.swift */; };
 		2BB3602A4B19FC4C05F0C451 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 170212C508F45D65AB1B9513 /* Assets.xcassets */; };
+		2C4433CEA6B0B8EF73392F67 /* PersonalNotesDraftTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 843B3D27D068E5D01683C0B6 /* PersonalNotesDraftTests.swift */; };
 		2E211D5F1C8C6C04E71E4E7E /* MarkdownStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2308619C687A88102D0054B5 /* MarkdownStore.swift */; };
 		315744AB436DD64BB694F908 /* NookUpdateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE0257E326F8CB6F9CC6CCB4 /* NookUpdateController.swift */; };
 		3207CFF45800726881B04661 /* MarkdownStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2308619C687A88102D0054B5 /* MarkdownStore.swift */; };
@@ -63,6 +64,7 @@
 		508CAAC62D35513D76C05F84 /* RecordingRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69EEF566A22CAC8C8A35BD84 /* RecordingRecoveryTests.swift */; };
 		52C6063AE11B7A257CA4709C /* NoteDecodeCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98A52969E7E5881E9991805A /* NoteDecodeCache.swift */; };
 		5355D715EE1FF8F42B9489B1 /* PermissionSetupController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83A5502CE70F9EA4C3BE8F69 /* PermissionSetupController.swift */; };
+		5597E5E19E4CF23BDD1ADD20 /* PersonalNotesDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = 744F6F3EA5D041A1C1669B43 /* PersonalNotesDraft.swift */; };
 		55AF8E9E37DDE279090AF339 /* TranscriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 493BD99F4073897EF877E6B2 /* TranscriptionService.swift */; };
 		5601574882CB3CB178204638 /* DictationRefiner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78FB15A93010450F270E5C0D /* DictationRefiner.swift */; };
 		562187D66A99BE71A4263ACB /* DictationRefiner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78FB15A93010450F270E5C0D /* DictationRefiner.swift */; };
@@ -72,6 +74,7 @@
 		581A5C583F700F10916ACAE1 /* StatusMenuView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77437DEB25AC4ECE82644D22 /* StatusMenuView.swift */; };
 		581F39EAAEF9CBBE8F1ED907 /* AudioPlaybackController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF45BE65468EC8567396A848 /* AudioPlaybackController.swift */; };
 		58B5D0B1AFDDB83A3829B1F1 /* LiveTranscriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BE43DCDC9893FE96856CD02 /* LiveTranscriptionService.swift */; };
+		59111F450D605F9EE318C6D6 /* PersonalNotesDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = 744F6F3EA5D041A1C1669B43 /* PersonalNotesDraft.swift */; };
 		5937BD5AEFDA720E632C2033 /* QuickNoteController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83933D3879F3DCE359A1FFF2 /* QuickNoteController.swift */; };
 		5952AB977949651A552F6C5A /* DictationSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6271F2989B3F82935AE714D4 /* DictationSettingsTests.swift */; };
 		5CC0091958B983D15A2D3112 /* PrepBriefTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06DE20F4ABEC5F79E54C49AC /* PrepBriefTests.swift */; };
@@ -86,11 +89,13 @@
 		705696C8F8B430167F304882 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 5346599FDAB4F3D319434022 /* Sparkle */; };
 		71729DFA6A47AA5AEACE1E54 /* AudioRetention.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC0E23C2FC082713A666CCCA /* AudioRetention.swift */; };
 		71A55DEA7A1C41127D4DB5ED /* THIRD_PARTY_NOTICES.md in Resources */ = {isa = PBXBuildFile; fileRef = 2DF398889F508D66FA99EB2C /* THIRD_PARTY_NOTICES.md */; };
+		76DC00C98A6431094DFE2EC7 /* OpenActionsControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2025F1AA72DD2FBB3058BFEA /* OpenActionsControllerTests.swift */; };
 		775FC4500CB122F70B25ADAA /* DictationShortcut.swift in Sources */ = {isa = PBXBuildFile; fileRef = 449C198A2510B46C85E755A1 /* DictationShortcut.swift */; };
 		79583555C5F3300FD3FED7F6 /* SpeechAssets.swift in Sources */ = {isa = PBXBuildFile; fileRef = D588A6E65FB7C05B912F3220 /* SpeechAssets.swift */; };
 		79E52D066160901042ECA761 /* LibraryAskView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5AC94822A19FB5A7F9E4E48 /* LibraryAskView.swift */; };
 		7B51ACF84A9F905BABE2FEBF /* NotchPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DAAB582D0BEF7F53894D139 /* NotchPanelView.swift */; };
 		7C5E746BF2743CA0922F157F /* NookDebugLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1A3A12949A21AFC99737BCE /* NookDebugLog.swift */; };
+		7D0C671306BCBDE7FD068974 /* NoteActionOutputGuardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 944A3341E4050AA77D6BF66D /* NoteActionOutputGuardTests.swift */; };
 		7D1E7143A6A8A7F35244ABF7 /* PrepBriefView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C690709E84082D9FB8F49E55 /* PrepBriefView.swift */; };
 		7F2F9591EA3404AB6C4A9320 /* MarkdownCodecTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A701190651FDA38F39E3ACF3 /* MarkdownCodecTests.swift */; };
 		7F71BEC9B7026094FC19F0CF /* SummaryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2579421D921587B2DB226192 /* SummaryService.swift */; };
@@ -124,6 +129,7 @@
 		B01B73D6C92F79AC5556F004 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 909D2C9060AAA9A88209979F /* SettingsView.swift */; };
 		B23F0F1F6C00C9746F57E285 /* NookPresence.swift in Sources */ = {isa = PBXBuildFile; fileRef = C710DCF39272E4901FF787C9 /* NookPresence.swift */; };
 		B45967A443E256ED4C3FDD16 /* NookWindowBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 851C3C409ACA6E327A1C5D68 /* NookWindowBridge.swift */; };
+		B62A703FE44B331786915349 /* LibrarySearchControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 500496FCB58D7DA215396EBF /* LibrarySearchControllerTests.swift */; };
 		B6F52256AB772155E126E08F /* NookUpdateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE0257E326F8CB6F9CC6CCB4 /* NookUpdateController.swift */; };
 		B7B6B177408EB97C3177D25C /* MeetingNotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82F5D4466C034B90191F6217 /* MeetingNotificationService.swift */; };
 		B86581F65EEBC9D0E5939666 /* LibrarySearchController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0216CD1F9BF8CBA79B99EF44 /* LibrarySearchController.swift */; };
@@ -151,6 +157,7 @@
 		E03611B9969AE1D8D7D729F0 /* GlobalShortcutMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B4C6FF938B446CFCD19A0E1 /* GlobalShortcutMonitor.swift */; };
 		E0C18B17DD6BFF54AE673EB0 /* LiveMeetingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A4476D46DFC63E2744F2D18 /* LiveMeetingView.swift */; };
 		E0D6BD7C15961DC372C7B779 /* CommandPaletteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9895DFC913D1E5471937874 /* CommandPaletteView.swift */; };
+		E1317312B476EFC900124724 /* TranscriptSegmentIdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB3F2235F8F2341049C2F52C /* TranscriptSegmentIdentityTests.swift */; };
 		E28A43D6C73E524E5DCE2662 /* DictationIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90BED486BAA050AE7FC31A5A /* DictationIndicator.swift */; };
 		E33D95127838E735C246E15E /* LibrarySearchController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0216CD1F9BF8CBA79B99EF44 /* LibrarySearchController.swift */; };
 		E366B7E96410E6528C2EE330 /* DisfluencyFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8E167FDA42FDF9245D9F9DB /* DisfluencyFilter.swift */; };
@@ -160,13 +167,16 @@
 		E77396AB28F08D6571DC9CC9 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A6655959382556C4DA62D72 /* AppModel.swift */; };
 		E7E699D2D6083507D634A792 /* NookNotesEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = E29043FB627EE55136C66892 /* NookNotesEditor.swift */; };
 		E8DB073A54A4C670E6F0858B /* NoteCombiner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B4EC858AE18294670CC43A6 /* NoteCombiner.swift */; };
+		E9ACF71836EC73826935E81A /* NoteActionOutputGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = F16A76A2084A148B53CEA7ED /* NoteActionOutputGuard.swift */; };
 		EC053D3C49530CD1D3B87C32 /* OpenActionsController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A3FB7F59FFAEBB639390737 /* OpenActionsController.swift */; };
+		EC3B6D39C49CFB59E1CC9683 /* NoteActionOutputGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = F16A76A2084A148B53CEA7ED /* NoteActionOutputGuard.swift */; };
 		EC74DF63D37AAF8B3FE41484 /* NotchPanelCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7D40B68EE579A68D1A8722E /* NotchPanelCoordinator.swift */; };
 		ED23D30CAF5E5D1402989F90 /* WelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96D519F4CE62062C2D665436 /* WelcomeView.swift */; };
 		EE326761C19C93A57CB4B7AD /* LibraryAnswerService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8559C0730D47F553693962B4 /* LibraryAnswerService.swift */; };
 		EEA41488D1BA82412026D9B1 /* TranscriptSegment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79E8477180498A6A643E7DE9 /* TranscriptSegment.swift */; };
 		EFBDEFBB4E4FF265020D1702 /* PermissionSetupController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83A5502CE70F9EA4C3BE8F69 /* PermissionSetupController.swift */; };
 		F141ED71BB6A618D89F9E92A /* AudioExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = D190DD1E42E7B8A2C319B54D /* AudioExtractor.swift */; };
+		F27147A35D3C29124024401A /* QuickNotePadSafetyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E09FEFC445076931C3A35B25 /* QuickNotePadSafetyTests.swift */; };
 		F541004C6AAAAB03F765DD59 /* MeetingNote.swift in Sources */ = {isa = PBXBuildFile; fileRef = E85BB1FB8EF66CBEB4C24DE7 /* MeetingNote.swift */; };
 		F5C7AC9D54289E0C068923F1 /* SummaryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2579421D921587B2DB226192 /* SummaryService.swift */; };
 		F5C9C5924B843FF595C97A7C /* AudioExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = D190DD1E42E7B8A2C319B54D /* AudioExtractor.swift */; };
@@ -211,6 +221,7 @@
 		1D5C59EC69ED9C02DCECCCA7 /* FloatingNotesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatingNotesView.swift; sourceTree = "<group>"; };
 		1DAAB582D0BEF7F53894D139 /* NotchPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchPanelView.swift; sourceTree = "<group>"; };
 		1E12DEFF243E7B4B84A7A135 /* NookApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookApp.swift; sourceTree = "<group>"; };
+		2025F1AA72DD2FBB3058BFEA /* OpenActionsControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenActionsControllerTests.swift; sourceTree = "<group>"; };
 		22DAA1C25DA9C9F2A532C3F5 /* SummaryServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SummaryServiceTests.swift; sourceTree = "<group>"; };
 		2308619C687A88102D0054B5 /* MarkdownStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownStore.swift; sourceTree = "<group>"; };
 		2579421D921587B2DB226192 /* SummaryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SummaryService.swift; sourceTree = "<group>"; };
@@ -229,6 +240,7 @@
 		474FCF7E641790A7A9CF100C /* DictationAudioSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationAudioSource.swift; sourceTree = "<group>"; };
 		493BD99F4073897EF877E6B2 /* TranscriptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionService.swift; sourceTree = "<group>"; };
 		4FA4268191B8994F04391D35 /* DictationCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationCoordinator.swift; sourceTree = "<group>"; };
+		500496FCB58D7DA215396EBF /* LibrarySearchControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibrarySearchControllerTests.swift; sourceTree = "<group>"; };
 		5008A93BBFF4EE8348B18580 /* DictationStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationStyle.swift; sourceTree = "<group>"; };
 		514C551D7708742A88A31C90 /* TRADEMARKS.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = TRADEMARKS.md; sourceTree = "<group>"; };
 		51AB1BC7F2F3CFF20801DD9E /* LICENSE */ = {isa = PBXFileReference; path = LICENSE; sourceTree = "<group>"; };
@@ -242,6 +254,7 @@
 		6AF31C476DBDFF1170647A72 /* Nook.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nook.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		6B742437E025D0BAB1C7C0BA /* CaptureService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureService.swift; sourceTree = "<group>"; };
 		6C5A0DD6E3695CE90FD0CA1C /* DictationRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationRecognizer.swift; sourceTree = "<group>"; };
+		744F6F3EA5D041A1C1669B43 /* PersonalNotesDraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonalNotesDraft.swift; sourceTree = "<group>"; };
 		75A21F9B38B4F2B1E0D758A0 /* NookElapsedTimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookElapsedTimeTests.swift; sourceTree = "<group>"; };
 		77437DEB25AC4ECE82644D22 /* StatusMenuView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusMenuView.swift; sourceTree = "<group>"; };
 		78FB15A93010450F270E5C0D /* DictationRefiner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationRefiner.swift; sourceTree = "<group>"; };
@@ -253,6 +266,7 @@
 		82F5D4466C034B90191F6217 /* MeetingNotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingNotificationService.swift; sourceTree = "<group>"; };
 		83933D3879F3DCE359A1FFF2 /* QuickNoteController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickNoteController.swift; sourceTree = "<group>"; };
 		83A5502CE70F9EA4C3BE8F69 /* PermissionSetupController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionSetupController.swift; sourceTree = "<group>"; };
+		843B3D27D068E5D01683C0B6 /* PersonalNotesDraftTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonalNotesDraftTests.swift; sourceTree = "<group>"; };
 		8472D687C88E2ABF8BDF9FA5 /* DictationOutputGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationOutputGuard.swift; sourceTree = "<group>"; };
 		851C3C409ACA6E327A1C5D68 /* NookWindowBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookWindowBridge.swift; sourceTree = "<group>"; };
 		8559C0730D47F553693962B4 /* LibraryAnswerService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryAnswerService.swift; sourceTree = "<group>"; };
@@ -260,6 +274,7 @@
 		8C84A0C854A07B9D569D1A1E /* LibraryAnswerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryAnswerTests.swift; sourceTree = "<group>"; };
 		909D2C9060AAA9A88209979F /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		90BED486BAA050AE7FC31A5A /* DictationIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationIndicator.swift; sourceTree = "<group>"; };
+		944A3341E4050AA77D6BF66D /* NoteActionOutputGuardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteActionOutputGuardTests.swift; sourceTree = "<group>"; };
 		96D519F4CE62062C2D665436 /* WelcomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeView.swift; sourceTree = "<group>"; };
 		9724F70AFC1F4B7149AC8E67 /* SnapshotRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotRenderer.swift; sourceTree = "<group>"; };
 		98A52969E7E5881E9991805A /* NoteDecodeCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteDecodeCache.swift; sourceTree = "<group>"; };
@@ -276,6 +291,7 @@
 		B45B67065E78F2C7EF8F403B /* RecordingLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingLifecycleTests.swift; sourceTree = "<group>"; };
 		B7B3DAE041B75121309D9055 /* ReleaseSecurityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReleaseSecurityTests.swift; sourceTree = "<group>"; };
 		B9895DFC913D1E5471937874 /* CommandPaletteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandPaletteView.swift; sourceTree = "<group>"; };
+		BB3F2235F8F2341049C2F52C /* TranscriptSegmentIdentityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptSegmentIdentityTests.swift; sourceTree = "<group>"; };
 		C009372948CAC8A07E9237DF /* MultiSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultiSessionTests.swift; sourceTree = "<group>"; };
 		C10C52E64E22A80179251010 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		C690709E84082D9FB8F49E55 /* PrepBriefView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrepBriefView.swift; sourceTree = "<group>"; };
@@ -290,6 +306,7 @@
 		DEA407B4708D8AD7F0B06502 /* NookDesign.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookDesign.swift; sourceTree = "<group>"; };
 		DF72C48729FE4C2965A8A051 /* CalendarContextService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarContextService.swift; sourceTree = "<group>"; };
 		E015C1ABEA632C5CACB87CBB /* DigestBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DigestBuilder.swift; sourceTree = "<group>"; };
+		E09FEFC445076931C3A35B25 /* QuickNotePadSafetyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickNotePadSafetyTests.swift; sourceTree = "<group>"; };
 		E1A3A12949A21AFC99737BCE /* NookDebugLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookDebugLog.swift; sourceTree = "<group>"; };
 		E29043FB627EE55136C66892 /* NookNotesEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookNotesEditor.swift; sourceTree = "<group>"; };
 		E4D5B14FA3AB01500EEB90B3 /* DictationFormattingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationFormattingTests.swift; sourceTree = "<group>"; };
@@ -302,6 +319,7 @@
 		EE92030AF76969EF99136D12 /* ActionItemDueDateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionItemDueDateTests.swift; sourceTree = "<group>"; };
 		F06B2C9B35B6F8E0FEA657EB /* NoteSessionAppend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteSessionAppend.swift; sourceTree = "<group>"; };
 		F0DA313E3B4EB1C1104D8D92 /* LiveAnalyzerInputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveAnalyzerInputTests.swift; sourceTree = "<group>"; };
+		F16A76A2084A148B53CEA7ED /* NoteActionOutputGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteActionOutputGuard.swift; sourceTree = "<group>"; };
 		F6F30A2530EE20C39D0E9AD5 /* ShortcutRecorderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutRecorderView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -351,6 +369,7 @@
 				F06B2C9B35B6F8E0FEA657EB /* NoteSessionAppend.swift */,
 				6A3FB7F59FFAEBB639390737 /* OpenActionsController.swift */,
 				83A5502CE70F9EA4C3BE8F69 /* PermissionSetupController.swift */,
+				744F6F3EA5D041A1C1669B43 /* PersonalNotesDraft.swift */,
 				1B53F5A5FD8D01402F7613E2 /* PrepBrief.swift */,
 				D588A6E65FB7C05B912F3220 /* SpeechAssets.swift */,
 				2579421D921587B2DB226192 /* SummaryService.swift */,
@@ -462,6 +481,7 @@
 			isa = PBXGroup;
 			children = (
 				157605DDE56F2A45C3EB48F1 /* CommandLineAssistant.swift */,
+				F16A76A2084A148B53CEA7ED /* NoteActionOutputGuard.swift */,
 				9D6E63AD605382CDFAEBF56E /* NoteAssistant.swift */,
 				83933D3879F3DCE359A1FFF2 /* QuickNoteController.swift */,
 			);
@@ -495,23 +515,29 @@
 				64E89E9B358F9219563BE4F9 /* DisfluencyFilterTests.swift */,
 				14AEB8FABBA49A9275352D7E /* InterfaceCopyTests.swift */,
 				8C84A0C854A07B9D569D1A1E /* LibraryAnswerTests.swift */,
+				500496FCB58D7DA215396EBF /* LibrarySearchControllerTests.swift */,
 				F0DA313E3B4EB1C1104D8D92 /* LiveAnalyzerInputTests.swift */,
 				C798B7121A65925D6161CA7E /* LiveSegmentMergerTests.swift */,
 				A701190651FDA38F39E3ACF3 /* MarkdownCodecTests.swift */,
 				C009372948CAC8A07E9237DF /* MultiSessionTests.swift */,
 				75A21F9B38B4F2B1E0D758A0 /* NookElapsedTimeTests.swift */,
+				944A3341E4050AA77D6BF66D /* NoteActionOutputGuardTests.swift */,
 				6A751CEC0EB19CB25ED5FEA7 /* NoteCombinerTests.swift */,
 				B30CBA98EB0104A8C704FFCF /* NoteDataIntegrityTests.swift */,
+				2025F1AA72DD2FBB3058BFEA /* OpenActionsControllerTests.swift */,
+				843B3D27D068E5D01683C0B6 /* PersonalNotesDraftTests.swift */,
 				06DE20F4ABEC5F79E54C49AC /* PrepBriefTests.swift */,
 				40C568E6906587FA1D689E5F /* PrivacyStorageTests.swift */,
 				E9608974F5BCF89BF6FFDA2C /* QuickCaptureTaskParserTests.swift */,
 				3DD3BC0B20F3ADD764D42B31 /* QuickNotePadLayoutTests.swift */,
+				E09FEFC445076931C3A35B25 /* QuickNotePadSafetyTests.swift */,
 				B45B67065E78F2C7EF8F403B /* RecordingLifecycleTests.swift */,
 				69EEF566A22CAC8C8A35BD84 /* RecordingRecoveryTests.swift */,
 				B7B3DAE041B75121309D9055 /* ReleaseSecurityTests.swift */,
 				7CE7A4727C693BB0BDAED00D /* ShowcaseSnapshotTests.swift */,
 				109A234757DF010C3ABD7735 /* SpokenNoteTests.swift */,
 				22DAA1C25DA9C9F2A532C3F5 /* SummaryServiceTests.swift */,
+				BB3F2235F8F2341049C2F52C /* TranscriptSegmentIdentityTests.swift */,
 			);
 			path = NookTests;
 			sourceTree = "<group>";
@@ -726,12 +752,14 @@
 				FA06C76476FA8A7773A75E2B /* NookWindowBridge.swift in Sources */,
 				EC74DF63D37AAF8B3FE41484 /* NotchPanelCoordinator.swift in Sources */,
 				1AA29AF013BC95AE5F69414D /* NotchPanelView.swift in Sources */,
+				E9ACF71836EC73826935E81A /* NoteActionOutputGuard.swift in Sources */,
 				FC9BD88C918371A57325EF51 /* NoteAssistant.swift in Sources */,
 				1F6AF059A9B7C1B958B1821C /* NoteCombiner.swift in Sources */,
 				3D20162A2CCD12C13C89D1BE /* NoteDecodeCache.swift in Sources */,
 				062BDF1689A9120A1A905980 /* NoteSessionAppend.swift in Sources */,
 				4DE8E7119D7E6C04193BEC3C /* OpenActionsController.swift in Sources */,
 				EFBDEFBB4E4FF265020D1702 /* PermissionSetupController.swift in Sources */,
+				5597E5E19E4CF23BDD1ADD20 /* PersonalNotesDraft.swift in Sources */,
 				2635A300A9B1DA4D2C540C5C /* PrepBrief.swift in Sources */,
 				885A73EC7FCCD1E08E938BFA /* PrepBriefView.swift in Sources */,
 				AE7F516EF05C310BDDD49794 /* QuickCaptureTaskParser.swift in Sources */,
@@ -801,12 +829,14 @@
 				B45967A443E256ED4C3FDD16 /* NookWindowBridge.swift in Sources */,
 				4BAC044221D7DAEB137A2E51 /* NotchPanelCoordinator.swift in Sources */,
 				7B51ACF84A9F905BABE2FEBF /* NotchPanelView.swift in Sources */,
+				EC3B6D39C49CFB59E1CC9683 /* NoteActionOutputGuard.swift in Sources */,
 				BF63C4E14A40B6BC97D03D3F /* NoteAssistant.swift in Sources */,
 				E8DB073A54A4C670E6F0858B /* NoteCombiner.swift in Sources */,
 				52C6063AE11B7A257CA4709C /* NoteDecodeCache.swift in Sources */,
 				0F288043EE9CDCF582548A56 /* NoteSessionAppend.swift in Sources */,
 				EC053D3C49530CD1D3B87C32 /* OpenActionsController.swift in Sources */,
 				5355D715EE1FF8F42B9489B1 /* PermissionSetupController.swift in Sources */,
+				59111F450D605F9EE318C6D6 /* PersonalNotesDraft.swift in Sources */,
 				37153F5E6F294C277E7C4519 /* PrepBrief.swift in Sources */,
 				7D1E7143A6A8A7F35244ABF7 /* PrepBriefView.swift in Sources */,
 				DCF9468E892FC22123C65B5C /* QuickCaptureTaskParser.swift in Sources */,
@@ -840,23 +870,29 @@
 				5DC75A7BFD2240D9EC41E4A9 /* DisfluencyFilterTests.swift in Sources */,
 				D70159FD08573AB5AFD40683 /* InterfaceCopyTests.swift in Sources */,
 				D91BF6BD244ABDBF838BA787 /* LibraryAnswerTests.swift in Sources */,
+				B62A703FE44B331786915349 /* LibrarySearchControllerTests.swift in Sources */,
 				8C146B75382DB7970B460916 /* LiveAnalyzerInputTests.swift in Sources */,
 				FDD52D95AC87BE4049161921 /* LiveSegmentMergerTests.swift in Sources */,
 				7F2F9591EA3404AB6C4A9320 /* MarkdownCodecTests.swift in Sources */,
 				A9BF297BDFB6B6A3544A2461 /* MultiSessionTests.swift in Sources */,
 				4E0F4F7498A2B62E359B5FA8 /* NookElapsedTimeTests.swift in Sources */,
+				7D0C671306BCBDE7FD068974 /* NoteActionOutputGuardTests.swift in Sources */,
 				056265C45BAD40614C341A9C /* NoteCombinerTests.swift in Sources */,
 				1B535A3F9A87078086863E2F /* NoteDataIntegrityTests.swift in Sources */,
+				76DC00C98A6431094DFE2EC7 /* OpenActionsControllerTests.swift in Sources */,
+				2C4433CEA6B0B8EF73392F67 /* PersonalNotesDraftTests.swift in Sources */,
 				5CC0091958B983D15A2D3112 /* PrepBriefTests.swift in Sources */,
 				1478E8EB0F7B98D770E0FCF5 /* PrivacyStorageTests.swift in Sources */,
 				FF7D8D507BB22FCF53ACC997 /* QuickCaptureTaskParserTests.swift in Sources */,
 				408E7914D251C42840E49C05 /* QuickNotePadLayoutTests.swift in Sources */,
+				F27147A35D3C29124024401A /* QuickNotePadSafetyTests.swift in Sources */,
 				57437246B9E90D1A4BDE1082 /* RecordingLifecycleTests.swift in Sources */,
 				508CAAC62D35513D76C05F84 /* RecordingRecoveryTests.swift in Sources */,
 				56689ABB89EBBED8F8569572 /* ReleaseSecurityTests.swift in Sources */,
 				C78A280ADF06F6B2BDBE927D /* ShowcaseSnapshotTests.swift in Sources */,
 				8F9675D805A7E24CA288D4EC /* SpokenNoteTests.swift in Sources */,
 				497E19A774DD8477DB30BF59 /* SummaryServiceTests.swift in Sources */,
+				E1317312B476EFC900124724 /* TranscriptSegmentIdentityTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -129,4 +129,55 @@ struct DigestTests {
         #expect(decoded.kind == .digest)
         #expect(MarkdownCodec.encode(decoded) == encoded)
     }
+
+    /// `coveredMeetings` is `build`'s own 7-day filter, exposed so a caller
+    /// deciding whether there is anything to compile does not need a second
+    /// copy of the window logic.
+    @Test
+    func coveredMeetingsMatchesWhatBuildItselfCompiles() async {
+        let inside = meeting("Standup", daysAgo: 2)
+        let outside = meeting("Old offsite", daysAgo: 12)
+
+        let covered = DigestBuilder.coveredMeetings(from: [inside, outside])
+        #expect(covered.map(\.title) == ["Standup"])
+
+        let digest = await DigestBuilder.build(
+            from: [inside, outside],
+            overviewProvider: { _ in nil }
+        )
+        #expect(digest.summary.contains("1 meeting between"))
+    }
+
+    /// Creating a digest twice for the same week must update the existing
+    /// file rather than leave a second, near-duplicate one behind.
+    @Test
+    func buildReusesTheGivenIdAndFileURLWhenProvided() async {
+        let existingID = UUID()
+        let existingURL = URL(fileURLWithPath: "/tmp/week-of-test.md")
+        let meetingNote = meeting("Standup", daysAgo: 1)
+
+        let digest = await DigestBuilder.build(
+            from: [meetingNote],
+            id: existingID,
+            fileURL: existingURL,
+            overviewProvider: { _ in nil }
+        )
+
+        #expect(digest.id == existingID)
+        #expect(digest.fileURL == existingURL)
+    }
+
+    /// Without an explicit id or URL, `build` behaves exactly as before:
+    /// a fresh identity for a fresh file.
+    @Test
+    func buildDefaultsToAFreshIdentityWhenNoneIsGiven() async {
+        let meetingNote = meeting("Standup", daysAgo: 1)
+
+        let digest = await DigestBuilder.build(
+            from: [meetingNote],
+            overviewProvider: { _ in nil }
+        )
+
+        #expect(digest.fileURL == nil)
+    }
 }

@@ -1,5 +1,20 @@
 import AppIntents
 
+/// Bounded wait for the library's initial load to finish.
+///
+/// Shortcuts can run an intent the instant the app launches, before
+/// `MarkdownStore`'s first disk read completes; without this, "latest
+/// meeting" intents answered from a still-empty `notes` array as if the
+/// library genuinely held nothing. Bounded the same way the test suite
+/// waits on a load: 100 checks, 20ms apart, so a load that never finishes
+/// cannot hang an intent forever.
+@MainActor
+private func waitForLibraryToLoad(_ store: MarkdownStore) async {
+    for _ in 0..<100 where store.isLoading {
+        try? await Task.sleep(for: .milliseconds(20))
+    }
+}
+
 struct StartNookRecordingIntent: AppIntent {
     static let title: LocalizedStringResource = "Start a Nook Recording"
     static let description = IntentDescription(
@@ -42,6 +57,7 @@ struct OpenLatestNookMeetingIntent: AppIntent {
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let model = AppModel.shared
+        await waitForLibraryToLoad(model.store)
         guard let latest = model.store.notes.first else {
             model.openLibrary()
             return .result(dialog: "Your Nook library is empty.")
@@ -97,6 +113,7 @@ struct LatestNookNoteTextIntent: AppIntent {
     @MainActor
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
         let model = AppModel.shared
+        await waitForLibraryToLoad(model.store)
         guard let latest = model.store.notes.first else {
             return .result(value: "", dialog: "Your Nook library is empty.")
         }

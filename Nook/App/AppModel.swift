@@ -29,6 +29,7 @@ final class AppModel: ObservableObject {
     let appearance: NookAppearanceController
     let store: MarkdownStore
     let markdownDraft: MarkdownDraftController
+    let personalNotesDraft: PersonalNotesDraftController
     let detector: MeetingDetector
     let meeting: MeetingCoordinator
     let panel: NotchPanelCoordinator
@@ -52,12 +53,14 @@ final class AppModel: ObservableObject {
         let appearance = NookAppearanceController()
         let store = MarkdownStore()
         let markdownDraft = MarkdownDraftController()
+        let personalNotesDraft = PersonalNotesDraftController()
         let detector = MeetingDetector()
         let meeting = MeetingCoordinator(store: store, detector: detector)
         let notifications = MeetingNotificationService(meeting: meeting)
         self.appearance = appearance
         self.store = store
         self.markdownDraft = markdownDraft
+        self.personalNotesDraft = personalNotesDraft
         self.detector = detector
         self.meeting = meeting
         self.panel = NotchPanelCoordinator(meeting: meeting)
@@ -133,19 +136,17 @@ final class AppModel: ObservableObject {
 
         // A meeting that is recording or still being written up has audio in
         // the recordings folder and no note yet, which is exactly what a
-        // stranded recording looks like. MeetingCoordinator keeps its draft
-        // private, so the phase is what can be forwarded: the pane lists
-        // nothing while a meeting is in flight rather than offering to delete
-        // the one in progress.
-        meeting.$phase
+        // stranded recording looks like. Forwarding the identifier rather than
+        // the phase lets the pane exclude exactly that one recording: an
+        // earlier version forwarded only "something is in flight", which
+        // emptied the whole list for the length of every meeting and hid
+        // genuinely stranded audio from the one place it can be seen.
+        meeting.$activeRecordingID
             .removeDuplicates()
-            // The starting phase is idle, which is what this already assumes.
-            .dropFirst()
-            .sink { [weak self] phase in
-                switch phase {
-                case .recording, .processing:
-                    self?.recovery.activeRecording = .inFlight(nil)
-                default:
+            .sink { [weak self] id in
+                if let id {
+                    self?.recovery.activeRecording = .inFlight(id)
+                } else {
                     self?.recovery.activeRecording = .none
                 }
             }

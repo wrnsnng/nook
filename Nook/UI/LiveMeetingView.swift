@@ -598,8 +598,10 @@ struct LiveMeetingView: View {
     }
 
     private func processingDetail(_ step: MeetingPhase.ProcessingStep) -> String {
-        // Shared with the top panel so a step never reads two ways.
-        step.displaySentence
+        // Shared with the top panel so a step never reads two ways, and it
+        // carries the part counter while a long meeting is condensed in parts.
+        let detail = meeting.processingDetail
+        return detail.isEmpty ? step.displaySentence : detail
     }
 }
 

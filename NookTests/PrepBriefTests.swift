@@ -158,4 +158,64 @@ struct PrepBriefTests {
             ) == nil
         )
     }
+
+    // MARK: - SeriesKeyCache
+
+    /// The cache exists so a note whose title has not changed since the last
+    /// `store.notes` publish is not re-parsed through the matcher's regular
+    /// expressions again; `build` must produce the same brief whether or not
+    /// a caller supplies precomputed keys.
+    @Test
+    func precomputedSeriesKeysProduceTheSameBriefAsComputingThemInline() async {
+        let notes = [
+            sitting("Platform sync", daysAgo: 7, decisions: ["Ship it"])
+        ]
+        let cache = SeriesKeyCache()
+        let keys = await cache.keys(for: notes)
+
+        let withCache = PrepBriefBuilder.build(
+            eventTitle: "Platform sync",
+            startDate: Date(),
+            notes: notes,
+            noteSeriesKeys: keys
+        )
+        let withoutCache = PrepBriefBuilder.build(
+            eventTitle: "Platform sync",
+            startDate: Date(),
+            notes: notes
+        )
+
+        #expect(withCache?.sittings.map(\.id) == withoutCache?.sittings.map(\.id))
+    }
+
+    /// A note's key is reused while its title is unchanged, and recomputed
+    /// the moment the title changes, even though the id stays the same.
+    @Test
+    func aNoteKeepsItsCachedKeyUntilItsTitleChanges() async {
+        let cache = SeriesKeyCache()
+        var note = sitting("Design review", daysAgo: 1)
+
+        let first = await cache.keys(for: [note])
+        #expect(first[note.id] == SeriesMatcher.seriesKey(for: "Design review"))
+
+        note.title = "Retro"
+        let second = await cache.keys(for: [note])
+        #expect(second[note.id] == SeriesMatcher.seriesKey(for: "Retro"))
+    }
+
+    /// A note no longer in the library must not keep its entry alive
+    /// forever.
+    @Test
+    func aNoteRemovedFromTheLibraryIsDroppedFromTheCache() async {
+        let cache = SeriesKeyCache()
+        let stays = sitting("Stays", daysAgo: 1)
+        let goes = sitting("Goes", daysAgo: 2)
+
+        let first = await cache.keys(for: [stays, goes])
+        #expect(first.count == 2)
+
+        let second = await cache.keys(for: [stays])
+        #expect(second.count == 1)
+        #expect(second[stays.id] != nil)
+    }
 }

@@ -488,6 +488,51 @@ struct MarkdownCodecTests {
         #expect(size.height == 48)
     }
 
+    /// The prompt used to disappear after eight seconds, which answered it on
+    /// the user's behalf: the meeting went unrecorded and nothing was left to
+    /// say Nook had ever offered. It now shrinks instead.
+    @Test
+    func aPromptThatRanOutOfTimeShrinksRatherThanDisappearing() {
+        let detection = DetectedMeeting(
+            appName: "Teams",
+            windowTitle: "Design review"
+        )
+        let expanded = NotchPanelMetrics.bodySize(
+            for: .detected(detection),
+            showsCaptions: true,
+            panelMode: .transcript
+        )
+        let compact = NotchPanelMetrics.bodySize(
+            for: .detected(detection),
+            showsCaptions: true,
+            panelMode: .transcript,
+            detectionPromptIsCompact: true
+        )
+
+        #expect(compact.width < expanded.width)
+        #expect(compact.width > 0)
+        // Tall enough for the 30pt Record control, the app's hit-target floor.
+        #expect(compact.height >= 42)
+    }
+
+    /// Long enough to finish the sentence someone was saying when it appeared.
+    @Test
+    func theConsentPromptStaysWholeLongEnoughToBeAnswered() {
+        #expect(DetectionPromptPolicy.state(afterVisibleFor: 8) == .expanded)
+        #expect(DetectionPromptPolicy.state(afterVisibleFor: 59) == .expanded)
+        #expect(DetectionPromptPolicy.state(afterVisibleFor: 60) == .compact)
+        #expect(DetectionPromptPolicy.state(afterVisibleFor: 600) == .compact)
+    }
+
+    /// Detection fires while someone is joining a meeting. Activating Nook
+    /// over that window takes the front from their camera and microphone
+    /// controls, for a prompt they did not ask for.
+    @Test
+    func theConsentPromptOnlyTakesKeyFocusWhenNookIsAlreadyInFront() {
+        #expect(DetectionPromptPolicy.takesKeyFocus(applicationIsActive: true))
+        #expect(!DetectionPromptPolicy.takesKeyFocus(applicationIsActive: false))
+    }
+
     @Test
     func heuristicTitlesSkipMeetingChatterAndUseConversationContent() {
         let title = MeetingTitleGenerator.heuristicTitle(

@@ -1,5 +1,26 @@
 import AppKit
+import Combine
 import SwiftUI
+
+/// Bridges an optional `CalendarContextService` into SwiftUI's observation.
+///
+/// `@ObservedObject` requires a non-optional `ObservableObject`, but the
+/// calendar service itself is legitimately absent outside the running app
+/// (previews, the snapshot tool). This forwards the wrapped service's own
+/// publishes so the view still re-renders when it is present, without
+/// forcing every call site to invent a non-optional stand-in.
+@MainActor
+private final class OptionalCalendarObserver: ObservableObject {
+    let calendar: CalendarContextService?
+    private var cancellable: AnyCancellable?
+
+    init(_ calendar: CalendarContextService?) {
+        self.calendar = calendar
+        cancellable = calendar?.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+    }
+}
 
 enum WelcomeStep: Int, CaseIterable {
     case introduction
@@ -31,8 +52,10 @@ struct WelcomeView: View {
     /// Absent when onboarding is rendered outside the running app, such as in
     /// the snapshot tool, where there is no coordinator to speak of.
     private let dictation: DictationCoordinator?
-    /// Optional for the same reason as `dictation`.
-    private let calendar: CalendarContextService?
+    /// Optional for the same reason as `dictation`; observed through
+    /// `OptionalCalendarObserver` so a denied access prompt updates the
+    /// toggle and shows the denial message instead of sitting stale.
+    @StateObject private var calendarObserver: OptionalCalendarObserver
     @StateObject private var permissions = PermissionSetupController()
     @State private var step = WelcomeStep.introduction
     @State private var previewStep = 0
@@ -47,7 +70,9 @@ struct WelcomeView: View {
         _detector = ObservedObject(wrappedValue: appModel.detector)
         _step = State(initialValue: initialStep)
         dictation = appModel.dictation
-        calendar = appModel.calendar
+        _calendarObserver = StateObject(
+            wrappedValue: OptionalCalendarObserver(appModel.calendar)
+        )
         completeWelcomeAction = { appModel.completeWelcome() }
         openLibraryAction = { appModel.openLibrary() }
     }
@@ -59,7 +84,9 @@ struct WelcomeView: View {
         _detector = ObservedObject(wrappedValue: detector)
         _step = State(initialValue: initialStep)
         dictation = nil
-        calendar = nil
+        _calendarObserver = StateObject(
+            wrappedValue: OptionalCalendarObserver(nil)
+        )
         completeWelcomeAction = {}
         openLibraryAction = {}
     }
@@ -312,7 +339,7 @@ struct WelcomeView: View {
             .padding(.top, 27)
 
             VStack(spacing: 12) {
-                if let calendar {
+                if let calendar = calendarObserver.calendar {
                     Toggle(
                         isOn: Binding(
                             get: { calendar.isEnabled },

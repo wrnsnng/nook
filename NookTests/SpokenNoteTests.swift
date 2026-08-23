@@ -327,6 +327,133 @@ struct NoteTitleGeneratorTests {
     }
 }
 
+/// What the command-line bridge is allowed to hand a tool.
+///
+/// Both tools are agents by default, running under the permissions their user
+/// already granted for their own work. A note is dictated speech and other
+/// people's writing, and it routinely reads as instructions.
+struct CommandLineAssistantArgumentTests {
+    /// Trimmed to the flags under test. The real help is hundreds of lines and
+    /// none of the rest changes the answer.
+    private static let claudeHelp = """
+        Usage: claude [options] [command] [prompt]
+          -p, --print                Print response and exit
+          --permission-mode <mode>   Permission mode to use for the session
+          --safe-mode                Start with all customizations disabled
+          --strict-mcp-config        Only use MCP servers from --mcp-config
+          --tools <tools...>         Specify the list of available tools
+          --no-session-persistence   Disable session persistence
+        """
+
+    private static let codexHelp = """
+        Usage: codex exec [OPTIONS] [PROMPT]
+          -s, --sandbox <SANDBOX_MODE>  Select the sandbox policy
+          --skip-git-repo-check         Allow running outside a Git repository
+          --ephemeral                   Run without persisting session files
+          --ignore-user-config          Do not load config.toml
+          --ignore-rules                Do not load execpolicy rules
+        """
+
+    @Test
+    func aClaudeRunHasNoToolsNoMCPServersAndNoUserConfiguration() {
+        let arguments = CommandLineAssistant.arguments(
+            for: .claude,
+            instruction: "Tidy this note.",
+            supportedFlagsIn: Self.claudeHelp
+        )
+
+        #expect(arguments.contains("--safe-mode"))
+        #expect(arguments.contains("--strict-mcp-config"))
+        #expect(follows("", "--tools", in: arguments))
+        #expect(follows("manual", "--permission-mode", in: arguments))
+    }
+
+    /// The note is not left behind in a transcript on disk.
+    @Test
+    func aClaudeRunLeavesNoSessionFileHoldingTheNote() {
+        let arguments = CommandLineAssistant.arguments(
+            for: .claude,
+            instruction: "Tidy this note.",
+            supportedFlagsIn: Self.claudeHelp
+        )
+
+        #expect(arguments.contains("--no-session-persistence"))
+    }
+
+    /// The tool list is variadic, so an instruction placed straight after it
+    /// would be read as another tool name and never reach the model.
+    @Test
+    func theInstructionIsTheLastArgumentAndIsIntroducedByPrintMode() {
+        let arguments = CommandLineAssistant.arguments(
+            for: .claude,
+            instruction: "Tidy this note.",
+            supportedFlagsIn: Self.claudeHelp
+        )
+
+        #expect(arguments.last == "Tidy this note.")
+        #expect(arguments.dropLast().last == "-p")
+    }
+
+    /// An unrecognised flag is a hard exit on both tools, and Nook does not
+    /// control which version somebody has installed.
+    @Test
+    func flagsTheInstalledToolDoesNotAdvertiseAreLeftOff() {
+        let arguments = CommandLineAssistant.arguments(
+            for: .claude,
+            instruction: "Tidy this note.",
+            supportedFlagsIn: "Usage: claude [options]\n  -p, --print\n"
+        )
+
+        #expect(arguments == ["-p", "Tidy this note."])
+    }
+
+    /// Nothing is known about the tool, so nothing is assumed about it: a run
+    /// that fails loudly beats one that quietly runs unrestricted.
+    @Test
+    func anUnreadableHelpTextKeepsEveryRestriction() {
+        let arguments = CommandLineAssistant.arguments(
+            for: .claude,
+            instruction: "Tidy this note.",
+            supportedFlagsIn: nil
+        )
+
+        #expect(arguments.contains("--safe-mode"))
+        #expect(arguments.contains("--strict-mcp-config"))
+        #expect(follows("", "--tools", in: arguments))
+    }
+
+    /// Codex cannot switch its tools off, so the sandbox is the limit, and
+    /// ignoring the user's config is what keeps their MCP servers out of it.
+    @Test
+    func aCodexRunIsReadOnlyAndIgnoresTheUsersOwnConfiguration() {
+        let arguments = CommandLineAssistant.arguments(
+            for: .codex,
+            instruction: "Tidy this note.",
+            supportedFlagsIn: Self.codexHelp
+        )
+
+        #expect(arguments.first == "exec")
+        #expect(follows("read-only", "--sandbox", in: arguments))
+        #expect(arguments.contains("--ignore-user-config"))
+        #expect(arguments.contains("--ignore-rules"))
+        #expect(arguments.contains("--ephemeral"))
+        #expect(arguments.last == "Tidy this note.")
+    }
+
+    private func follows(
+        _ value: String,
+        _ flag: String,
+        in arguments: [String]
+    ) -> Bool {
+        guard let index = arguments.firstIndex(of: flag),
+              arguments.indices.contains(index + 1)
+        else {
+            return false
+        }
+        return arguments[index + 1] == value
+    }
+}
+
 struct NoteAssistantEngineTests {
     /// The privacy distinction is what the note window labels itself with, so
     /// it has to be right.

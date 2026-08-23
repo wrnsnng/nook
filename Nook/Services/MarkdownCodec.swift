@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 enum MarkdownCodec {
@@ -188,7 +189,7 @@ enum MarkdownCodec {
         ).intersection(actionItems)
         let personalNotes = personalNotesContent(in: blocks)
         let transcript = TranscriptAssembler.coalesce(
-            transcriptItems(in: body(of: "Transcript", in: blocks))
+            transcriptItems(in: body(of: "Transcript", in: blocks), noteID: id)
         )
         // Flagged moments only describe a recording timeline, which spoken
         // notes do not have.
@@ -995,8 +996,11 @@ extension MarkdownCodec {
         }
     }
 
-    private static func transcriptItems(in section: String) -> [TranscriptSegment] {
-        section.split(separator: "\n").compactMap { rawLine in
+    private static func transcriptItems(
+        in section: String,
+        noteID: UUID
+    ) -> [TranscriptSegment] {
+        section.split(separator: "\n").enumerated().compactMap { index, rawLine in
             let line = rawLine.trimmingCharacters(in: .whitespaces)
             guard line.hasPrefix("- **["), let closing = line.range(of: "]**") else { return nil }
             let stampStart = line.index(line.startIndex, offsetBy: 5)
@@ -1022,12 +1026,52 @@ extension MarkdownCodec {
                 seconds = 0
             }
             return TranscriptSegment(
+                id: stableSegmentID(
+                    noteID: noteID,
+                    startTime: seconds,
+                    source: source,
+                    index: index
+                ),
                 startTime: seconds,
                 duration: 0,
                 text: text,
                 source: source
             )
         }
+    }
+
+    /// A stable id for one decoded transcript segment, derived from the note
+    /// it belongs to and its position in the file rather than random.
+    ///
+    /// `TranscriptSegment.init` defaults `id` to a fresh `UUID()`, so every
+    /// decode of the same file used to hand every row new SwiftUI identity,
+    /// even when nothing in it had changed; a reload (another save, a
+    /// relaunch) rebuilt the whole transcript list instead of diffing it.
+    /// The derivation only needs to be stable across decodes of one file, not
+    /// globally unique the way a real random UUID is: a collision here could
+    /// only ever confuse SwiftUI identity within a single note's transcript.
+    private static func stableSegmentID(
+        noteID: UUID,
+        startTime: TimeInterval,
+        source: TranscriptSegment.Source,
+        index: Int
+    ) -> UUID {
+        let seed = "\(noteID.uuidString)|\(startTime)|\(source.rawValue)|\(index)"
+        let digest = SHA256.hash(data: Data(seed.utf8))
+        let hex = digest.prefix(16)
+            .map { String(format: "%02x", $0) }
+            .joined()
+        let formatted = [
+            hex.prefix(8),
+            hex.dropFirst(8).prefix(4),
+            hex.dropFirst(12).prefix(4),
+            hex.dropFirst(16).prefix(4),
+            hex.dropFirst(20).prefix(12),
+        ].joined(separator: "-")
+        // The hex above is always well-formed, so this only fails if the
+        // note id itself somehow is not; falling back to it keeps every
+        // segment in that note at least sharing one stable identity.
+        return UUID(uuidString: formatted) ?? noteID
     }
 
     private static func bulletList(_ values: [String]) -> String {

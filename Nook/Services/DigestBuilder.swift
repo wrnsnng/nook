@@ -12,16 +12,29 @@ enum DigestBuilder {
         (now.addingTimeInterval(-7 * 24 * 3_600), now)
     }
 
-    static func build(
+    /// The meetings one digest for `now`'s window would cover. Exposed
+    /// separately so a caller deciding whether there is anything to compile
+    /// does not need its own copy of this filter.
+    static func coveredMeetings(
         from allNotes: [MeetingNote],
-        now: Date = Date(),
-        overviewProvider: (@Sendable ([MeetingNote]) async -> String?)? = nil
-    ) async -> MeetingNote {
+        now: Date = Date()
+    ) -> [MeetingNote] {
         let window = period(now: now)
-        let covered = allNotes
+        return allNotes
             .filter { $0.kind == .meeting }
             .filter { $0.startedAt >= window.start && $0.startedAt <= window.end }
             .sorted { $0.startedAt < $1.startedAt }
+    }
+
+    static func build(
+        from allNotes: [MeetingNote],
+        now: Date = Date(),
+        id: UUID = UUID(),
+        fileURL: URL? = nil,
+        overviewProvider: (@Sendable ([MeetingNote]) async -> String?)? = nil
+    ) async -> MeetingNote {
+        let window = period(now: now)
+        let covered = coveredMeetings(from: allNotes, now: now)
 
         var decisions: [String] = []
         for note in covered {
@@ -77,6 +90,7 @@ enum DigestBuilder {
         let title = "Week of \(formatter.string(from: window.start))"
 
         return MeetingNote(
+            id: id,
             kind: .digest,
             title: title,
             startedAt: window.start,
@@ -86,7 +100,8 @@ enum DigestBuilder {
             keyPoints: keyPoints,
             decisions: decisions,
             actionItems: [],
-            transcript: []
+            transcript: [],
+            fileURL: fileURL
         )
     }
 

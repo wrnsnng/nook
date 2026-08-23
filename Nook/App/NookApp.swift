@@ -22,6 +22,7 @@ struct NookApp: App {
                 .environmentObject(appModel.meeting)
                 .environmentObject(appModel.store)
                 .environmentObject(appModel.markdownDraft)
+                .environmentObject(appModel.personalNotesDraft)
                 .environmentObject(appModel.prep)
                 .frame(minWidth: 900, minHeight: 580)
                 .background(NookWindowBridge(role: .library))

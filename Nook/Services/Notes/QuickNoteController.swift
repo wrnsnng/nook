@@ -18,6 +18,13 @@ final class QuickNoteController: ObservableObject {
     /// Whether edits have landed since the last save, so the status line can
     /// say "Saved" only while it is true.
     @Published private(set) var hasUnsavedEdits = false
+    /// Set when a save failed and the words exist nowhere but this window.
+    ///
+    /// While it is set the pad refuses to close and refuses to start a new
+    /// note over the top of these ones. Closing on a failed save was silent
+    /// data loss of the worst kind here: the pad is usually the only copy of
+    /// something that was said out loud a second ago.
+    @Published private(set) var hasUnsavedFailure = false
 
     /// Nook keeping the user's own words is a decision, not a failure.
     ///
@@ -175,7 +182,9 @@ final class QuickNoteController: ObservableObject {
     // MARK: - Capture
 
     func present() {
-        if !isPresenting {
+        // A pending failure means the text on screen is the only copy, so a
+        // new capture must not begin by clearing it.
+        if !isPresenting, !hasUnsavedFailure {
             text = ""
             savedNoteID = nil
             savedNoteURL = nil
@@ -188,6 +197,8 @@ final class QuickNoteController: ObservableObject {
             // microphone because a pad appeared: the tick follows a session
             // the user starts here, and starts off every time.
             isContinuous = false
+        }
+        if !isPresenting {
             isPresenting = true
             showWindow()
             refreshEngines()
@@ -227,14 +238,43 @@ final class QuickNoteController: ObservableObject {
     func close() {
         // Speaking into a window and having it vanish unsaved would be the
         // worst possible behaviour for something whose whole purpose is to
-        // catch a thought.
-        saveDebounce?.cancel()
-        saveDebounce = nil
-        saveIfNeeded()
+        // catch a thought. That includes the case where the save was tried
+        // and refused: the pad stays put with the reason on it rather than
+        // taking the only copy of the words with it.
+        guard canClose() else {
+            panel?.makeKeyAndOrderFront(nil)
+            return
+        }
         hasUnsavedEdits = false
         isPresenting = false
         panel?.orderOut(nil)
         panel = nil
+    }
+
+    /// Writes whatever is pending and says whether the window may go.
+    ///
+    /// Also the window delegate's answer to a click on the close button, which
+    /// is the one route that would otherwise take the panel away before
+    /// anything had a chance to object.
+    func canClose() -> Bool {
+        saveDebounce?.cancel()
+        saveDebounce = nil
+        saveIfNeeded()
+        return !hasUnsavedFailure
+    }
+
+    /// Saves the pad's words as the app is quitting.
+    ///
+    /// Returns the reason it could not, or nil when nothing is at risk. The
+    /// pad saves shortly after typing stops, so a quit lands inside that
+    /// window routinely and the newest sentence is normally the one still
+    /// only in memory.
+    func saveForTermination() -> String? {
+        saveDebounce?.cancel()
+        saveDebounce = nil
+        saveIfNeeded()
+        guard hasUnsavedFailure else { return nil }
+        return message ?? "Nook couldn’t save the quick note."
     }
 
     /// Saves shortly after typing stops, so "Saved" is a fact rather than a
@@ -282,6 +322,7 @@ final class QuickNoteController: ObservableObject {
         text = ""
         lastSavedAt = nil
         hasUnsavedEdits = false
+        hasUnsavedFailure = false
         message = nil
         isPresenting = false
         panel?.orderOut(nil)
@@ -312,7 +353,10 @@ final class QuickNoteController: ObservableObject {
     @discardableResult
     func saveIfNeeded() -> MeetingNote? {
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !body.isEmpty else { return nil }
+        guard !body.isEmpty else {
+            hasUnsavedFailure = false
+            return nil
+        }
 
         let note = MeetingNote(
             id: savedNoteID ?? UUID(),
@@ -330,9 +374,11 @@ final class QuickNoteController: ObservableObject {
             savedNoteURL = saved.fileURL
             lastSavedAt = Date()
             message = nil
+            hasUnsavedFailure = false
             return saved
         } catch {
             message = "Couldn’t save this note: \(error.localizedDescription)"
+            hasUnsavedFailure = true
             return nil
         }
     }
@@ -449,17 +495,42 @@ final class QuickNoteController: ObservableObject {
                 message = Self.keptYourOwnWordsNotice
             }
         } else {
-            // Appended under a heading so the note keeps the spoken words and
-            // the derived material side by side, rather than one replacing the
-            // other silently.
-            text += "\n\n## \(action.title)\n\n\(result)"
-            saveIfNeeded()
+            // Appending is not a safe operation just because it keeps the
+            // spoken words. Whatever comes back is written into the user's
+            // document under a heading, and a note that reads as a question
+            // gets answered rather than worked on. The result is checked
+            // against the note first, exactly as a rewrite is.
+            switch NoteActionOutputGuard.evaluate(
+                result,
+                for: action,
+                note: text
+            ) {
+            case .accept(let checked):
+                // Appended under a heading so the note keeps the spoken words
+                // and the derived material side by side, rather than one
+                // replacing the other silently.
+                text += "\n\n## \(action.title)\n\n\(checked)"
+                saveIfNeeded()
+            case .reject:
+                message = Self.keptYourOwnWordsNotice
+            }
         }
     }
 
     var wordCount: Int {
         text.split(whereSeparator: \.isWhitespace).count
     }
+
+    #if DEBUG
+    /// Runs a model result through the same path a real one takes.
+    ///
+    /// No engine is available in a test run, so without this the guard around
+    /// appended output could only be tested in isolation from the note it is
+    /// supposed to protect.
+    func applyForTesting(_ result: String, for action: NoteAction) {
+        apply(result, for: action)
+    }
+    #endif
 
     // MARK: - Window
 
@@ -503,6 +574,9 @@ final class QuickNoteController: ObservableObject {
         windowDelegate.onClose = { [weak self] in
             self?.close()
         }
+        windowDelegate.onShouldClose = { [weak self] in
+            self?.canClose() ?? true
+        }
         panel.delegate = windowDelegate
         self.panel = panel
     }
@@ -524,6 +598,14 @@ final class QuickNoteController: ObservableObject {
 @MainActor
 final class QuickNoteWindowDelegate: NSObject, NSWindowDelegate {
     var onClose: (@MainActor () -> Void)?
+    var onShouldClose: (@MainActor () -> Bool)?
+
+    /// `windowWillClose` is too late to object: by then the window is going
+    /// whatever anyone thinks. A save that failed has to be able to keep the
+    /// panel on screen, so the question is asked here instead.
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        onShouldClose?() ?? true
+    }
 
     func windowWillClose(_ notification: Notification) {
         onClose?()

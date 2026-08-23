@@ -424,6 +424,74 @@ struct NoteCombinerTests {
         #expect(result.merged.summary == "Written by hand.")
     }
 
+    // MARK: Headings nobody modelled
+
+    @Test
+    func handWrittenSectionsFromBothNotesSurviveTheMerge() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+
+        var older = note(title: "Kickoff", startedAt: 1_000_000, text: "First sitting.")
+        older.extraSections = [
+            ExtraSection(
+                heading: "## Open questions",
+                body: "- Who owns the migration?",
+                anchor: "## summary"
+            )
+        ]
+        var newer = note(title: "Kickoff again", startedAt: 1_100_000, text: "Second sitting.")
+        newer.extraSections = [
+            ExtraSection(
+                heading: "## Risks",
+                body: "- The vendor contract renews in October.",
+                anchor: "## summary"
+            )
+        ]
+        let savedOlder = try store.save(older)
+        let savedNewer = try store.save(newer)
+
+        let result = try await NoteCombiner.merge(
+            savedOlder,
+            into: savedNewer,
+            recordingsDirectory: store.recordingsDirectory(),
+            summarizer: FixedSummarizer()
+        )
+        let saved = try await applyMerge(result, in: store)
+        let markdown = try String(
+            contentsOf: try #require(saved.fileURL),
+            encoding: .utf8
+        )
+
+        // Somebody typed both of these into their own file. A merge that keeps
+        // only the surviving note's headings deletes half of that writing.
+        #expect(markdown.contains("## Open questions"))
+        #expect(markdown.contains("Who owns the migration?"))
+        #expect(markdown.contains("## Risks"))
+        #expect(markdown.contains("The vendor contract renews in October."))
+    }
+
+    @Test
+    func theSameHandWrittenSectionOnBothNotesIsKeptOnce() {
+        let shared = ExtraSection(
+            heading: "## Open questions",
+            body: "- Who owns the migration?",
+            anchor: "## summary"
+        )
+        let onlyOnOne = ExtraSection(
+            heading: "## Risks",
+            body: "- The vendor contract renews in October.",
+            anchor: "## summary"
+        )
+
+        #expect(
+            NoteCombiner.unionedExtraSections(
+                [shared, onlyOnOne],
+                [shared]
+            ) == [shared, onlyOnOne]
+        )
+    }
+
     @Test
     func digestsCannotBeMerged() async throws {
         var digest = note(title: "August", startedAt: 1_000_000, text: "Digest.")

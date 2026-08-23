@@ -22,25 +22,34 @@ protocol CalendarEventProviding: Sendable {
 }
 
 struct EventKitCalendarProvider: CalendarEventProviding {
+    // A fresh `EKEventStore` per call re-primed its calendar list and
+    // permission state every poll; one store held for the provider's
+    // lifetime is what EventKit itself recommends. Reads through it happen
+    // one at a time (a single background poll loop, plus the occasional
+    // synchronous enrichment lookup), so this does not need its own lock.
+    nonisolated(unsafe) private let store = EKEventStore()
+
     func requestAccess() async -> Bool {
-        let store = EKEventStore()
-        return (try? await store.requestFullAccessToEvents()) ?? false
+        (try? await store.requestFullAccessToEvents()) ?? false
     }
 
     func events(between start: Date, end: Date) -> [CalendarMeetingEvent] {
-        let store = EKEventStore()
         let predicate = store.predicateForEvents(
             withStart: start,
             end: end,
             calendars: nil
         )
-        return store.events(matching: predicate).map { event in
-            CalendarMeetingEvent(
-                title: event.title ?? "",
-                attendeeCount: event.attendees?.count ?? 0,
-                startDate: event.startDate
-            )
-        }
+        return store.events(matching: predicate)
+            // All-day events (holidays, "Out of office") are not meetings
+            // and have no meaningful start time to enrich or prompt from.
+            .filter { !$0.isAllDay }
+            .map { event in
+                CalendarMeetingEvent(
+                    title: event.title ?? "",
+                    attendeeCount: event.attendees?.count ?? 0,
+                    startDate: event.startDate
+                )
+            }
     }
 }
 
@@ -77,16 +86,22 @@ final class CalendarContextService: ObservableObject {
 
     private let provider: any CalendarEventProviding
     private var pollTask: Task<Void, Never>?
-    /// One prompt per event per session; dismissing must never nag again.
+    private var eventStoreObserver: NSObjectProtocol?
+    /// One prompt per event per day; dismissing must never nag again, and
+    /// this survives a relaunch so restarting Nook inside the same prompt
+    /// window does not ask again either.
     private var promptedEventKeys: Set<String> = []
 
     private enum Keys {
         static let enabled = "useCalendarContext"
+        static let promptedEventKeysDay = "CalendarContextService.promptedEventKeysDay"
+        static let promptedEventKeysValues = "CalendarContextService.promptedEventKeysValues"
     }
 
     init(provider: any CalendarEventProviding = EventKitCalendarProvider()) {
         self.provider = provider
         isEnabled = UserDefaults.standard.bool(forKey: Keys.enabled)
+        promptedEventKeys = Self.loadPromptedEventKeys()
     }
 
     func setEnabled(_ enabled: Bool) async {
@@ -104,6 +119,7 @@ final class CalendarContextService: ObservableObject {
         } else {
             stopPolling()
             promptedEventKeys.removeAll()
+            Self.clearPersistedPromptedEventKeys()
         }
     }
 
@@ -152,11 +168,12 @@ final class CalendarContextService: ObservableObject {
 
     private func startPolling() {
         guard pollTask == nil else { return }
+        observeEventStoreChanges()
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                self.pollOnce()
-                try? await Task.sleep(for: .seconds(60))
+                let delay = await self.pollOnce()
+                try? await Task.sleep(for: delay)
             }
         }
     }
@@ -165,26 +182,146 @@ final class CalendarContextService: ObservableObject {
         pollTask?.cancel()
         pollTask = nil
         currentUpcomingEvent = nil
+        if let eventStoreObserver {
+            NotificationCenter.default.removeObserver(eventStoreObserver)
+            self.eventStoreObserver = nil
+        }
     }
 
-    private func pollOnce() {
-        guard isEnabled, !accessDenied, let onUpcomingEvent else { return }
+    /// Calendar edits (an event moved, added, or was removed) must not wait
+    /// for the next scheduled poll to be reflected. EventKit posts this
+    /// whenever anything in the store changes; there is no more specific
+    /// signal to filter on.
+    private func observeEventStoreChanges() {
+        guard eventStoreObserver == nil else { return }
+        eventStoreObserver = NotificationCenter.default.addObserver(
+            forName: .EKEventStoreChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            // `queue: .main` guarantees this fires on the main thread, the
+            // same trapped-vs-safe distinction as the dictation shortcut's
+            // reactivation observer.
+            MainActor.assumeIsolated {
+                self?.pollNowIfPolling()
+            }
+        }
+    }
+
+    private func pollNowIfPolling() {
+        guard pollTask != nil else { return }
+        pollTask?.cancel()
+        pollTask = nil
+        startPolling()
+    }
+
+    /// Fetches upcoming events, updates the published state, and fires the
+    /// one-time prompt when due. Returns how long to wait before polling
+    /// again.
+    @discardableResult
+    private func pollOnce() async -> Duration {
+        let fallbackDelay = Duration.seconds(Self.maximumPollInterval)
+        guard isEnabled, !accessDenied, let onUpcomingEvent else {
+            return fallbackDelay
+        }
+
         let now = Date()
-        let candidates = provider.events(
-            between: now.addingTimeInterval(90),
-            end: now.addingTimeInterval(10 * 60)
-        )
+        let provider = self.provider
+        // EventKit's fetch is synchronous I/O; running it off the main actor
+        // keeps this periodic poll from ever stalling the UI. One broader
+        // query also tells scheduling when the next event is, so an empty
+        // prompt horizon does not make the next poll arrive too late to
+        // catch an event crossing into it later.
+        let lookaheadEnd = now.addingTimeInterval(Self.schedulingLookahead)
+        let events = await Task.detached(priority: .utility) {
+            provider.events(between: now, end: lookaheadEnd)
+        }.value
+
+        let horizonStart = now.addingTimeInterval(90)
+        let horizonEnd = now.addingTimeInterval(10 * 60)
+        let candidates = events.filter {
+            $0.startDate >= horizonStart && $0.startDate <= horizonEnd
+        }
+
         // The nearest event in the horizon is published regardless of whether
         // its one-time prompt has fired, so passive surfaces stay accurate.
         currentUpcomingEvent = candidates.min {
             $0.startDate < $1.startDate
         }
-        guard let event = Self.promptCandidate(
+        if let event = Self.promptCandidate(
             now: now,
             among: candidates,
             alreadyPrompted: promptedEventKeys
-        ) else { return }
-        promptedEventKeys.insert(event.key)
-        onUpcomingEvent(event)
+        ) {
+            promptedEventKeys.insert(event.key)
+            Self.persist(promptedEventKeys)
+            onUpcomingEvent(event)
+        }
+
+        let nextEventStart = events
+            .map(\.startDate)
+            .filter { $0 > now }
+            .min()
+        return Self.nextPollDelay(now: now, nextEventStart: nextEventStart)
+    }
+
+    static let minimumPollInterval: TimeInterval = 60
+    static let maximumPollInterval: TimeInterval = 10 * 60
+    /// How far ahead to look purely to schedule the next poll; independent
+    /// of the much narrower prompt horizon itself.
+    private static let schedulingLookahead: TimeInterval = 2 * 60 * 60
+
+    /// Polls again just before the next known event would drop below the
+    /// prompt horizon's lower bound, bounded so a quiet calendar still gets
+    /// checked periodically and a busy one is never hammered.
+    static func nextPollDelay(
+        now: Date,
+        nextEventStart: Date?
+    ) -> Duration {
+        guard let nextEventStart else {
+            return .seconds(maximumPollInterval)
+        }
+        let interval = nextEventStart.timeIntervalSince(now) - 90
+        return .seconds(
+            min(maximumPollInterval, max(minimumPollInterval, interval))
+        )
+    }
+
+    // MARK: - Persisting today's prompts
+
+    static func dayKey(for date: Date) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let components = calendar.dateComponents(
+            [.year, .month, .day],
+            from: date
+        )
+        return "\(components.year ?? 0)-\(components.month ?? 0)-\(components.day ?? 0)"
+    }
+
+    /// Prompted keys are only meaningful for the day they were recorded: a
+    /// key from yesterday refers to an event that has long since passed, and
+    /// keeping it around would only ever risk colliding with a new event
+    /// that happens to share the same start time and title.
+    static func loadPromptedEventKeys() -> Set<String> {
+        let defaults = UserDefaults.standard
+        guard defaults.string(forKey: Keys.promptedEventKeysDay)
+            == dayKey(for: Date())
+        else { return [] }
+        return Set(
+            defaults.stringArray(forKey: Keys.promptedEventKeysValues) ?? []
+        )
+    }
+
+    static func persist(_ keys: Set<String>) {
+        let defaults = UserDefaults.standard
+        defaults.set(dayKey(for: Date()), forKey: Keys.promptedEventKeysDay)
+        defaults.set(Array(keys), forKey: Keys.promptedEventKeysValues)
+    }
+
+    static func clearPersistedPromptedEventKeys() {
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: Keys.promptedEventKeysDay)
+        defaults.removeObject(forKey: Keys.promptedEventKeysValues)
     }
 }

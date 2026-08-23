@@ -20,6 +20,7 @@ enum DetailTab: String, CaseIterable, Identifiable {
 struct MeetingDetailView: View {
     @EnvironmentObject private var store: MarkdownStore
     @EnvironmentObject private var markdownDraft: MarkdownDraftController
+    @EnvironmentObject private var personalNotes: PersonalNotesDraftController
     @EnvironmentObject private var meeting: MeetingCoordinator
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let note: MeetingNote
@@ -34,8 +35,9 @@ struct MeetingDetailView: View {
     @State private var copyNotice: String?
     @State private var copyNoticeSeverity: CopyConfirmationBanner.Severity = .success
     @State private var titleDraft: String
-    @State private var personalNotesDraft: String
-    @State private var personalNotesStatus: String?
+    /// Whether the My notes field has the keyboard. Leaving it writes what is
+    /// there, for the same reason the title field does: waiting for a button
+    /// meant every other way out of the field threw the words away.
     @FocusState private var personalNotesFocused: Bool
     /// Tracks the title field so leaving it commits the edit. Return-only
     /// saving silently discarded titles whenever the user clicked another
@@ -50,7 +52,6 @@ struct MeetingDetailView: View {
         self.note = note
         _tab = State(initialValue: initialTab)
         _titleDraft = State(initialValue: note.title)
-        _personalNotesDraft = State(initialValue: note.personalNotes)
     }
 
     var body: some View {
@@ -85,15 +86,14 @@ struct MeetingDetailView: View {
         }
         .onAppear {
             markdownDraft.prepare(for: note, store: store)
+            personalNotes.prepare(for: note, store: store)
             reloadChecklist()
         }
         .onChange(of: note) { _, _ in
             reloadChecklist()
         }
-        .onChange(of: note.personalNotes) { oldValue, newValue in
-            if personalNotesDraft == oldValue {
-                personalNotesDraft = newValue
-            }
+        .onChange(of: note.personalNotes) { _, _ in
+            personalNotes.refresh(for: note)
         }
         .onChange(of: note.title) { oldValue, newValue in
             if titleDraft == oldValue {
@@ -104,15 +104,15 @@ struct MeetingDetailView: View {
             guard !focused else { return }
             saveTitle()
         }
+        .onChange(of: personalNotesFocused) { _, focused in
+            guard !focused else { return }
+            savePersonalNotes()
+        }
         // Backstop for navigation that races focus loss: the view keeps its
         // own note, so committing here always writes the right file.
         .onDisappear {
             saveTitle()
-        }
-        .onChange(of: personalNotesDraft) { _, _ in
-            if personalNotesStatus == "Saved" {
-                personalNotesStatus = nil
-            }
+            savePersonalNotes()
         }
         .animation(
             reduceMotion ? nil : .easeOut(duration: 0.24),
@@ -509,7 +509,7 @@ struct MeetingDetailView: View {
         ) {
             VStack(spacing: 0) {
                 NookNotesEditor(
-                    text: $personalNotesDraft,
+                    text: $personalNotes.text,
                     placeholder: "Add context, a follow-up, or something you want to remember…",
                     isFocused: Binding(
                         get: { personalNotesFocused },
@@ -539,19 +539,23 @@ struct MeetingDetailView: View {
                         )
                         .font(NookType.caption)
                         .foregroundStyle(NookPalette.warning)
-                    } else if let personalNotesStatus {
+                    } else if let status = personalNotes.statusMessage {
                         Label(
-                            personalNotesStatus,
-                            systemImage: personalNotesStatus == "Saved"
+                            status,
+                            systemImage: status == "Saved"
                                 ? "checkmark.circle.fill"
                                 : "exclamationmark.circle"
                         )
                         .font(NookType.caption)
                         .foregroundStyle(
-                            personalNotesStatus == "Saved"
+                            status == "Saved"
                                 ? NookPalette.success
                                 : NookPalette.danger
                         )
+                    } else if personalNotes.hasChanges {
+                        Text("Saves when you click away")
+                            .font(NookType.caption)
+                            .foregroundStyle(.secondary)
                     } else {
                         Text("Stored locally in this Markdown file")
                             .font(NookType.caption)
@@ -560,11 +564,16 @@ struct MeetingDetailView: View {
 
                     Spacer()
 
+                    // Kept even though the field now saves itself. Cmd-S is
+                    // what a person reaches for when they want to be sure, and
+                    // an autosaving field with no way to ask is a promise you
+                    // cannot check. It confirms rather than being the only
+                    // path, so forgetting it costs nothing.
                     Button("Save notes") {
                         savePersonalNotes()
                     }
                     .disabled(
-                        !hasPersonalNotesChanges
+                        !personalNotes.hasChanges
                             || markdownDraft.hasChanges
                     )
                     .keyboardShortcut("s", modifiers: .command)
@@ -893,32 +902,33 @@ struct MeetingDetailView: View {
         markdownDraft.noteID == note.id && markdownDraft.hasChanges
     }
 
-    private var hasPersonalNotesChanges: Bool {
-        personalNotesDraft != note.personalNotes
-    }
-
+    /// Writes the My notes field, from the button, from leaving the field, or
+    /// from the view going away.
+    ///
+    /// Called on every exit rather than only from the button. The words used
+    /// to live in this view's own state, so a selection change, a meeting
+    /// starting by itself, or a quit destroyed anything not explicitly saved,
+    /// with no warning and nothing to undo.
     private func savePersonalNotes() {
-        personalNotesFocused = false
-        let normalized = personalNotesDraft.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
-        personalNotesDraft = normalized
+        guard personalNotes.noteID == note.id, personalNotes.hasChanges else {
+            return
+        }
         do {
-            let saved = try store.updatePersonalNotes(
-                normalized,
-                for: note
-            )
+            let saved = try personalNotes.save(note: note, store: store)
             markdownDraft.refresh(for: saved, store: store)
-            personalNotesStatus = "Saved"
             Task {
                 try? await Task.sleep(for: .seconds(2))
-                guard personalNotesStatus == "Saved" else { return }
+                guard personalNotes.statusMessage == "Saved" else { return }
                 withAnimation(.easeOut(duration: 0.18)) {
-                    personalNotesStatus = nil
+                    personalNotes.statusMessage = nil
                 }
             }
         } catch {
-            personalNotesStatus = error.localizedDescription
+            // Loud as well as inline: the field may already be off screen by
+            // the time this runs, and a save that did not happen is the one
+            // thing the user has to know about.
+            personalNotes.statusMessage = error.localizedDescription
+            showCopyNotice(error.localizedDescription, severity: .failure)
         }
     }
 

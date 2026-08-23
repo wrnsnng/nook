@@ -12,6 +12,7 @@ struct LibraryAskView: View {
     @State private var question = ""
     @State private var answer: LibraryAnswer?
     @State private var isAnswering = false
+    @State private var askTask: Task<Void, Never>?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -22,8 +23,11 @@ struct LibraryAskView: View {
                 )
                 .font(.headline)
                 Spacer()
-                Button("Close") { onClose() }
-                    .keyboardShortcut(.cancelAction)
+                Button("Close") {
+                    askTask?.cancel()
+                    onClose()
+                }
+                .keyboardShortcut(.cancelAction)
             }
 
             HStack(spacing: 10) {
@@ -35,7 +39,7 @@ struct LibraryAskView: View {
                 .onSubmit(ask)
                 .accessibilityLabel("Question about your notes")
 
-                Button("Search", action: ask)
+                Button("Ask", action: ask)
                     .keyboardShortcut(.defaultAction)
                     .disabled(
                         question.trimmingCharacters(in: .whitespaces).isEmpty
@@ -111,16 +115,25 @@ struct LibraryAskView: View {
         }
     }
 
+    /// `.onSubmit` fires on every Return keypress regardless of the button's
+    /// disabled state, so re-entry has to be guarded here rather than only
+    /// at the button. A new question cancels whatever is still in flight
+    /// instead of racing it, which would otherwise let a stale answer land
+    /// after a newer one.
     private func ask() {
+        guard !isAnswering, !service.isPreparing else { return }
         let currentQuestion = question.trimmingCharacters(in: .whitespaces)
         guard !currentQuestion.isEmpty else { return }
+
+        askTask?.cancel()
         answer = nil
         isAnswering = true
-        Task {
+        askTask = Task {
             let result = await service.answer(
                 question: currentQuestion,
                 notes: notes
             )
+            guard !Task.isCancelled else { return }
             self.answer = result
             self.isAnswering = false
         }

@@ -46,6 +46,14 @@ struct OpenAction: Identifiable, Hashable {
     }
 }
 
+/// What `refresh` last read from one note's file, so the next refresh can
+/// tell whether re-reading is necessary at all.
+private struct CachedNoteActions: Sendable {
+    let url: URL
+    let fileModified: Date?
+    let actions: [OpenAction]
+}
+
 /// Aggregates unfinished action items from every meeting note.
 ///
 /// Items are read straight from each file because checkbox state is not part
@@ -61,6 +69,20 @@ final class OpenActionsController: ObservableObject {
     @Published private(set) var exportedIDs: Set<String> = []
 
     private var refreshGeneration = 0
+    /// Keyed by note id. `store.notes` publishes on every save across the
+    /// whole app, and every publish used to re-read and re-parse every
+    /// action-bearing note's file from disk regardless of whether that note
+    /// had changed; this reuses the previous read whenever a note's file URL
+    /// and on-disk modification date both still match.
+    private var cache: [UUID: CachedNoteActions] = [:]
+
+    /// Reminder export keys already sent, persisted so a relaunch does not
+    /// offer to export the same action again. See `sendToReminders`.
+    private var exportedReminderKeys: Set<String>
+
+    init() {
+        exportedReminderKeys = Self.loadExportedReminderKeys()
+    }
 
     /// Re-reads action state from disk. Notes are unchanged between saves,
     /// but files can also be edited outside Nook, so this never assumes.
@@ -71,23 +93,36 @@ final class OpenActionsController: ObservableObject {
 
         // Spoken notes keep their checkboxes inline in the body, so their
         // decoded model never lists items; they stay eligible on kind.
-        let notes = store.notes.filter {
-            !$0.actionItems.isEmpty || $0.kind == .spoken
+        let notes = store.notes
+            .filter { !$0.actionItems.isEmpty || $0.kind == .spoken }
+            .sorted(by: { $0.startedAt > $1.startedAt })
+
+        var reused: [UUID: CachedNoteActions] = [:]
+        var toRead: [MeetingNote] = []
+        for note in notes {
+            guard let url = note.fileURL else { continue }
+            if let cached = cache[note.id],
+               cached.url == url,
+               cached.fileModified == note.fileModified {
+                reused[note.id] = cached
+            } else {
+                toRead.append(note)
+            }
         }
-        let collected: [OpenAction] = await Task.detached(
+
+        let freshlyRead: [(UUID, CachedNoteActions)] = await Task.detached(
             priority: .userInitiated
         ) {
-            var result: [OpenAction] = []
-            for note in notes.sorted(by: { $0.startedAt > $1.startedAt }) {
+            toRead.compactMap { note -> (UUID, CachedNoteActions)? in
                 guard let url = note.fileURL,
                       let markdown = try? String(
                           contentsOf: url,
                           encoding: .utf8
                       )
-                else { continue }
-                for item in Self.actionItemLines(for: note, in: markdown)
-                where !item.isChecked {
-                    result.append(
+                else { return nil }
+                let actions = Self.actionItemLines(for: note, in: markdown)
+                    .filter { !$0.isChecked }
+                    .map { item in
                         OpenAction(
                             noteID: note.id,
                             itemIndex: item.index,
@@ -96,14 +131,34 @@ final class OpenActionsController: ObservableObject {
                             noteTitle: note.title,
                             startedAt: note.startedAt
                         )
+                    }
+                return (
+                    note.id,
+                    CachedNoteActions(
+                        url: url,
+                        fileModified: note.fileModified,
+                        actions: actions
                     )
-                }
+                )
             }
-            return Self.sortedByDueUrgency(result)
         }.value
 
         guard generation == refreshGeneration else { return }
-        entries = collected
+
+        for (id, cached) in freshlyRead {
+            reused[id] = cached
+        }
+        // Drop notes that are no longer eligible (every item checked off,
+        // the note deleted, or its file gone), so the cache does not grow
+        // without bound.
+        cache = reused
+
+        let combined = notes.flatMap { reused[$0.id]?.actions ?? [] }
+        entries = Self.sortedByDueUrgency(combined)
+        for entry in entries
+        where exportedReminderKeys.contains(Self.exportKey(for: entry)) {
+            exportedIDs.insert(entry.id)
+        }
         isRefreshing = false
     }
 
@@ -170,10 +225,13 @@ final class OpenActionsController: ObservableObject {
         do {
             try store.saveRawMarkdown(rewritten, for: note)
             lastError = nil
+            // `saveRawMarkdown` updates `store.notes`, which the library
+            // view observes to call `refresh` itself; refreshing again here
+            // would re-read this note's file a second time for nothing.
         } catch {
             lastError = error.localizedDescription
+            await refresh(store: store)
         }
-        await refresh(store: store)
     }
 
     /// Checks an item off, or reopens it, by editing one line of its file.
@@ -212,17 +270,49 @@ final class OpenActionsController: ObservableObject {
         do {
             try store.saveRawMarkdown(rewritten, for: note)
             lastError = nil
+            // See the matching comment in `setDue`: `store.notes` publishing
+            // already triggers the library view's own refresh.
         } catch {
             lastError = error.localizedDescription
+            await refresh(store: store)
         }
-        await refresh(store: store)
     }
 
-    /// Exports one item into the user's Reminders.
+    /// UserDefaults key for the persisted set of exported reminder keys. See
+    /// `exportKey(for:)` for what a key contains.
+    private static let exportedReminderKeysDefaultsKey =
+        "OpenActionsController.exportedReminderKeys"
+
+    /// Identifies an action for reminder-export dedupe by note id and the
+    /// item's display text, not its file index: the index shifts whenever
+    /// another item is added above it in the file, which would otherwise
+    /// silently forget that this one was already exported.
+    private static func exportKey(for entry: OpenAction) -> String {
+        "\(entry.noteID.uuidString)|\(entry.displayText)"
+    }
+
+    private static func loadExportedReminderKeys() -> Set<String> {
+        Set(
+            UserDefaults.standard.stringArray(
+                forKey: exportedReminderKeysDefaultsKey
+            ) ?? []
+        )
+    }
+
+    /// Exports one item into the user's Reminders, unless it was exported
+    /// before: without this, reopening Nook offered the export again on
+    /// every relaunch, since `exportedIDs` only tracked the current session.
     ///
     /// Reminders access is requested here rather than at launch, so nobody
     /// grants it without using the feature.
     func sendToReminders(_ entry: OpenAction) async {
+        let key = Self.exportKey(for: entry)
+        guard !exportedReminderKeys.contains(key) else {
+            exportedIDs.insert(entry.id)
+            lastError = "Already in Reminders."
+            return
+        }
+
         let eventStore = EKEventStore()
         // The write-only scope is not offered on macOS; full access is still
         // requested here rather than at launch, so nobody grants it without
@@ -257,6 +347,11 @@ final class OpenActionsController: ObservableObject {
         }
         do {
             try eventStore.save(reminder, commit: true)
+            exportedReminderKeys.insert(key)
+            UserDefaults.standard.set(
+                Array(exportedReminderKeys),
+                forKey: Self.exportedReminderKeysDefaultsKey
+            )
             exportedIDs.insert(entry.id)
             lastError = nil
         } catch {

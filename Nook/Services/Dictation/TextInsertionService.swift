@@ -18,6 +18,26 @@ import Carbon.HIToolbox
 /// knows up front whether it can stream.
 @MainActor
 final class TextInsertionService {
+    /// Why a pasted insertion was not delivered.
+    enum PasteRefusal: Equatable {
+        /// Focus left the field this run started in. The words were aimed at
+        /// that field, so ⌘V now would drop them into whatever the user moved
+        /// to, and the caller sends them to the note instead.
+        case focusMoved
+        /// The run's own field is a password field. The words are not typed
+        /// there, and they are not written to a note either: text spoken into
+        /// a secure field is a secret, and a note is a file on disk.
+        case secureField
+    }
+
+    enum PasteOutcome: Equatable {
+        case pasted
+        /// The paste was possible but declined, for the reason given.
+        case refused(PasteRefusal)
+        /// The paste was attempted and did not work.
+        case failed
+    }
+
     enum Capability: Equatable {
         /// Text can be appended repeatedly, live.
         case streaming
@@ -173,8 +193,8 @@ final class TextInsertionService {
     /// unavoidable: the paste is delivered asynchronously to another process,
     /// and restoring too early gives that process Nook's old clipboard.
     @discardableResult
-    func pasteOnce(_ text: String) async -> Bool {
-        guard !text.isEmpty, Self.isTrusted else { return false }
+    func pasteOnce(_ text: String) async -> PasteOutcome {
+        guard !text.isEmpty, Self.isTrusted else { return .failed }
 
         // The shortcut that triggered this is very likely still held down —
         // hold-to-talk ends on key-up, and the modifiers usually outlast it.
@@ -183,6 +203,17 @@ final class TextInsertionService {
         // which is why direct-write apps worked and paste-only ones did not.
         await waitForModifiersToClear()
 
+        // Focus is re-read here, after the wait and after however long the
+        // user spoke and a rewrite took. ⌘V is a system-wide keystroke: it
+        // lands wherever focus is at the instant it is posted, not where the
+        // run began. Without this, a dictation aimed at a chat box that the
+        // user then clicked away from pasted into the next window, which is
+        // the one delivery mistake that cannot be undone from inside Nook.
+        // `replaceRun` has always made the same check for the same reason.
+        if let refusal = currentPasteRefusal() {
+            return .refused(refusal)
+        }
+
         let pasteboard = NSPasteboard.general
         let saved = snapshotPasteboard(pasteboard)
         let ours = pasteboard.clearContents()
@@ -190,7 +221,7 @@ final class TextInsertionService {
 
         guard postCommandV() else {
             restore(saved, to: pasteboard, ifUnchangedFrom: ours)
-            return false
+            return .failed
         }
 
         Task { @MainActor in
@@ -198,7 +229,58 @@ final class TextInsertionService {
             self.restore(saved, to: pasteboard, ifUnchangedFrom: ours)
         }
         insertedText = text
-        return true
+        return .pasted
+    }
+
+    /// Reads focus now and applies `pasteRefusal` to it.
+    private func currentPasteRefusal() -> PasteRefusal? {
+        let focused = focusedElement()
+        let matches: Bool
+        if let focused, let element {
+            matches = CFEqual(focused, element)
+        } else {
+            matches = false
+        }
+        return Self.pasteRefusal(
+            hasRecordedTarget: element != nil,
+            focusMatchesRecordedTarget: matches,
+            focusIsSecure: focused.map(isSecureField) ?? false
+        )
+    }
+
+    /// Whether a ⌘V may be posted, given what focus looks like at delivery.
+    ///
+    /// Kept pure and separate from the accessibility reads so the rule itself
+    /// can be tested: an accessibility tree cannot be built in a test process.
+    nonisolated static func pasteRefusal(
+        hasRecordedTarget: Bool,
+        focusMatchesRecordedTarget: Bool,
+        focusIsSecure: Bool
+    ) -> PasteRefusal? {
+        // Order matters. A secure field the run did not start in is somewhere
+        // the words merely must not go, so they are still the user's to keep
+        // and the note is the right home. Only a run that started in a secure
+        // field means the words themselves are a password.
+        guard hasRecordedTarget, focusMatchesRecordedTarget else {
+            return .focusMoved
+        }
+        return focusIsSecure ? .secureField : nil
+    }
+
+    /// Whether the element is a password field.
+    ///
+    /// AppKit and web content both describe one as an ordinary text field with
+    /// a secure subrole, so the role alone cannot tell them apart.
+    private func isSecureField(_ element: AXUIElement) -> Bool {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element,
+            kAXSubroleAttribute as CFString,
+            &value
+        ) == .success, let subrole = value as? String else {
+            return false
+        }
+        return subrole == kAXSecureTextFieldSubrole
     }
 
     /// How long the dictated text is left on the pasteboard before the previous

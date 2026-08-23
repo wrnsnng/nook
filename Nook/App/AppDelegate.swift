@@ -256,9 +256,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ) -> NSApplication.TerminateReply {
         let model = AppModel.shared
         if terminationTask != nil {
-            return .terminateLater
+            // A second Cmd-Q while the first is still finalizing. Returning
+            // .terminateLater again promises AppKit a reply that only the
+            // first request ever sends, and AppKit waits for one reply per
+            // request: the app then sat there unable to quit at all. The quit
+            // already running still finishes and still quits, so this one can
+            // be answered straight away.
+            showTerminationAlreadyUnderWay()
+            return .terminateCancel
         }
         guard prepareMarkdownForTermination(model: model, sender: sender) else {
+            return .terminateCancel
+        }
+        guard prepareNotesForTermination(model: model) else {
             return .terminateCancel
         }
 
@@ -317,6 +327,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         default:
             return false
         }
+    }
+
+    /// Writes the two fields that save themselves, before the app that holds
+    /// them goes away.
+    ///
+    /// Neither is a question worth asking: the My notes field and the quick
+    /// note pad both promise to keep what is typed into them without being
+    /// told to, and the only reason either can have words in memory at quit is
+    /// that the debounce or the click away had not happened yet. A failure is
+    /// worth asking about, because for the pad especially there is no other
+    /// copy of what was just said.
+    private func prepareNotesForTermination(model: AppModel) -> Bool {
+        if let failure = model.personalNotesDraft.saveIfNeeded(
+            store: model.store
+        ) {
+            showSaveFailure(failure)
+            return false
+        }
+        if let failure = model.quickNote.saveForTermination() {
+            showSaveFailure(failure)
+            return false
+        }
+        return true
+    }
+
+    private func showTerminationAlreadyUnderWay() {
+        let alert = NSAlert()
+        alert.messageText = "Nook is already finishing your meeting"
+        alert.informativeText = "Nook is writing up the meeting and removing its temporary capture files. It will quit on its own when that is done."
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     private func confirmMeetingTermination(

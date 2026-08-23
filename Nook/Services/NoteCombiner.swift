@@ -211,6 +211,10 @@ enum NoteCombiner {
         merged.summary = summarizingFailed && !existingSummary.isEmpty
             ? appended.summary
             : insights.summary
+        merged.extraSections = unionedExtraSections(
+            appended.extraSections,
+            incoming.extraSections
+        )
         return Result(
             merged: merged,
             absorbed: incoming,
@@ -295,6 +299,26 @@ enum NoteCombiner {
     ) -> Set<String> {
         let ticked = Set(groups.joined().map(actionItemKey))
         return Set(items.filter { ticked.contains(actionItemKey($0)) })
+    }
+
+    /// Both notes' unmodelled sections, the surviving note's first.
+    ///
+    /// A section no field models is something a person typed into the file by
+    /// hand, and a merge rebuilds that file from the model. Keeping only the
+    /// survivor's sections therefore deleted every heading the absorbed note
+    /// carried, which is exactly the writing this field exists to protect.
+    /// Identical blocks fold together so merging the same material twice does
+    /// not stack duplicates; anchors travel with each block, so each one goes
+    /// back after the recognised heading it followed.
+    static func unionedExtraSections(
+        _ groups: [ExtraSection]...
+    ) -> [ExtraSection] {
+        var seen: Set<ExtraSection> = []
+        var combined: [ExtraSection] = []
+        for section in groups.joined() where seen.insert(section).inserted {
+            combined.append(section)
+        }
+        return combined
     }
 
     /// Two spellings of the same follow-up compare equal: case and spacing do

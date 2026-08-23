@@ -1,6 +1,22 @@
 import Foundation
 import Speech
 
+/// Why a speech asset was not ready in time.
+///
+/// Separate from `TranscriptionError` because this is not a property of the
+/// transcription request: the model is fine, it simply has not arrived yet, and
+/// the only useful advice is to wait.
+enum SpeechAssetError: LocalizedError {
+    case installTimedOut
+
+    var errorDescription: String? {
+        switch self {
+        case .installTimedOut:
+            "The speech model is still downloading. Try again once it has finished."
+        }
+    }
+}
+
 enum SpeechAssets {
     /// TCC may deliver this callback on any queue. Keeping the bridge nonisolated
     /// prevents Swift from asserting a caller's actor (such as MainActor) there.
