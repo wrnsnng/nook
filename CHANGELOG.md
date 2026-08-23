@@ -4,6 +4,13 @@ Nook follows a user-facing release-note model. Each published version has a
 Markdown note in [`Releases/`](Releases/) and a matching `v<version>` release in
 the [binary releases repository](https://github.com/wrnsnng/nook-releases/releases).
 
+## 1.10.2
+
+- Turning on calendar context now shows the macOS permission prompt. Nook
+  was missing entitlements macOS requires before it will ask, so the
+  request was refused silently and the switch turned itself back off.
+- Adding action items to Reminders is fixed by the same change.
+
 ## 1.10.1
 
 - Setup gains an optional calendar step: turn on meeting context at the one
