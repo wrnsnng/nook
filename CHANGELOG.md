@@ -4,6 +4,12 @@ Nook follows a user-facing release-note model. Each published version has a
 Markdown note in [`Releases/`](Releases/) and a matching `v<version>` release in
 the [binary releases repository](https://github.com/wrnsnng/nook-releases/releases).
 
+## 1.12.1
+
+- Fix a crash when dictation opened the quick note pad: the pad's
+  hand-built window was missing the environment object its new live
+  partial and hands-free features read, so the first render trapped.
+
 ## 1.12.0
 
 - Quick note gains hands-free capture, a live partial line while

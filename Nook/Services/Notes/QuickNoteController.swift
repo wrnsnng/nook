@@ -371,7 +371,15 @@ final class QuickNoteController: ObservableObject {
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.contentView = NSHostingView(
-            rootView: QuickNoteView().environmentObject(self)
+            // Every @EnvironmentObject the pad's view reads must be injected
+            // here explicitly: this panel is built by hand rather than through
+            // a declared scene, so AppModel's scene-wide injections never
+            // reach it. The dictation coordinator was added for the live
+            // partial line and hands-free mode, and omitting it here crashed
+            // the app the first time a no-field dictation opened the pad.
+            rootView: QuickNoteView()
+                .environmentObject(self)
+                .environmentObject(AppModel.shared.dictation)
         )
         panel.center()
         // `NSWindow.delegate` is weak, so the delegate is owned here.
