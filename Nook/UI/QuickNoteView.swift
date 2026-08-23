@@ -3,6 +3,18 @@ import SwiftUI
 /// The floating window a spoken note lands in.
 struct QuickNoteView: View {
     @EnvironmentObject private var note: QuickNoteController
+    @EnvironmentObject private var dictation: DictationCoordinator
+    /// The paragraph the user declined; it stays declined until the words
+    /// change.
+    @State private var dismissedSuggestion: String?
+
+    private var taskSuggestion: QuickCaptureTaskParser.Suggestion? {
+        let candidate = QuickCaptureTaskParser.suggestion(in: note.text)
+        guard let candidate, candidate.paragraph != dismissedSuggestion else {
+            return nil
+        }
+        return candidate
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -13,23 +25,43 @@ struct QuickNoteView: View {
     }
 
     private var editor: some View {
-        ZStack(alignment: .topLeading) {
-            TextEditor(text: $note.text)
-                .font(NookType.transcript)
-                .lineSpacing(2)
-                .scrollContentBackground(.hidden)
-                .padding(.horizontal, NookSpacing.large)
-                .padding(.top, NookSpacing.medium)
-                .accessibilityLabel("Spoken note")
+        NookNotesEditor(
+            text: $note.text,
+            placeholder: "Type, or hold your dictation shortcut and talk.",
+            contentInsets: EdgeInsets(
+                top: NookSpacing.medium,
+                leading: NookSpacing.large,
+                bottom: NookSpacing.medium,
+                trailing: NookSpacing.large
+            ),
+            lineSpacing: 2,
+            accessibilityLabel: "Spoken note",
+            insertionPort: note.editorPort
+        )
+    }
 
-            if note.text.isEmpty {
-                Text("Hold your dictation shortcut and start talking.")
-                    .font(NookType.transcript)
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, NookSpacing.large + 5)
-                    .padding(.top, NookSpacing.medium + 8)
-                    .allowsHitTesting(false)
+    /// The recognizer's live guess while the pad is where words are going.
+    /// Revision stays here, where it costs nothing; only settled text enters
+    /// the buffer.
+    @ViewBuilder
+    private var partialLine: some View {
+        if dictation.phase == .listening, note.isFrontmost,
+           !dictation.volatileText.isEmpty {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Circle()
+                    .fill(NookPalette.accent)
+                    .frame(width: 5, height: 5)
+                Text(dictation.volatileText)
+                    .font(NookType.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                Spacer(minLength: 0)
             }
+            .padding(.horizontal, NookSpacing.large)
+            .padding(.bottom, 6)
+            .transition(.opacity)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Hearing: \(dictation.volatileText)")
         }
     }
 
@@ -50,7 +82,26 @@ struct QuickNoteView: View {
                     .transition(.opacity)
             }
 
+            if let suggestion = taskSuggestion {
+                taskSuggestionChip(suggestion)
+            }
+
+            partialLine
+
             HStack(spacing: NookSpacing.xSmall) {
+                Button {
+                    note.insertChecklistLine()
+                } label: {
+                    Image(systemName: "checklist")
+                        .font(.system(size: 11, weight: .semibold))
+                        .frame(width: 26, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut("l", modifiers: [.command, .shift])
+                .help("Start a checklist line")
+                .accessibilityLabel("Start a checklist line")
+
                 ForEach(NoteAction.allCases) { action in
                     NoteActionButton(
                         action: action,
@@ -65,9 +116,11 @@ struct QuickNoteView: View {
             }
 
             HStack(spacing: NookSpacing.small) {
+                continuousToggle
                 engineControl
                 Spacer(minLength: NookSpacing.small)
                 status
+                filingMenu
                 Button("Open in Library") {
                     note.saveAndOpenInLibrary()
                 }
@@ -90,6 +143,115 @@ struct QuickNoteView: View {
         }
         .animation(NookMotion.quick, value: note.message)
         .animation(NookMotion.quick, value: note.engine)
+        .animation(NookMotion.quick, value: dictation.phase == .listening)
+        .onChange(of: note.isContinuous) { _, continuous in
+            guard note.isFrontmost else { return }
+            if continuous {
+                dictation.startContinuousSession()
+            } else {
+                dictation.stopContinuousSession()
+            }
+        }
+    }
+
+    /// Deterministic-first assist: the date is in the user's own words, so
+    /// the chip only offers to write down what was already said.
+    private func taskSuggestionChip(
+        _ suggestion: QuickCaptureTaskParser.Suggestion
+    ) -> some View {
+        HStack(spacing: NookSpacing.small) {
+            Image(systemName: "calendar.badge.checkmark")
+                .foregroundStyle(NookPalette.accent)
+            Text("Make this a task due \(suggestion.cueLabel)?")
+                .font(NookType.caption)
+            Spacer(minLength: 0)
+            Button("Make Task") {
+                note.text = QuickCaptureTaskParser.applying(
+                    suggestion,
+                    to: note.text
+                )
+                dismissedSuggestion = suggestion.paragraph
+            }
+            .controlSize(.small)
+            .keyboardShortcut(.defaultAction)
+            Button("Not Now") {
+                dismissedSuggestion = suggestion.paragraph
+            }
+            .controlSize(.small)
+        }
+        .padding(.horizontal, NookSpacing.small + 2)
+        .padding(.vertical, NookSpacing.xSmall + 1)
+        .background(
+            RoundedRectangle(
+                cornerRadius: NookRadius.control,
+                style: .continuous
+            )
+            .fill(NookPalette.accent.opacity(0.10))
+        )
+        .accessibilityElement(children: .combine)
+    }
+
+    private var continuousToggle: some View {
+        Toggle(isOn: $note.isContinuous) {
+            Label("Hands-free", systemImage: "waveform.badge.mic")
+                .font(NookType.micro.weight(.medium))
+        }
+        .toggleStyle(.checkbox)
+        .help(
+            "Keep listening after each thought until you turn this off"
+        )
+    }
+
+    /// Files the buffer somewhere deliberate instead of promotion being a
+    /// discovery exercise later.
+    private var filingMenu: some View {
+        Menu {
+            Button("Append to a meeting's notes") {
+                showsFilingPicker = true
+            }
+        } label: {
+            Label("File into", systemImage: "text.badge.plus")
+                .font(NookType.micro.weight(.medium))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .disabled(note.text.isEmpty || note.recentMeetingTargets.isEmpty)
+        .help("Add these words to a meeting's personal notes")
+        .popover(isPresented: $showsFilingPicker, arrowEdge: .bottom) {
+            filingPicker
+        }
+    }
+
+    @State private var showsFilingPicker = false
+
+    private var filingPicker: some View {
+        VStack(alignment: .leading, spacing: NookSpacing.xSmall) {
+            Text("Append to which meeting?")
+                .font(NookType.control)
+            ForEach(note.recentMeetingTargets) { meeting in
+                Button {
+                    showsFilingPicker = false
+                    note.fileIntoMeeting(meeting)
+                } label: {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(meeting.title)
+                            .lineLimit(1)
+                        Text(
+                            meeting.startedAt.formatted(
+                                date: .abbreviated,
+                                time: .shortened
+                            )
+                        )
+                        .font(NookType.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .padding(.vertical, 2)
+            }
+        }
+        .padding(NookSpacing.medium + 2)
+        .frame(width: 280)
     }
 
     /// States plainly, and permanently, that actions will send this note away.

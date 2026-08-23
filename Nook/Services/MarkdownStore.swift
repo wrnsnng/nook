@@ -129,14 +129,25 @@ final class MarkdownStore: ObservableObject {
 
     @discardableResult
     func createBlankNote() throws -> MeetingNote {
+        try createTemplatedNote(from: .blank)
+    }
+
+    /// Creates a note pre-seeded from a template.
+    ///
+    /// Templates are static text on the model's own fields, so the file that
+    /// lands on disk is byte-for-byte what any equivalent note would encode;
+    /// nothing is generated and nothing leaves the Mac.
+    @discardableResult
+    func createTemplatedNote(from template: NoteTemplate) throws -> MeetingNote {
         let now = Date()
         return try save(
             MeetingNote(
-                title: "Untitled note",
+                title: template.title,
                 startedAt: now,
                 endedAt: now,
                 sourceApp: "Personal",
-                summary: "",
+                summary: template.summary,
+                actionItems: template.actionItems,
                 personalNotes: ""
             )
         )
@@ -449,6 +460,48 @@ enum MarkdownStoreError: LocalizedError {
             "The Markdown frontmatter is missing or invalid. Your changes haven’t been written."
         case .writeVerificationFailed:
             "Nook couldn’t verify the saved note. Your Markdown file was left untouched."
+        }
+    }
+}
+
+/// Starting points for a new note in the library.
+///
+/// Deliberately tiny: three skeletons whose value is the checklist they save
+/// the user from retyping, not content. Every seed line is an ordinary
+/// action item the sidebar already understands.
+enum NoteTemplate: String, CaseIterable, Identifiable {
+    case blank
+    case oneOnOne
+    case standup
+    case interview
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .blank: "Untitled note"
+        case .oneOnOne: "1:1"
+        case .standup: "Standup"
+        case .interview: "Interview"
+        }
+    }
+
+    /// Menu label; the blank case keeps its existing verb.
+    var menuTitle: String {
+        switch self {
+        case .blank: "Blank note"
+        default: title
+        }
+    }
+
+    var summary: String { "" }
+
+    var actionItems: [String] {
+        switch self {
+        case .blank: []
+        case .oneOnOne: ["Follow up from last time", "Topics to cover"]
+        case .standup: ["Yesterday", "Today", "Blockers"]
+        case .interview: ["Questions", "Impressions", "Next steps"]
         }
     }
 }

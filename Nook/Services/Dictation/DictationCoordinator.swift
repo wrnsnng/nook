@@ -79,6 +79,9 @@ final class DictationCoordinator: ObservableObject {
     /// up when its session is abandoned cannot tell from `phase` alone whether
     /// a later `.preparing` belongs to it or to a newer run.
     private var sessionID = 0
+    /// A hands-free pad session: each finished utterance starts the next
+    /// listening window by itself until something explicit ends it.
+    private var isContinuousSession = false
     /// Polls for Accessibility access while a registration is waiting on it.
     private var trustWatch: Task<Void, Never>?
     /// Loudest input seen this dictation, used to tell a silent microphone
@@ -243,6 +246,13 @@ final class DictationCoordinator: ObservableObject {
     private static let trustWatchAttempts = 150
 
     private func shortcutPressed() {
+        // During a hands-free pad session the shortcut means stop, in both
+        // activation modes: the session exists precisely to not need the key,
+        // so pressing it is an unambiguous end.
+        if phase.isActive, isContinuousSession {
+            stopContinuousSession()
+            return
+        }
         switch activation {
         case .hold:
             begin()
@@ -395,6 +405,7 @@ final class DictationCoordinator: ObservableObject {
         guard phase.isActive || isFinishing || isFailed else { return }
         sessionID += 1
         isFinishing = false
+        isContinuousSession = false
         startTask?.cancel()
         startTask = nil
         finishTask?.cancel()
@@ -498,12 +509,6 @@ final class DictationCoordinator: ObservableObject {
     }
 
     private func deliver() async {
-        defer {
-            insertion.endRun()
-            isFinishing = false
-            resetRunState()
-        }
-
         let spoken = spokenText
         #if DEBUG
         NookDebugLog.write("[dictation] deliver — capability: \(capability), streamingFailed: \(streamingFailed), chunks: \(spokenChunks.count), peak: \(peakLevel), spoken: \"\(spoken)\"")
@@ -546,8 +551,11 @@ final class DictationCoordinator: ObservableObject {
             // sentence goes in now, in one piece.
             guard insertion.append(finalText) else {
                 let pasted = await insertion.pasteOnce(finalText)
-                if !pasted { fail("Nook couldn’t type into that app.") }
-                phase = pasted ? .idle : phase
+                if !pasted {
+                    fail("Nook couldn’t type into that app.")
+                } else {
+                    concludeDelivery()
+                }
                 return
             }
         case .streaming where !streamingFailed:
@@ -594,7 +602,48 @@ final class DictationCoordinator: ObservableObject {
             break
         }
 
+        // Cleanup is explicit rather than deferred because the continuous
+        // restart below opens a new run: a defer would tear that fresh run's
+        // insertion context down right after begin() built it. Every early
+        // exit above goes through fail() or concludeDelivery(), which perform
+        // the same teardown.
+        concludeDelivery()
+    }
+
+    /// Ends a successful delivery: run-scoped state goes, the phase settles,
+    /// and a hands-free pad session opens its next listening window.
+    private func concludeDelivery() {
+        insertion.endRun()
+        isFinishing = false
+        resetRunState()
         phase = .idle
+        restartIfContinuous()
+    }
+
+    /// Opens the next listening window of a hands-free pad session.
+    ///
+    /// Only a delivery that actually landed in the pad sets the session flag,
+    /// so dictation aimed at another app's field never starts looping.
+    private func restartIfContinuous() {
+        guard isContinuousSession else { return }
+        isContinuousSession = false
+        guard quickNote?.isFrontmost == true,
+              quickNote?.isContinuous == true else { return }
+        begin()
+    }
+
+    /// Starts hands-free capture from the pad's toggle, when idle.
+    func startContinuousSession() {
+        isContinuousSession = true
+        guard !phase.isActive, isEnabled else { return }
+        begin()
+    }
+
+    /// Ends hands-free capture from the pad's toggle or the shortcut.
+    func stopContinuousSession() {
+        isContinuousSession = false
+        guard phase.isActive, !isFinishing else { return }
+        finish()
     }
 
     /// Places a finished dictation when no text field was found at the start.
@@ -605,8 +654,11 @@ final class DictationCoordinator: ObservableObject {
     /// field that was invisible then is usually available now. Only when there
     /// is still nowhere to put the words does a note open, which is the case
     /// the note was meant for.
+    /// Marks this delivery as pad-bound and keeps listening when the pad asks
+    /// for hands-free capture.
     private func deliverWithoutAKnownField(_ finalText: String, spoken: String) {
         if quickNote?.isFrontmost == true {
+            isContinuousSession = quickNote?.isContinuous == true
             if finalText != spoken {
                 quickNote?.replaceLastDictation(with: finalText, spoken: spoken)
             }
@@ -660,6 +712,7 @@ final class DictationCoordinator: ObservableObject {
         startTask = nil
         finishTask?.cancel()
         finishTask = nil
+        isContinuousSession = false
         audio.stop()
         recognizer.cancel()
         insertion.endRun()

@@ -69,7 +69,11 @@ final class OpenActionsController: ObservableObject {
         let generation = refreshGeneration
         isRefreshing = true
 
-        let notes = store.notes.filter { !$0.actionItems.isEmpty }
+        // Spoken notes keep their checkboxes inline in the body, so their
+        // decoded model never lists items; they stay eligible on kind.
+        let notes = store.notes.filter {
+            !$0.actionItems.isEmpty || $0.kind == .spoken
+        }
         let collected: [OpenAction] = await Task.detached(
             priority: .userInitiated
         ) {
@@ -81,8 +85,8 @@ final class OpenActionsController: ObservableObject {
                           encoding: .utf8
                       )
                 else { continue }
-                let lines = MarkdownCodec.actionItemLines(in: markdown)
-                for item in lines where !item.isChecked {
+                for item in Self.actionItemLines(for: note, in: markdown)
+                where !item.isChecked {
                     result.append(
                         OpenAction(
                             noteID: note.id,
@@ -124,6 +128,17 @@ final class OpenActionsController: ObservableObject {
         }
     }
 
+    /// Checkbox lines where this note keeps them: the Action items section
+    /// for meetings and digests, anywhere in the body for spoken notes.
+    nonisolated private static func actionItemLines(
+        for note: MeetingNote,
+        in markdown: String
+    ) -> [ActionItemLine] {
+        note.kind == .spoken
+            ? MarkdownCodec.spokenCheckboxLines(in: markdown)
+            : MarkdownCodec.actionItemLines(in: markdown)
+    }
+
     /// Sets or clears an item's due date by editing one line of its file.
     func setDue(
         _ entry: OpenAction,
@@ -133,7 +148,7 @@ final class OpenActionsController: ObservableObject {
         guard let note = store.notes.first(where: { $0.id == entry.noteID }),
               let url = note.fileURL,
               let markdown = try? String(contentsOf: url, encoding: .utf8),
-              let current = MarkdownCodec.actionItemLines(in: markdown)
+              let current = Self.actionItemLines(for: note, in: markdown)
                   .first(where: { $0.index == entry.itemIndex })
         else {
             lastError = "That action could not be found anymore."
@@ -141,11 +156,11 @@ final class OpenActionsController: ObservableObject {
             return
         }
 
-        let rewritten = MarkdownCodec.markdownBySettingActionItemDue(
-            current,
-            dueTo: date,
-            in: markdown
-        )
+        let rewritten = note.kind == .spoken
+            ? MarkdownCodec.markdownBySettingSpokenCheckboxDue(
+                current, dueTo: date, in: markdown)
+            : MarkdownCodec.markdownBySettingActionItemDue(
+                current, dueTo: date, in: markdown)
         guard let rewritten else {
             lastError = "That action changed on disk. Refreshing."
             await refresh(store: store)
@@ -166,7 +181,7 @@ final class OpenActionsController: ObservableObject {
         guard let note = store.notes.first(where: { $0.id == entry.noteID }),
               let url = note.fileURL,
               let markdown = try? String(contentsOf: url, encoding: .utf8),
-              let current = MarkdownCodec.actionItemLines(in: markdown)
+              let current = Self.actionItemLines(for: note, in: markdown)
                   .first(where: { $0.index == entry.itemIndex })
         else {
             lastError = "That action could not be found anymore."
@@ -174,11 +189,20 @@ final class OpenActionsController: ObservableObject {
             return
         }
 
-        let rewritten = MarkdownCodec.markdownBySettingActionItem(
-            current,
-            checked: !current.isChecked,
-            in: markdown
-        )
+        let rewritten: String?
+        if note.kind == .spoken {
+            rewritten = MarkdownCodec.markdownBySettingSpokenCheckbox(
+                current,
+                checked: !current.isChecked,
+                in: markdown
+            )
+        } else {
+            rewritten = MarkdownCodec.markdownBySettingActionItem(
+                current,
+                checked: !current.isChecked,
+                in: markdown
+            )
+        }
         guard let rewritten else {
             lastError = "That action changed on disk. Refreshing."
             await refresh(store: store)

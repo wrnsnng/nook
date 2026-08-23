@@ -402,26 +402,163 @@ extension MarkdownCodec {
         checked: Bool,
         in markdown: String
     ) -> String? {
+        rewriteCheckbox(
+            target,
+            checked: checked,
+            in: markdown,
+            scopedToActionItemsSection: true
+        )
+    }
+
+    /// Adds, changes, or removes the due date on exactly one action line.
+    ///
+    /// Same discipline as `markdownBySettingActionItem`: the item is matched
+    /// by ordinal and exact text so a file edited elsewhere is reported as
+    /// stale rather than rewritten from a stale model. The checkbox state and
+    /// every other byte of the document stay untouched.
+    static func markdownBySettingActionItemDue(
+        _ target: ActionItemLine,
+        dueTo date: Date?,
+        in markdown: String
+    ) -> String? {
+        return rewriteDue(
+            scopedToActionItemsSection: true,
+            target: target,
+            dueTo: date,
+            in: markdown
+        )
+    }
+
+    private static func checkbox(
+        in line: Substring
+    ) -> (isChecked: Bool, text: String)? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        for (marker, checked) in [
+            ("- [ ] ", false),
+            ("- [x] ", true),
+            ("- [X] ", true)
+        ] {
+            if trimmed.hasPrefix(marker) {
+                return (checked, String(trimmed.dropFirst(marker.count)))
+            }
+        }
+        return nil
+    }
+
+    // MARK: Spoken-note checkboxes
+
+    /// Checkbox lines anywhere below a spoken note's title, in file order.
+    ///
+    /// A spoken note's file is title then prose by contract: trailing
+    /// sections were removed because a dictated heading would swallow
+    /// anything after it. Structure therefore lives inline, and the task
+    /// pipeline reads it where it actually is rather than asking the format
+    /// to change.
+    static func spokenCheckboxLines(in markdown: String) -> [ActionItemLine] {
+        collectCheckboxLines(in: markdown, scopedToActionItemsSection: false)
+    }
+
+    /// Rewrites one spoken-note checkbox in place, matching by ordinal and
+    /// exact text like the section-scoped rewriters.
+    static func markdownBySettingSpokenCheckbox(
+        _ target: ActionItemLine,
+        checked: Bool,
+        in markdown: String
+    ) -> String? {
+        rewriteCheckbox(
+            target,
+            checked: checked,
+            in: markdown,
+            scopedToActionItemsSection: false
+        )
+    }
+
+    /// Adds, changes, or removes a due suffix on one spoken-note checkbox.
+    static func markdownBySettingSpokenCheckboxDue(
+        _ target: ActionItemLine,
+        dueTo date: Date?,
+        in markdown: String
+    ) -> String? {
+        rewriteDue(
+            scopedToActionItemsSection: false,
+            target: target,
+            dueTo: date,
+            in: markdown
+        )
+    }
+
+    // MARK: - Shared line rewriting
+
+    private static func collectCheckboxLines(
+        in markdown: String,
+        scopedToActionItemsSection: Bool
+    ) -> [ActionItemLine] {
+        let lines = markdown.split(
+            separator: "\n",
+            omittingEmptySubsequences: false
+        )
+        var items: [ActionItemLine] = []
+        if scopedToActionItemsSection {
+            guard
+                let headingIndex = lines.firstIndex(where: {
+                    isHeadingLine($0, "action items")
+                })
+            else { return [] }
+            for line in lines[lines.index(after: headingIndex)...] {
+                if MarkdownCodec.recognizedHeadings.contains(
+                    line.trimmingCharacters(in: .whitespaces).lowercased()
+                ) { break }
+                guard let box = checkbox(in: line) else { continue }
+                items.append(
+                    ActionItemLine(
+                        index: items.count,
+                        text: box.text,
+                        isChecked: box.isChecked
+                    )
+                )
+            }
+            return items
+        }
+
+        // Whole-body scope: skip everything through the title heading so
+        // frontmatter can never masquerade as tasks.
+        let bodyStart = lines.firstIndex(where: {
+            $0.trimmingCharacters(in: .whitespaces).hasPrefix("# ")
+        }).map { lines.index(after: $0) } ?? lines.startIndex
+        for line in lines[bodyStart...] {
+            guard let box = checkbox(in: line) else { continue }
+            items.append(
+                ActionItemLine(
+                    index: items.count,
+                    text: box.text,
+                    isChecked: box.isChecked
+                )
+            )
+        }
+        return items
+    }
+
+    private static func rewriteCheckbox(
+        _ target: ActionItemLine,
+        checked: Bool,
+        in markdown: String,
+        scopedToActionItemsSection: Bool
+    ) -> String? {
         let lines = markdown.split(
             separator: "\n",
             omittingEmptySubsequences: false
         ).map(String.init)
-        guard
-            let headingIndex = lines.firstIndex(where: {
-                $0.trimmingCharacters(in: .whitespaces)
-                    .lowercased() == "## action items"
-            }),
-            lines.indices.contains(headingIndex)
-        else {
-            return nil
-        }
 
         var ordinal = -1
-        for position in lines.index(after: headingIndex)..<lines.count {
+        for position in editableRange(
+            of: lines,
+            scopedToActionItemsSection: scopedToActionItemsSection
+        ) {
             let line = lines[position]
-            if MarkdownCodec.recognizedHeadings.contains(
-                line.trimmingCharacters(in: .whitespaces)
-            ) {
+            if scopedToActionItemsSection,
+               MarkdownCodec.recognizedHeadings.contains(
+                   line.trimmingCharacters(in: .whitespaces).lowercased()
+               ) {
                 break
             }
             guard let box = checkbox(in: line[...]) else { continue }
@@ -440,14 +577,9 @@ extension MarkdownCodec {
         return nil
     }
 
-    /// Adds, changes, or removes the due date on exactly one action line.
-    ///
-    /// Same discipline as `markdownBySettingActionItem`: the item is matched
-    /// by ordinal and exact text so a file edited elsewhere is reported as
-    /// stale rather than rewritten from a stale model. The checkbox state and
-    /// every other byte of the document stay untouched.
-    static func markdownBySettingActionItemDue(
-        _ target: ActionItemLine,
+    private static func rewriteDue(
+        scopedToActionItemsSection: Bool,
+        target: ActionItemLine,
         dueTo date: Date?,
         in markdown: String
     ) -> String? {
@@ -455,21 +587,17 @@ extension MarkdownCodec {
             separator: "\n",
             omittingEmptySubsequences: false
         ).map(String.init)
-        guard
-            let headingIndex = lines.firstIndex(where: {
-                isHeadingLine($0, "action items")
-            }),
-            lines.indices.contains(headingIndex)
-        else {
-            return nil
-        }
 
         var ordinal = -1
-        for position in lines.index(after: headingIndex)..<lines.count {
+        for position in editableRange(
+            of: lines,
+            scopedToActionItemsSection: scopedToActionItemsSection
+        ) {
             let line = lines[position]
-            if MarkdownCodec.recognizedHeadings.contains(
-                line.trimmingCharacters(in: .whitespaces)
-            ) {
+            if scopedToActionItemsSection,
+               MarkdownCodec.recognizedHeadings.contains(
+                   line.trimmingCharacters(in: .whitespaces).lowercased()
+               ) {
                 break
             }
             guard let box = checkbox(in: line[...]) else { continue }
@@ -503,20 +631,27 @@ extension MarkdownCodec {
         return nil
     }
 
-    private static func checkbox(
-        in line: Substring
-    ) -> (isChecked: Bool, text: String)? {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        for (marker, checked) in [
-            ("- [ ] ", false),
-            ("- [x] ", true),
-            ("- [X] ", true)
-        ] {
-            if trimmed.hasPrefix(marker) {
-                return (checked, String(trimmed.dropFirst(marker.count)))
-            }
+    /// The line positions a rewriter may consider: below the Action items
+    /// heading until the next recognised section when scoped, or everywhere
+    /// below the title for whole-body scope.
+    private static func editableRange(
+        of lines: [String],
+        scopedToActionItemsSection: Bool
+    ) -> Range<Int> {
+        if scopedToActionItemsSection {
+            guard
+                let headingIndex = lines.firstIndex(where: {
+                    $0.trimmingCharacters(in: .whitespaces)
+                        .lowercased() == "## action items"
+                }),
+                lines.indices.contains(headingIndex)
+            else { return 0..<0 }
+            return lines.index(after: headingIndex)..<lines.count
         }
-        return nil
+        let bodyStart = lines.firstIndex(where: {
+            $0.trimmingCharacters(in: .whitespaces).hasPrefix("# ")
+        }).map { lines.index(after: $0) } ?? lines.startIndex
+        return bodyStart..<lines.count
     }
 
     /// The text between a "## Title" heading line and the next one.

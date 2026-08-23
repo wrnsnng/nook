@@ -32,6 +32,7 @@ struct MeetingDetailView: View {
     @State private var playback = AudioPlaybackController()
     @State private var positionTick: Task<Void, Never>?
     @State private var copyNotice: String?
+    @State private var copyNoticeSeverity: CopyConfirmationBanner.Severity = .success
     @State private var titleDraft: String
     @State private var personalNotesDraft: String
     @State private var personalNotesStatus: String?
@@ -40,6 +41,10 @@ struct MeetingDetailView: View {
     /// saving silently discarded titles whenever the user clicked another
     /// note instead of pressing Return first.
     @FocusState private var titleFieldFocused: Bool
+    /// The note's checkbox lines as they exist on disk right now. Checkbox
+    /// state is deliberately absent from the decoded model, so ticking from
+    /// here needs the file's own truth to stay aligned with the sidebar.
+    @State private var checklistLines: [ActionItemLine] = []
 
     init(note: MeetingNote, initialTab: DetailTab = .notes) {
         self.note = note
@@ -73,13 +78,17 @@ struct MeetingDetailView: View {
         }
         .overlay(alignment: .top) {
             if let copyNotice {
-                CopyConfirmationBanner(message: copyNotice)
+                CopyConfirmationBanner(message: copyNotice, severity: copyNoticeSeverity)
                     .padding(.top, 12)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
         .onAppear {
             markdownDraft.prepare(for: note, store: store)
+            reloadChecklist()
+        }
+        .onChange(of: note) { _, _ in
+            reloadChecklist()
         }
         .onChange(of: note.personalNotes) { oldValue, newValue in
             if personalNotesDraft == oldValue {
@@ -301,40 +310,12 @@ struct MeetingDetailView: View {
                     }
                 }
 
-                if !note.actionItems.isEmpty {
-                    EditorialSection(
-                        title: "Action items",
-                        symbol: "checklist",
-                        tint: NookPalette.accent
-                    ) {
-                        VStack(spacing: 0) {
-                            ForEach(Array(note.actionItems.enumerated()), id: \.offset) { index, action in
-                                HStack(alignment: .top, spacing: 13) {
-                                    Image(systemName: "circle")
-                                        .font(.system(size: 9, weight: .semibold))
-                                        .foregroundStyle(NookPalette.accent)
-                                        .frame(width: 22, height: 22)
-                                        .accessibilityHidden(true)
-                                    Text(action)
-                                        .font(NookType.transcript)
-                                        .lineSpacing(4)
-                                        .textSelection(.enabled)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                }
-                                .padding(.vertical, 14)
-                                .accessibilityElement(children: .ignore)
-                                .accessibilityLabel("Action item: \(action)")
-
-                                if index < note.actionItems.count - 1 {
-                                    Divider()
-                                        .padding(.leading, 35)
-                                }
-                            }
-                        }
-                    }
+                if !checklistLines.isEmpty {
+                    actionItemsSection
                 }
 
-                if note.keyPoints.isEmpty,
+                if checklistLines.isEmpty,
+                   note.keyPoints.isEmpty,
                    note.decisions.isEmpty,
                    note.actionItems.isEmpty {
                     Label(
@@ -350,6 +331,132 @@ struct MeetingDetailView: View {
             .padding(.vertical, 42)
             .frame(maxWidth: 820, alignment: .leading)
             .frame(maxWidth: .infinity)
+        }
+    }
+
+    /// Tickable action items, wired to the same one-line file rewrite the
+    /// sidebar uses. Closing out a task while rereading its note is the most
+    /// natural moment, so the affordance belongs here too.
+    private var actionItemsSection: some View {
+        EditorialSection(
+            title: "Action items",
+            symbol: "checklist",
+            tint: NookPalette.accent
+        ) {
+            VStack(spacing: 0) {
+                if markdownDraft.hasChanges {
+                    Label(
+                        "Save or revert Markdown edits before ticking items",
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .font(NookType.caption)
+                    .foregroundStyle(NookPalette.warning)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.bottom, 10)
+                }
+
+                ForEach(
+                    Array(checklistLines.enumerated()),
+                    id: \.element
+                ) { index, line in
+                    HStack(alignment: .top, spacing: 13) {
+                        Button {
+                            toggleChecklistLine(line)
+                        } label: {
+                            Image(
+                                systemName: line.isChecked
+                                    ? "checkmark.circle.fill" : "circle"
+                            )
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(
+                                line.isChecked
+                                    ? NookPalette.success : NookPalette.accent
+                            )
+                            // The glyph stays small; the frame is the hit target.
+                            .frame(width: 30, height: 30)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(markdownDraft.hasChanges)
+                        .help(line.isChecked ? "Reopen item" : "Mark as done")
+                        .accessibilityLabel(
+                            "\(line.isChecked ? "Reopen" : "Complete"): \(line.displayText)"
+                        )
+
+                        Text(line.displayText)
+                            .font(NookType.transcript)
+                            .lineSpacing(4)
+                            .strikethrough(line.isChecked)
+                            .foregroundStyle(
+                                line.isChecked ? .secondary : Color(nsColor: .labelColor)
+                            )
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                        if let dueDate = line.dueDate {
+                            Text("Due \(dueDate.formatted(.dateTime.month().day()))")
+                                .font(NookType.caption.weight(.medium))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 8)
+                    .accessibilityElement(children: .contain)
+
+                    if index < checklistLines.count - 1 {
+                        Divider()
+                            .padding(.leading, 43)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Re-reads checkbox truth from the file. The store republishes after a
+    /// toggle anywhere (sidebar, palette, here), which recreates `note` and
+    /// lands here, so every surface converges on the same state.
+    private func reloadChecklist() {
+        let lines: [ActionItemLine]
+        if let markdown = try? store.rawMarkdown(for: note) {
+            lines = note.kind == .spoken
+                ? MarkdownCodec.spokenCheckboxLines(in: markdown)
+                : MarkdownCodec.actionItemLines(in: markdown)
+        } else if note.kind == .spoken {
+            // An unsaved or unreadable file still shows its own words.
+            lines = MarkdownCodec.spokenCheckboxLines(in: note.summary)
+        } else {
+            lines = []
+        }
+        checklistLines = lines
+    }
+
+    /// Toggles by rewriting exactly one line of the file, the same discipline
+    /// the sidebar uses, so an externally edited file is reported stale
+    /// instead of overwritten from a remembered model.
+    private func toggleChecklistLine(_ line: ActionItemLine) {
+        do {
+            let markdown = try store.rawMarkdown(for: note)
+            let rewritten: String?
+            if note.kind == .spoken {
+                rewritten = MarkdownCodec.markdownBySettingSpokenCheckbox(
+                    line,
+                    checked: !line.isChecked,
+                    in: markdown
+                )
+            } else {
+                rewritten = MarkdownCodec.markdownBySettingActionItem(
+                    line,
+                    checked: !line.isChecked,
+                    in: markdown
+                )
+            }
+            guard let rewritten else {
+                showCopyNotice("That item changed on disk.", severity: .info)
+                return
+            }
+            try store.saveRawMarkdown(rewritten, for: note)
+            reloadChecklist()
+        } catch {
+            showCopyNotice(error.localizedDescription, severity: .failure)
         }
     }
 
@@ -485,6 +592,19 @@ struct MeetingDetailView: View {
         }
     }
 
+    /// The prose a person reads: for a spoken note, checkbox lines are
+    /// lifted out and rendered as the tickable list above, so no sentence
+    /// appears twice on the page. The file itself is untouched by this.
+    private var displaySummary: String {
+        guard note.kind == .spoken else { return note.summary }
+        return note.summary
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .filter { line in
+                !line.trimmingCharacters(in: .whitespaces).hasPrefix("- [")
+            }
+            .joined(separator: "\n")
+    }
+
     private var summarySection: some View {
         VStack(alignment: .leading, spacing: 16) {
             NookSectionLabel(
@@ -493,7 +613,7 @@ struct MeetingDetailView: View {
                 tint: NookPalette.accent
             )
 
-            Text(note.summary)
+            Text(displaySummary)
                 .font(NookType.editorialSummary)
                 .lineSpacing(7)
                 .textSelection(.enabled)
@@ -861,12 +981,19 @@ struct MeetingDetailView: View {
         showCopyNotice("Transcript copied")
     }
 
-    private func showCopyNotice(_ message: String) {
+    private func showCopyNotice(
+        _ message: String,
+        severity: CopyConfirmationBanner.Severity = .success
+    ) {
         withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
             copyNotice = message
+            copyNoticeSeverity = severity
         }
+        // Failures name a problem worth reading carefully, so they dwell
+        // longer than confirmations.
+        let dwell = severity == .success ? 1.8 : 4.0
         Task {
-            try? await Task.sleep(for: .seconds(1.8))
+            try? await Task.sleep(for: .seconds(dwell))
             guard copyNotice == message else { return }
             withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
                 copyNotice = nil

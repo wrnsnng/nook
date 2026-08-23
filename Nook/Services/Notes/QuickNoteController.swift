@@ -26,6 +26,19 @@ final class QuickNoteController: ObservableObject {
         }
     }
 
+    /// Hands-free capture: after each spoken chunk lands, listening starts
+    /// again by itself until the pad is closed, the toggle turns off, or the
+    /// dictation shortcut is pressed to stop.
+    @Published var isContinuous: Bool {
+        didSet {
+            UserDefaults.standard.set(isContinuous, forKey: Keys.continuous)
+        }
+    }
+
+    /// Aim for toolbar commands that type at the cursor, such as inserting a
+    /// checklist line. The editor wires this to its text view when created.
+    let editorPort = TextViewInsertionPort()
+
     /// Chooses an engine, asking first if it means sending notes off the Mac.
     ///
     /// Deliberately a modal decision rather than a tooltip or a footnote. Every
@@ -107,6 +120,9 @@ final class QuickNoteController: ObservableObject {
     init(store: MarkdownStore) {
         self.store = store
         self.engine = Self.restoredEngine()
+        self.isContinuous = UserDefaults.standard.bool(
+            forKey: Keys.continuous
+        )
     }
 
     /// The engine to start with, which is not simply the remembered one.
@@ -223,6 +239,45 @@ final class QuickNoteController: ObservableObject {
         AppModel.shared.openLibrary(noteID: note.id)
     }
 
+    /// Files the pad's words into a meeting note's personal notes instead of
+    /// saving them as their own spoken note.
+    ///
+    /// The buffer joins whatever personal notes exist with a blank line
+    /// between, so neither half is rewritten; the meeting's own transcript and
+    /// summary are untouched. Closing without saving-as-spoken keeps one
+    /// thought in one place rather than two copies.
+    func fileIntoMeeting(_ target: MeetingNote) {
+        let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { return }
+        do {
+            let existing = target.personalNotes
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let joined = existing.isEmpty
+                ? body
+                : "\(existing)\n\n\(body)"
+            _ = try store.updatePersonalNotes(joined, for: target)
+            text = ""
+            savedNoteID = nil
+            lastSavedAt = Date()
+            message = nil
+            isPresenting = false
+            panel?.orderOut(nil)
+            panel = nil
+        } catch {
+            message = "Couldn’t file into that meeting: \(error.localizedDescription)"
+        }
+    }
+
+    /// Meetings the filing menu can offer, newest first.
+    var recentMeetingTargets: [MeetingNote] {
+        store.notes.filter { $0.kind == .meeting }.prefix(5).map { $0 }
+    }
+
+    /// Starts a checklist line at the cursor from the toolbar or keyboard.
+    func insertChecklistLine() {
+        editorPort.insertLineStarting(with: "- [ ] ")
+    }
+
     // MARK: - Assistance
 
     func refreshEngines() {
@@ -329,6 +384,7 @@ final class QuickNoteController: ObservableObject {
 
     private enum Keys {
         static let engine = "quickNoteEngine"
+        static let continuous = "quickNoteContinuous"
 
         static func consent(_ engine: NoteAssistantEngine) -> String {
             "quickNoteConsent.\(engine.rawValue)"

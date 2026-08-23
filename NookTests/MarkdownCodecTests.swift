@@ -1610,3 +1610,216 @@ struct NoteDecodeCacheTests {
         #expect(cache.note(for: url, modified: original) == nil)
     }
 }
+
+// MARK: - Spoken-note checklists
+
+extension MarkdownCodecTests {
+    private func spokenMarkdown() -> String {
+        """
+        ---
+        id: 11111111-2222-3333-4444-555555555555
+        kind: spoken
+        title: "Test note"
+        started: 2026-08-23T09:00:00Z
+        ended: 2026-08-23T09:05:00Z
+        source: "Spoken note"
+        ---
+
+        # Test note
+
+        Kickoff went well.
+        - [ ] Send Marco the report [due: 2026-08-28]
+        - [x] Book the room
+        Plain closing thought.
+        """
+    }
+
+    @Test
+    func spokenCheckboxesAreFoundAnywhereInTheBody() {
+        let lines = MarkdownCodec.spokenCheckboxLines(in: spokenMarkdown())
+
+        #expect(lines.count == 2)
+        #expect(lines[0].index == 0)
+        #expect(lines[0].text == "Send Marco the report [due: 2026-08-28]")
+        #expect(lines[0].isChecked == false)
+        #expect(lines[0].dueDate != nil)
+        #expect(lines[1].isChecked == true)
+        #expect(lines[1].displayText == "Book the room")
+    }
+
+    @Test
+    func frontmatterNeverMasqueradesAsTasks() {
+        let markdown = """
+        ---
+        id: 11111111-2222-3333-4444-555555555555
+        kind: spoken
+        title: "- [ ] fake task in frontmatter"
+        started: 2026-08-23T09:00:00Z
+        ended: 2026-08-23T09:05:00Z
+        source: "Spoken note"
+        ---
+
+        # Real note
+
+        Nothing to do here.
+        """
+        #expect(MarkdownCodec.spokenCheckboxLines(in: markdown).isEmpty)
+    }
+
+    @Test
+    func meetingNotesKeepSectionScoping() {
+        // A checkbox quoted inside a meeting's Summary prose must not leak
+        // into the action pipeline; only the Action items section counts.
+        let markdown = """
+        ---
+        id: 11111111-2222-3333-4444-555555555555
+        kind: meeting
+        title: "Weekly sync"
+        started: 2026-08-23T09:00:00Z
+        ended: 2026-08-23T09:30:00Z
+        source: "Zoom"
+        ---
+
+        # Weekly sync
+
+        ## Summary
+
+        Someone wrote "- [ ] not a real item" in chat.
+
+        ## Action items
+
+        - [ ] The real item
+        """
+        let lines = MarkdownCodec.actionItemLines(in: markdown)
+        #expect(lines.count == 1)
+        #expect(lines[0].text == "The real item")
+    }
+
+    @Test
+    func togglingASpokenCheckboxTouchesExactlyOneLine() throws {
+        let original = spokenMarkdown()
+        let lines = MarkdownCodec.spokenCheckboxLines(in: original)
+        let rewritten = try #require(
+            MarkdownCodec.markdownBySettingSpokenCheckbox(
+                lines[0],
+                checked: true,
+                in: original
+            )
+        )
+
+        #expect(rewritten.contains("- [x] Send Marco the report"))
+        // Every other byte, including the second item and the prose, stays.
+        #expect(rewritten.contains("- [x] Book the room"))
+        #expect(rewritten.contains("Plain closing thought."))
+        let before = original.split(separator: "\n").map(String.init)
+        let after = rewritten.split(separator: "\n").map(String.init)
+        var changed = 0
+        for (old, new) in zip(before, after) where old != new { changed += 1 }
+        #expect(changed == 1)
+    }
+
+    @Test
+    func staleSpokenItemsAreReportedNotRewritten() {
+        let original = spokenMarkdown()
+        let lines = MarkdownCodec.spokenCheckboxLines(in: original)
+        let moved = ActionItemLine(
+            index: 0,
+            text: "Text that no longer exists",
+            isChecked: false
+        )
+        #expect(
+            MarkdownCodec.markdownBySettingSpokenCheckbox(
+                moved,
+                checked: true,
+                in: original
+            ) == nil
+        )
+        #expect(lines.count == 2)
+    }
+
+    @Test
+    func dueDatesRoundTripOnSpokenLines() throws {
+        let original = spokenMarkdown()
+        let lines = MarkdownCodec.spokenCheckboxLines(in: original)
+        let cleared = try #require(
+            MarkdownCodec.markdownBySettingSpokenCheckboxDue(
+                lines[0],
+                dueTo: nil,
+                in: original
+            )
+        )
+        #expect(cleared.contains("- [ ] Send Marco the report\n"))
+        #expect(!cleared.contains("[due:"))
+
+        let calendar = Calendar.current
+        let newDue = calendar.date(
+            byAdding: .day,
+            value: 3,
+            to: lines[0].dueDate ?? Date()
+        )!
+        let redated = try #require(
+            MarkdownCodec.markdownBySettingSpokenCheckboxDue(
+                ActionItemLine(index: 0, text: lines[0].displayText, isChecked: false),
+                dueTo: newDue,
+                in: cleared
+            )
+        )
+        let reparsed = MarkdownCodec.spokenCheckboxLines(in: redated)[0]
+        #expect(reparsed.dueDate != nil)
+    }
+
+    @Test
+    func aSpokenNoteEncodesAndDecodesWithItsBodyIntact() throws {
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let body = """
+        Standup notes.
+        - [ ] File the incident report [due: 2026-09-01]
+        Closing line.
+        """
+        let note = MeetingNote(
+            kind: .spoken,
+            title: "Standup",
+            startedAt: start,
+            endedAt: start.addingTimeInterval(300),
+            sourceApp: "Spoken note",
+            summary: body
+        )
+
+        let decoded = try #require(MarkdownCodec.decode(MarkdownCodec.encode(note)))
+        #expect(decoded.kind == .spoken)
+        #expect(decoded.summary == body)
+        // The pipeline finds the items from the file the encoder wrote.
+        let lines = MarkdownCodec.spokenCheckboxLines(in: MarkdownCodec.encode(note))
+        #expect(lines.count == 1)
+        #expect(lines[0].displayText == "File the incident report")
+        #expect(lines[0].dueDate != nil)
+    }
+}
+
+// MARK: - Note templates
+
+extension MarkdownCodecTests {
+    @Test
+    func templatesSeedOrdinaryActionItemFields() {
+        for template in NoteTemplate.allCases {
+            #expect(!template.menuTitle.isEmpty)
+            #expect(!template.title.isEmpty)
+        }
+        #expect(NoteTemplate.blank.actionItems.isEmpty)
+        #expect(!NoteTemplate.standup.actionItems.isEmpty)
+        // Seeds are plain strings, so they encode as ordinary checkboxes.
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let note = MeetingNote(
+            title: NoteTemplate.standup.title,
+            startedAt: start,
+            endedAt: start,
+            sourceApp: "Personal",
+            summary: "",
+            actionItems: NoteTemplate.standup.actionItems
+        )
+        let markdown = MarkdownCodec.encode(note)
+        let lines = MarkdownCodec.actionItemLines(in: markdown)
+        #expect(lines.map(\.displayText) == NoteTemplate.standup.actionItems)
+        #expect(lines.allSatisfy { !$0.isChecked })
+    }
+}

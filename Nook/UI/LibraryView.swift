@@ -33,6 +33,9 @@ struct LibraryView: View {
     @State private var mergeTarget: MeetingNote?
     /// The note awaiting Trash confirmation.
     @State private var notePendingDeletion: MeetingNote?
+    @State private var showsCommandPalette = false
+    /// Sidebar scope: the whole library or just today's capture.
+    @State private var todayOnly = false
 
     init(initialNoteID: MeetingNote.ID? = nil) {
         _selection = State(
@@ -41,8 +44,16 @@ struct LibraryView: View {
     }
 
     private var filteredNotes: [MeetingNote] {
-        guard let matchingIDs = searchController.matchingIDs else { return store.notes }
-        return store.notes.filter { matchingIDs.contains($0.id) }
+        var notes = store.notes
+        if todayOnly {
+            notes = notes.filter {
+                Calendar.current.isDateInToday($0.startedAt)
+            }
+        }
+        guard let matchingIDs = searchController.matchingIDs else {
+            return notes
+        }
+        return notes.filter { matchingIDs.contains($0.id) }
     }
 
     private var selectedNote: MeetingNote? {
@@ -83,6 +94,27 @@ struct LibraryView: View {
             detail
         }
         .tint(NookPalette.accent)
+        .background {
+            // A hidden accelerator so ⌘K reaches the palette from anywhere in
+            // the window, toolbar focus included.
+            Button("Command Palette") { showsCommandPalette = true }
+                .keyboardShortcut("k", modifiers: .command)
+                .opacity(0)
+                .accessibilityHidden(true)
+        }
+        .overlay {
+            if showsCommandPalette {
+                CommandPaletteView(
+                    isPresented: $showsCommandPalette,
+                    openActionEntries: Array(openActions.entries.prefix(6)),
+                    createNote: { template in
+                        createNote(from: template)
+                    },
+                    createWeeklyDigest: { createWeeklyDigest() },
+                    showAskSheet: { showsAskSheet = true }
+                )
+            }
+        }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
@@ -121,14 +153,18 @@ struct LibraryView: View {
                     .disabled(meeting.pauseTransitionInFlight)
                     .help("Stop recording and create notes")
                 } else {
-                    Button {
-                        createBlankNote()
+                    Menu {
+                        ForEach(NoteTemplate.allCases) { template in
+                            Button(template.menuTitle) {
+                                createNote(from: template)
+                            }
+                        }
                     } label: {
                         Label("New note", systemImage: "square.and.pencil")
                     }
                     .disabled(isProcessing)
                     .keyboardShortcut("n", modifiers: .command)
-                    .help("Create a blank local note")
+                    .help("Create a local note from a starting point")
                 }
             }
         }
@@ -275,6 +311,16 @@ struct LibraryView: View {
 
     private var sidebar: some View {
         List {
+            Section {
+                Picker("Range", selection: $todayOnly) {
+                    Text("All").tag(false)
+                    Text("Today").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .accessibilityLabel("Show all notes or only today's")
+            }
+
             prepSection
             openActionsSection
 
@@ -655,8 +701,12 @@ struct LibraryView: View {
     }
 
     private func createBlankNote() {
+        createNote(from: .blank)
+    }
+
+    private func createNote(from template: NoteTemplate) {
         do {
-            let note = try store.createBlankNote()
+            let note = try store.createTemplatedNote(from: template)
             selection = .note(note.id)
         } catch {
             store.lastError = error.localizedDescription

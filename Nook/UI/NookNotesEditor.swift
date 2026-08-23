@@ -1,6 +1,33 @@
 import AppKit
 import SwiftUI
 
+/// A handle for editing an editor's text at the insertion point from outside
+/// SwiftUI.
+///
+/// SwiftUI's `TextEditor` binding cannot see the cursor, so a toolbar button
+/// that should type at it ("insert a checklist line") has nowhere to aim.
+/// The representable wires this port to its text view once created; callers
+/// keep the port and invoke commands through it.
+@MainActor
+final class TextViewInsertionPort {
+    fileprivate weak var textView: NSTextView?
+
+    /// Inserts text at the cursor, starting a fresh line first when the
+    /// cursor sits mid-line so prefixes like `- [ ] ` always begin a line.
+    func insertLineStarting(with prefix: String) {
+        guard let textView else { return }
+        let range = textView.selectedRange()
+        let nsText = textView.string as NSString
+        let lineStart = nsText.lineRange(for: NSRange(location: range.location, length: 0)).location
+        let atLineStart = range.location == lineStart
+        let insertion = atLineStart ? prefix : "\n" + prefix
+        textView.insertText(
+            insertion,
+            replacementRange: NSRange(location: range.location, length: 0)
+        )
+    }
+}
+
 /// A plain-text notes editor with explicit text-container geometry. SwiftUI's
 /// TextEditor inherits private AppKit insets, which made independently padded
 /// placeholders drift away from the insertion point across Nook's three notes
@@ -19,6 +46,7 @@ struct NookNotesEditor: View {
     var fontSize = NSFont.systemFontSize
     var lineSpacing: CGFloat = 4
     var accessibilityLabel = "Personal meeting notes"
+    var insertionPort: TextViewInsertionPort?
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -37,7 +65,8 @@ struct NookNotesEditor: View {
                 fontSize: fontSize,
                 lineSpacing: lineSpacing,
                 accessibilityLabel: accessibilityLabel,
-                isEditable: isEnabled
+                isEditable: isEnabled,
+                insertionPort: insertionPort
             )
             .padding(contentInsets)
         }
@@ -51,6 +80,7 @@ private struct PlainNotesTextView: NSViewRepresentable {
     let lineSpacing: CGFloat
     let accessibilityLabel: String
     let isEditable: Bool
+    var insertionPort: TextViewInsertionPort?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -89,6 +119,7 @@ private struct PlainNotesTextView: NSViewRepresentable {
         textView.setAccessibilityLabel(accessibilityLabel)
         scrollView.documentView = textView
         context.coordinator.textView = textView
+        insertionPort?.textView = textView
 
         configure(textView)
         textView.string = text
