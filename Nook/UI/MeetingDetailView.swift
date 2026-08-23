@@ -36,6 +36,10 @@ struct MeetingDetailView: View {
     @State private var personalNotesDraft: String
     @State private var personalNotesStatus: String?
     @FocusState private var personalNotesFocused: Bool
+    /// Tracks the title field so leaving it commits the edit. Return-only
+    /// saving silently discarded titles whenever the user clicked another
+    /// note instead of pressing Return first.
+    @FocusState private var titleFieldFocused: Bool
 
     init(note: MeetingNote, initialTab: DetailTab = .notes) {
         self.note = note
@@ -86,6 +90,15 @@ struct MeetingDetailView: View {
             if titleDraft == oldValue {
                 titleDraft = newValue
             }
+        }
+        .onChange(of: titleFieldFocused) { _, focused in
+            guard !focused else { return }
+            saveTitle()
+        }
+        // Backstop for navigation that races focus loss: the view keeps its
+        // own note, so committing here always writes the right file.
+        .onDisappear {
+            saveTitle()
         }
         .onChange(of: personalNotesDraft) { _, _ in
             if personalNotesStatus == "Saved" {
@@ -187,10 +200,13 @@ struct MeetingDetailView: View {
                 .font(NookType.title)
                 .tracking(-0.45)
                 .lineLimit(2)
+                .focused($titleFieldFocused)
                 .onSubmit(saveTitle)
-                .help("Edit the title and press Return to save")
+                .help("Edits save when you press Return or click away")
                 .accessibilityLabel("Meeting title")
-                .accessibilityHint("Edit the title and press Return to save")
+                .accessibilityHint(
+                    "Edits save when you press Return or leave the field"
+                )
                 .accessibilityAddTraits(.isHeader)
 
             HStack(spacing: 15) {
@@ -569,11 +585,7 @@ struct MeetingDetailView: View {
     }
 
     private static func clock(_ interval: TimeInterval) -> String {
-        String(
-            format: "%02d:%02d",
-            Int(interval) / 60,
-            Int(interval) % 60
-        )
+        NookElapsedTime.clock(interval)
     }
 
     private var transcriptView: some View {

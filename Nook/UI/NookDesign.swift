@@ -171,6 +171,33 @@ enum NookSpacing {
     static let section: CGFloat = 40
 }
 
+/// One elapsed-clock format for every surface. Each screen used to grow its
+/// own formatter and they disagreed the moment a meeting passed an hour: the
+/// menu bar dropped seconds while the panel kept counting minutes past 99.
+enum NookElapsedTime {
+    /// Minutes and seconds until an hour appears, then hours stay visible
+    /// rather than seconds silently disappearing.
+    static func clock(_ interval: TimeInterval) -> String {
+        let total = max(0, Int(interval))
+        let hours = total / 3_600
+        guard hours > 0 else {
+            return String(format: "%02d:%02d", total / 60, total % 60)
+        }
+        return String(
+            format: "%d:%02d:%02d",
+            hours,
+            (total / 60) % 60,
+            total % 60
+        )
+    }
+
+    /// The same clock written out for VoiceOver, where "01:05" is ambiguous.
+    static func spoken(_ interval: TimeInterval) -> String {
+        let total = max(0, Int(interval))
+        return "\(total / 60) minutes, \(total % 60) seconds"
+    }
+}
+
 enum NookRadius {
     static let control: CGFloat = 8
     static let surface: CGFloat = 14
@@ -200,6 +227,10 @@ struct NookButtonStyle: ButtonStyle {
     var isProminent = false
 
     @Environment(\.isEnabled) private var isEnabled
+    /// Custom button styles own all of their rendering, so SwiftUI draws no
+    /// system focus ring for them. Keyboard users would otherwise have no way
+    /// to see which control Return or Space will act on.
+    @Environment(\.isFocused) private var isFocused
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -224,6 +255,13 @@ struct NookButtonStyle: ButtonStyle {
                         lineWidth: 0.6
                     )
             }
+            .nookFocusRing(
+                RoundedRectangle(
+                    cornerRadius: NookRadius.control,
+                    style: .continuous
+                ),
+                isVisible: isFocused
+            )
             .contentShape(
                 RoundedRectangle(
                     cornerRadius: NookRadius.control,
@@ -256,6 +294,33 @@ struct NookButtonStyle: ButtonStyle {
         return AnyShapeStyle(
             .primary.opacity(configuration.isPressed ? 0.13 : 0.055)
         )
+    }
+}
+
+/// The focus indicator shared by every custom button style.
+///
+/// Drawn slightly outside the control so it reads as the system ring rather
+/// than a border, and strengthened under Increased Contrast where a faint
+/// stroke would vanish.
+extension View {
+    func nookFocusRing<S: Shape>(
+        _ shape: S,
+        isVisible: Bool
+    ) -> some View {
+        self.overlay {
+            let contrastBoost = NSWorkspace.shared
+                .accessibilityDisplayShouldIncreaseContrast
+            if isVisible {
+                shape
+                    .stroke(
+                        NookPalette.accent.opacity(contrastBoost ? 1 : 0.85),
+                        lineWidth: contrastBoost ? 2 : 1.5
+                    )
+                    .padding(-3)
+            } else {
+                shape.stroke(Color.clear, lineWidth: 0)
+            }
+        }
     }
 }
 
@@ -410,13 +475,23 @@ struct NookSectionLabel: View {
     }
 }
 
+/// A transient notice floating over library and detail surfaces. The severity
+/// exists because a failure written into a success banner reads as a
+/// confirmation, which is worse than showing nothing.
 struct CopyConfirmationBanner: View {
+    enum Severity {
+        case success
+        case failure
+        case info
+    }
+
     let message: String
+    var severity: Severity = .success
 
     var body: some View {
-        Label(message, systemImage: "checkmark")
+        Label(message, systemImage: symbolName)
             .font(.callout.weight(.semibold))
-            .foregroundStyle(.primary)
+            .foregroundStyle(foregroundStyle)
             .padding(.horizontal, 13)
             .frame(height: 34)
             .background(
@@ -435,6 +510,22 @@ struct CopyConfirmationBanner: View {
             }
             .shadow(color: .black.opacity(0.12), radius: 12, y: 5)
             .accessibilityElement(children: .combine)
+    }
+
+    private var symbolName: String {
+        switch severity {
+        case .success: "checkmark"
+        case .failure: "exclamationmark.triangle.fill"
+        case .info: "info.circle"
+        }
+    }
+
+    private var foregroundStyle: Color {
+        switch severity {
+        case .success: .primary
+        case .failure: NookPalette.danger
+        case .info: .secondary
+        }
     }
 }
 

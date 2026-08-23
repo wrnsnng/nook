@@ -179,20 +179,11 @@ private struct NookMenuBarLabel: View {
     }
 
     private var elapsedLabel: String {
-        let total = Int(meeting.elapsed)
-        if total >= 3_600 {
-            return String(
-                format: "%02d:%02d",
-                total / 3_600,
-                (total / 60) % 60
-            )
-        }
-        return String(format: "%02d:%02d", total / 60, total % 60)
+        NookElapsedTime.clock(meeting.elapsed)
     }
 
     private var elapsedSpokenLabel: String {
-        let total = Int(meeting.elapsed)
-        return "\(total / 60) minutes, \(total % 60) seconds"
+        NookElapsedTime.spoken(meeting.elapsed)
     }
 }
 

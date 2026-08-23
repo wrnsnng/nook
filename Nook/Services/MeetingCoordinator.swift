@@ -17,6 +17,27 @@ enum MeetingPhase: Equatable, Sendable {
         case summarizing = "Distilling the conversation"
         case saving = "Tucking away your notes"
         case discarding = "Discarding the recording"
+
+        /// The one sentence shown for a processing step, wherever it appears.
+        ///
+        /// The panel and the live workspace used to word these independently
+        /// and drift apart; both now read from here.
+        var displaySentence: String {
+            switch self {
+            case .preparing:
+                "Securing the recording before Nook shapes it into notes."
+            case .refining:
+                "Cleaning up the live captions while preserving what was actually said."
+            case .transcribing:
+                "Giving the saved audio a careful second listen, entirely on this Mac."
+            case .summarizing:
+                "Finding the useful shape of the conversation: themes, decisions, and next steps."
+            case .saving:
+                "Writing a durable Markdown note you can read with any editor."
+            case .discarding:
+                "Removing the accidental recording without creating a note."
+            }
+        }
     }
 
     var menuBarSymbol: String {

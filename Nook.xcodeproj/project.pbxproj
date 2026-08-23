@@ -54,6 +54,7 @@
 		4AA8FD468B3498F19EFADD09 /* WelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96D519F4CE62062C2D665436 /* WelcomeView.swift */; };
 		4BAC044221D7DAEB137A2E51 /* NotchPanelCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7D40B68EE579A68D1A8722E /* NotchPanelCoordinator.swift */; };
 		4DE8E7119D7E6C04193BEC3C /* OpenActionsController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A3FB7F59FFAEBB639390737 /* OpenActionsController.swift */; };
+		4E0F4F7498A2B62E359B5FA8 /* NookElapsedTimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75A21F9B38B4F2B1E0D758A0 /* NookElapsedTimeTests.swift */; };
 		4FAB1B09486DEF819570A445 /* CommandLineAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157605DDE56F2A45C3EB48F1 /* CommandLineAssistant.swift */; };
 		52C6063AE11B7A257CA4709C /* NoteDecodeCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98A52969E7E5881E9991805A /* NoteDecodeCache.swift */; };
 		5355D715EE1FF8F42B9489B1 /* PermissionSetupController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83A5502CE70F9EA4C3BE8F69 /* PermissionSetupController.swift */; };
@@ -227,6 +228,7 @@
 		6AF31C476DBDFF1170647A72 /* Nook.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nook.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		6B742437E025D0BAB1C7C0BA /* CaptureService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureService.swift; sourceTree = "<group>"; };
 		6C5A0DD6E3695CE90FD0CA1C /* DictationRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationRecognizer.swift; sourceTree = "<group>"; };
+		75A21F9B38B4F2B1E0D758A0 /* NookElapsedTimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookElapsedTimeTests.swift; sourceTree = "<group>"; };
 		77437DEB25AC4ECE82644D22 /* StatusMenuView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusMenuView.swift; sourceTree = "<group>"; };
 		78FB15A93010450F270E5C0D /* DictationRefiner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationRefiner.swift; sourceTree = "<group>"; };
 		79E8477180498A6A643E7DE9 /* TranscriptSegment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptSegment.swift; sourceTree = "<group>"; };
@@ -478,6 +480,7 @@
 				C798B7121A65925D6161CA7E /* LiveSegmentMergerTests.swift */,
 				A701190651FDA38F39E3ACF3 /* MarkdownCodecTests.swift */,
 				C009372948CAC8A07E9237DF /* MultiSessionTests.swift */,
+				75A21F9B38B4F2B1E0D758A0 /* NookElapsedTimeTests.swift */,
 				06DE20F4ABEC5F79E54C49AC /* PrepBriefTests.swift */,
 				40C568E6906587FA1D689E5F /* PrivacyStorageTests.swift */,
 				B45B67065E78F2C7EF8F403B /* RecordingLifecycleTests.swift */,
@@ -811,6 +814,7 @@
 				FDD52D95AC87BE4049161921 /* LiveSegmentMergerTests.swift in Sources */,
 				7F2F9591EA3404AB6C4A9320 /* MarkdownCodecTests.swift in Sources */,
 				A9BF297BDFB6B6A3544A2461 /* MultiSessionTests.swift in Sources */,
+				4E0F4F7498A2B62E359B5FA8 /* NookElapsedTimeTests.swift in Sources */,
 				5CC0091958B983D15A2D3112 /* PrepBriefTests.swift in Sources */,
 				1478E8EB0F7B98D770E0FCF5 /* PrivacyStorageTests.swift in Sources */,
 				57437246B9E90D1A4BDE1082 /* RecordingLifecycleTests.swift in Sources */,

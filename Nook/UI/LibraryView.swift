@@ -27,6 +27,7 @@ struct LibraryView: View {
     @State private var pendingSelection: LibrarySelection?
     @State private var showsUnsavedChangesAlert = false
     @State private var copyNotice: String?
+    @State private var copyNoticeSeverity: CopyConfirmationBanner.Severity = .success
     @State private var showsAskSheet = false
     /// The note a second note is being merged into, when the picker shows.
     @State private var mergeTarget: MeetingNote?
@@ -133,7 +134,7 @@ struct LibraryView: View {
         }
         .overlay(alignment: .top) {
             if let copyNotice {
-                CopyConfirmationBanner(message: copyNotice)
+                CopyConfirmationBanner(message: copyNotice, severity: copyNoticeSeverity)
                     .padding(.top, 12)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
@@ -633,12 +634,19 @@ struct LibraryView: View {
         requestSelection(filteredNotes.first.map { .note($0.id) })
     }
 
-    private func showCopyNotice(_ message: String) {
+    private func showCopyNotice(
+        _ message: String,
+        severity: CopyConfirmationBanner.Severity = .success
+    ) {
         withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
             copyNotice = message
+            copyNoticeSeverity = severity
         }
+        // Failures name a problem the user may need to read carefully, so
+        // they stay up longer than confirmations.
+        let dwell = severity == .success ? 1.8 : 4.0
         Task {
-            try? await Task.sleep(for: .seconds(1.8))
+            try? await Task.sleep(for: .seconds(dwell))
             guard copyNotice == message else { return }
             withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
                 copyNotice = nil
@@ -677,14 +685,33 @@ struct LibraryView: View {
     }
 
     /// Compiles the week's meetings into one digest note and opens it.
+    ///
+    /// A week with nothing in it produces a file whose every count is zero,
+    /// so the action refuses and says so instead of saving an empty digest.
     private func createWeeklyDigest() {
+        let window = DigestBuilder.period()
+        let covered = store.notes.filter { note in
+            note.kind == .meeting
+                && note.startedAt >= window.start
+                && note.startedAt <= window.end
+        }
+        guard !covered.isEmpty else {
+            showCopyNotice(
+                "No meetings from the last seven days to include yet.",
+                severity: .info
+            )
+            return
+        }
         Task {
             let digest = await DigestBuilder.build(from: store.notes)
             do {
                 let saved = try store.save(digest)
                 requestSelection(.note(saved.id))
             } catch {
-                copyNotice = error.localizedDescription
+                showCopyNotice(
+                    error.localizedDescription,
+                    severity: .failure
+                )
             }
         }
     }
@@ -855,7 +882,7 @@ private struct LiveSidebarRow: View {
                             && !reduceMotion
                     )
             }
-            .frame(width: 31, height: 31)
+            .frame(width: 30, height: 30)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
@@ -891,8 +918,7 @@ private struct LiveSidebarRow: View {
 
     private var detail: String {
         if phase.isRecording {
-            let total = Int(elapsed)
-            return "\(isPaused ? "Paused" : "Live") · \(String(format: "%02d:%02d", total / 60, total % 60))"
+            return "\(isPaused ? "Paused" : "Live") · \(NookElapsedTime.clock(elapsed))"
         }
         if case .processing(let step) = phase { return step.rawValue }
         return "Open for details"
@@ -983,7 +1009,8 @@ private struct OpenActionRow: View {
                 Image(systemName: "circle")
                     .font(.system(size: 13))
                     .foregroundStyle(NookPalette.accent)
-                    .frame(width: 18, height: 18)
+                    // The glyph stays small; the frame is the hit target.
+                    .frame(width: 30, height: 30)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -1076,6 +1103,12 @@ private struct OpenActionRow: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityHint("Opens the meeting note")
+        // The row reads as one element, so VoiceOver reaches the tick and
+        // export through actions instead of a flattened, unlabeled blob.
+        .accessibilityAction(named: "Mark as done") { onToggle() }
+        .accessibilityAction(named: "Send to Reminders") {
+            onSendToReminders()
+        }
     }
 
     private var dueChip: (text: String, isOverdue: Bool) {

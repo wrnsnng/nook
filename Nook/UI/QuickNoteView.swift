@@ -88,8 +88,8 @@ struct QuickNoteView: View {
                         .frame(height: NookSpacing.hairline)
                 }
         }
-        .animation(.easeOut(duration: 0.15), value: note.message)
-        .animation(.easeOut(duration: 0.15), value: note.engine)
+        .animation(NookMotion.quick, value: note.message)
+        .animation(NookMotion.quick, value: note.engine)
     }
 
     /// States plainly, and permanently, that actions will send this note away.
@@ -194,7 +194,7 @@ struct QuickNoteView: View {
             .font(NookType.micro)
             .foregroundStyle(.tertiary)
             .monospacedDigit()
-            .animation(.default, value: statusText)
+            .animation(NookMotion.quick, value: statusText)
     }
 
     private var statusText: String {
@@ -271,8 +271,8 @@ private struct NoteActionButton: View {
         .buttonStyle(.plain)
         .disabled(!isEnabled || isRunning)
         .onHover { isHovering = $0 }
-        .animation(.easeOut(duration: 0.12), value: isHovering)
-        .animation(.easeOut(duration: 0.12), value: isRunning)
+        .animation(NookMotion.quick, value: isHovering)
+        .animation(NookMotion.quick, value: isRunning)
         .help(help)
         .accessibilityLabel(action.title)
         .accessibilityHint(help)

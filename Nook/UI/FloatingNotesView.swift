@@ -101,7 +101,6 @@ struct FloatingNotesView: View {
     }
 
     private var elapsedLabel: String {
-        let total = Int(meeting.elapsed)
-        return String(format: "%02d:%02d", total / 60, total % 60)
+        NookElapsedTime.clock(meeting.elapsed)
     }
 }

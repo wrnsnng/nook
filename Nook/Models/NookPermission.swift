@@ -76,7 +76,7 @@ enum NookPermission: String, CaseIterable, Identifiable, Sendable {
     var primaryActionTitle: String {
         switch self {
         case .screenRecording:
-            "Restart & Try Again"
+            "Restart and Try Again"
         case .microphone, .speechRecognition:
             "Try Again"
         }

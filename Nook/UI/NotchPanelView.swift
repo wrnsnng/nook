@@ -7,6 +7,10 @@ struct NotchPanelView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovering = false
     @FocusState private var notesEditorFocused: Bool
+    /// Which consent action holds keyboard focus. Assigned explicitly because
+    /// the panel takes key focus to answer with Return, and a keyboard user
+    /// must be able to see what Return will do before pressing it.
+    @FocusState private var detectedAction: DetectedAction?
     private let rendersForSnapshot: Bool
 
     init(rendersForSnapshot: Bool = false) {
@@ -334,7 +338,7 @@ struct NotchPanelView: View {
                 showsSurface: false
             )
             VStack(alignment: .leading, spacing: 2) {
-                Text("Nook is listening")
+                Text("Nook is here")
                     .font(NookType.bodyEmphasized)
                 Text("Ready when a conversation begins")
                     .font(NookType.micro)
@@ -347,9 +351,7 @@ struct NotchPanelView: View {
                 Image(systemName: "waveform.badge.mic")
             }
             .buttonStyle(
-                EdgeSymbolButtonStyle(
-                    tint: NookPalette.accentHighlight
-                )
+                PanelIconButtonStyle(tint: NookPalette.accentHighlight)
             )
             .help("Start recording")
             .accessibilityLabel("Start recording")
@@ -382,8 +384,9 @@ struct NotchPanelView: View {
                 } label: {
                     Image(systemName: "xmark")
                 }
-                .buttonStyle(EdgeSymbolButtonStyle())
+                .buttonStyle(PanelIconButtonStyle())
                 .keyboardShortcut(.cancelAction)
+                .focused($detectedAction, equals: .dismiss)
                 .help("Not now")
                 .accessibilityLabel("Not now")
                 .accessibilityHint("Leaves this meeting unrecorded")
@@ -393,9 +396,15 @@ struct NotchPanelView: View {
                 } label: {
                     Label("Record", systemImage: "waveform")
                 }
-                .buttonStyle(DetectedPromptButtonStyle(isPrimary: true))
+                .buttonStyle(PanelTextButtonStyle(isPrimary: true))
                 .keyboardShortcut(.defaultAction)
+                .focused($detectedAction, equals: .record)
                 .accessibilityHint("Starts recording locally")
+            }
+            .onAppear {
+                guard !rendersForSnapshot else { return }
+                // Return answers the prompt, so focus opens on Record.
+                detectedAction = .record
             }
         }
     }
@@ -507,7 +516,7 @@ struct NotchPanelView: View {
                 } label: {
                     Image(systemName: "chevron.up")
                 }
-                .buttonStyle(PanelTransportButtonStyle())
+                .buttonStyle(PanelIconButtonStyle(sideLength: 28))
                 .help("Collapse top panel")
                 .accessibilityLabel("Collapse top panel")
             }
@@ -596,19 +605,14 @@ struct NotchPanelView: View {
     }
 
     private var transcriptWorkspace: some View {
-        VStack(spacing: 5) {
-            AudioThread(
-                level: meeting.isPaused ? 0 : meeting.audioLevel,
-                isActive: !meeting.isPaused
-            )
-                .frame(height: 12)
-
-            NotchCaptionStream(
-                lines: meeting.liveTranscript.notchCaptionLines,
-                fallback: liveCaptionFallback,
-                revision: meeting.liveTranscript.revision
-            )
-        }
+        // The presence mark beside the timer carries the live-audio motion
+        // for the expanded panel; a second animated thread here competed
+        // with it instead of adding information.
+        NotchCaptionStream(
+            lines: meeting.liveTranscript.notchCaptionLines,
+            fallback: liveCaptionFallback,
+            revision: meeting.liveTranscript.revision
+        )
     }
 
     @ViewBuilder
@@ -642,8 +646,9 @@ struct NotchPanelView: View {
                 )
             }
             .buttonStyle(
-                PanelTransportButtonStyle(
-                    tint: meeting.isPaused ? NookPalette.success : nil
+                PanelIconButtonStyle(
+                    tint: meeting.isPaused ? NookPalette.success : nil,
+                    sideLength: 28
                 )
             )
             .disabled(meeting.pauseTransitionInFlight)
@@ -658,9 +663,10 @@ struct NotchPanelView: View {
                 Label("Finish", systemImage: "stop.fill")
             }
             .buttonStyle(
-                PanelTransportButtonStyle(
+                PanelIconButtonStyle(
                     tint: NookPalette.danger,
-                    isDestructive: true
+                    isDestructive: true,
+                    sideLength: 28
                 )
             )
             .disabled(meeting.pauseTransitionInFlight)
@@ -686,8 +692,8 @@ struct NotchPanelView: View {
                 Button("Cancel") {
                     meeting.requestProcessingCancellation()
                 }
-                .buttonStyle(PanelActionButtonStyle())
-                .help("Cancel processing and discard this recording")
+                .buttonStyle(PanelTextButtonStyle())
+                .help("Cancel and discard this recording")
                 .accessibilityHint("Asks before permanently discarding this recording")
             } else {
                 ProgressView()
@@ -715,8 +721,9 @@ struct NotchPanelView: View {
                 openLibrary()
                 meeting.resetStatus()
             }
-            .buttonStyle(PanelActionButtonStyle(tint: NookPalette.accent))
-            .keyboardShortcut(.defaultAction)
+            // No defaultAction here: the completed panel never becomes key,
+            // so the shortcut was a promise Return could not keep.
+            .buttonStyle(PanelTextButtonStyle(tint: NookPalette.accent))
         }
     }
 
@@ -739,19 +746,19 @@ struct NotchPanelView: View {
                 Button(permission.primaryActionTitle) {
                     meeting.performPermissionPrimaryAction()
                 }
-                .buttonStyle(PanelActionButtonStyle())
+                .buttonStyle(PanelTextButtonStyle())
 
                 Button("Open Settings") {
                     meeting.revealPermissions()
                 }
                 .buttonStyle(
-                    PanelActionButtonStyle(tint: NookPalette.accent)
+                    PanelTextButtonStyle(tint: NookPalette.accent)
                 )
             } else {
                 Button("Dismiss") {
                     meeting.resetStatus()
                 }
-                .buttonStyle(PanelActionButtonStyle())
+                .buttonStyle(PanelTextButtonStyle())
             }
         }
     }
@@ -778,15 +785,11 @@ struct NotchPanelView: View {
     }
 
     private var elapsedLabel: String {
-        let total = Int(meeting.elapsed)
-        return String(format: "%02d:%02d", total / 60, total % 60)
+        NookElapsedTime.clock(meeting.elapsed)
     }
 
     private var elapsedSpokenLabel: String {
-        let total = Int(meeting.elapsed)
-        let minutes = total / 60
-        let seconds = total % 60
-        return "\(minutes) minutes, \(seconds) seconds"
+        NookElapsedTime.spoken(meeting.elapsed)
     }
 
     private var phaseIdentity: String {
@@ -800,26 +803,10 @@ struct NotchPanelView: View {
         }
     }
 
-    private func processingSymbol(for step: MeetingPhase.ProcessingStep) -> String {
-        switch step {
-        case .preparing: "waveform"
-        case .refining: "text.badge.checkmark"
-        case .transcribing: "ear"
-        case .summarizing: "sparkles"
-        case .saving: "doc.badge.plus"
-        case .discarding: "trash"
-        }
-    }
-
     private func processingDetail(for step: MeetingPhase.ProcessingStep) -> String {
-        switch step {
-        case .preparing: "Securing the audio on this Mac"
-        case .refining: "Turning live captions into a clean record"
-        case .transcribing: "A careful second listen, entirely on-device"
-        case .summarizing: "Finding decisions, themes, and next steps"
-        case .saving: "Writing a plain Markdown file"
-        case .discarding: "Removing the accidental recording"
-        }
+        // One sentence source shared with the live workspace, so the same
+        // step never reads two different ways.
+        step.displaySentence
     }
 
     private func openLibrary() {
@@ -827,16 +814,28 @@ struct NotchPanelView: View {
     }
 }
 
-private struct PanelActionButtonStyle: ButtonStyle {
+/// Which consent action holds keyboard focus.
+private enum DetectedAction: Hashable {
+    case record
+    case dismiss
+}
+
+/// Text buttons on the edge-dark panel shell.
+///
+/// One style instead of the three that grew separately: same press feedback,
+/// same minimum height, and a visible focus ring, which custom styles never
+/// got from SwiftUI on their own.
+private struct PanelTextButtonStyle: ButtonStyle {
     var tint: Color?
+    var isPrimary = false
+
+    @Environment(\.isFocused) private var isFocused
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(NookType.metadata)
-            .foregroundStyle(
-                tint.map { AnyShapeStyle($0) }
-                    ?? AnyShapeStyle(.primary)
-            )
+            .labelStyle(.titleAndIcon)
+            .foregroundStyle(foreground)
             .padding(.horizontal, 8)
             .frame(minHeight: 30)
             .background {
@@ -851,88 +850,62 @@ private struct PanelActionButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
             )
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .nookFocusRing(
+                RoundedRectangle(cornerRadius: 9, style: .continuous),
+                isVisible: isFocused
+            )
             .animation(
                 .timingCurve(0.22, 1, 0.36, 1, duration: 0.12),
                 value: configuration.isPressed
             )
     }
-}
 
-private struct DetectedPromptButtonStyle: ButtonStyle {
-    var isPrimary = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(NookType.metadata)
-            .labelStyle(.titleAndIcon)
-            .foregroundStyle(
-                isPrimary
-                    ? AnyShapeStyle(NookPalette.accentHighlight)
-                    : AnyShapeStyle(.secondary)
-            )
-            .padding(.horizontal, 7)
-            .frame(minHeight: 28)
-            .background(
-                .white.opacity(configuration.isPressed ? 0.10 : 0.001),
-                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
-            )
-            .contentShape(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-            )
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(
-                .timingCurve(0.22, 1, 0.36, 1, duration: 0.12),
-                value: configuration.isPressed
-            )
+    private var foreground: AnyShapeStyle {
+        if isPrimary { return AnyShapeStyle(NookPalette.accentHighlight) }
+        if let tint { return AnyShapeStyle(tint) }
+        return AnyShapeStyle(Color.white.opacity(0.92))
     }
 }
 
-private struct PanelTransportButtonStyle: ButtonStyle {
+/// Icon-only controls on the edge-dark panel shell.
+private struct PanelIconButtonStyle: ButtonStyle {
     var tint: Color?
     var isDestructive = false
+    /// 30 by default so every panel control meets the app's own hit-target
+    /// floor. Transport inside the expanded chrome passes 28 because that
+    /// row is exactly the menu-bar inset tall.
+    var sideLength: CGFloat = 30
+
+    @Environment(\.isFocused) private var isFocused
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 11, weight: .semibold))
             .labelStyle(.iconOnly)
-            .foregroundStyle(
-                isDestructive
-                    ? AnyShapeStyle(NookPalette.danger)
-                    : AnyShapeStyle(tint ?? .primary)
-            )
-            .frame(width: 28, height: 28)
+            .foregroundStyle(foreground)
+            .frame(width: sideLength, height: sideLength)
             .background(
                 .white.opacity(configuration.isPressed ? 0.12 : 0.045),
-                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
-            )
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(
-                .timingCurve(0.22, 1, 0.36, 1, duration: 0.14),
-                value: configuration.isPressed
-            )
-    }
-}
-
-private struct EdgeSymbolButtonStyle: ButtonStyle {
-    var tint: Color?
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(tint ?? Color.secondary)
-            .frame(width: 27, height: 27)
-            .background(
-                .white.opacity(configuration.isPressed ? 0.11 : 0.001),
                 in: RoundedRectangle(cornerRadius: 7, style: .continuous)
             )
             .contentShape(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
             )
-            .scaleEffect(configuration.isPressed ? 0.93 : 1)
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .nookFocusRing(
+                RoundedRectangle(cornerRadius: 9, style: .continuous),
+                isVisible: isFocused
+            )
             .animation(
                 .timingCurve(0.22, 1, 0.36, 1, duration: 0.12),
                 value: configuration.isPressed
             )
+    }
+
+    private var foreground: AnyShapeStyle {
+        if isDestructive { return AnyShapeStyle(NookPalette.danger) }
+        if let tint { return AnyShapeStyle(tint) }
+        return AnyShapeStyle(Color.white.opacity(0.92))
     }
 }
 
@@ -970,28 +943,9 @@ private struct CompactMeetingControl: View {
         Button(action: action) {
             Image(systemName: symbol)
         }
-        .buttonStyle(CompactMeetingControlStyle(tint: tint))
+        .buttonStyle(PanelIconButtonStyle(tint: tint))
         .help(label)
         .accessibilityLabel(label)
-    }
-}
-
-private struct CompactMeetingControlStyle: ButtonStyle {
-    let tint: Color?
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(tint ?? Color.white.opacity(0.92))
-            .frame(width: 26, height: 24)
-            .background(
-                .primary.opacity(configuration.isPressed ? 0.13 : 0.001),
-                in: RoundedRectangle(cornerRadius: 5, style: .continuous)
-            )
-            .contentShape(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-            )
-            .scaleEffect(configuration.isPressed ? 0.92 : 1)
     }
 }
 
@@ -1015,44 +969,6 @@ private struct LiveStatusIndicator: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(isPaused ? "Recording paused" : "Recording live")
-    }
-}
-
-private struct AudioThread: View {
-    let level: Double
-    let isActive: Bool
-
-    var body: some View {
-        HStack(spacing: 9) {
-            Rectangle()
-                .fill(
-                    LinearGradient(
-                        colors: [.clear, .primary.opacity(0.10)],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-                .frame(height: 0.5)
-
-            RecordingWaveform(
-                level: level,
-                isActive: isActive,
-                barCount: 14,
-                minimumHeight: 2
-            )
-            .frame(width: 62, height: 12)
-
-            Rectangle()
-                .fill(
-                    LinearGradient(
-                        colors: [.primary.opacity(0.10), .clear],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-                .frame(height: 0.5)
-        }
-        .accessibilityHidden(true)
     }
 }
 

@@ -454,7 +454,8 @@ struct MarkdownCodecTests {
         )
 
         #expect(size.width == 316)
-        #expect(size.height == 38)
+        // Tall enough for 30pt controls, the app's own hit-target floor.
+        #expect(size.height == 42)
     }
 
     @Test

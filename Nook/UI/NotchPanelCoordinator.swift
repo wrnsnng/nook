@@ -28,7 +28,9 @@ enum NotchPanelMetrics {
             return CGSize(width: 360, height: 48)
         case .recording:
             guard showsCaptions else {
-                return CGSize(width: 316, height: 38)
+                // Tall enough for 30pt controls: the compact rail is minimal,
+                // not too small to press.
+                return CGSize(width: 316, height: 42)
             }
             switch panelMode {
             case .transcript:

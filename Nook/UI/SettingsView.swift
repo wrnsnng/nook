@@ -721,6 +721,9 @@ private struct AudioRetentionSettingsRow: View {
                     }
                 }
                 .labelsHidden()
+                // The visible label is the toggle beside it; this keeps the
+                // picker from being announced as an unnamed pop-up.
+                .accessibilityLabel("How long kept audio is retained")
                 .frame(width: 110)
                 .onChange(of: days) { _, value in
                     UserDefaults.standard.set(value, forKey: AudioRetention.daysKey)
@@ -755,6 +758,7 @@ private struct PerAppDictationStylesSection: View {
                     }
                 }
                 .labelsHidden()
+                .accessibilityLabel("Style used for new per-app overrides")
                 .frame(width: 130)
             }
 

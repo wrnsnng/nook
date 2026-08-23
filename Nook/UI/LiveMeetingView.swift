@@ -566,8 +566,7 @@ struct LiveMeetingView: View {
     }
 
     private var elapsedLabel: String {
-        let total = Int(meeting.elapsed)
-        return String(format: "%02d:%02d", total / 60, total % 60)
+        NookElapsedTime.clock(meeting.elapsed)
     }
 
     private var topPanelActionLabel: String {
@@ -598,34 +597,9 @@ struct LiveMeetingView: View {
         }
     }
 
-    private func processingSymbol(_ step: MeetingPhase.ProcessingStep) -> String {
-        switch step {
-        case .preparing: "waveform"
-        case .refining: "text.badge.checkmark"
-        case .transcribing: "ear"
-        case .summarizing: "sparkles"
-        case .saving: "doc.badge.plus"
-        case .discarding: "trash"
-        }
-    }
-
     private func processingDetail(_ step: MeetingPhase.ProcessingStep) -> String {
-        switch step {
-        case .preparing:
-            meeting.elapsed > 2
-                ? "Securing the recording before Nook shapes it into notes."
-                : "Warming up the on-device listener. This only takes a moment."
-        case .refining:
-            "Cleaning up the live captions while preserving what was actually said."
-        case .transcribing:
-            "Giving the saved audio a careful second listen, entirely on this Mac."
-        case .summarizing:
-            "Finding the useful shape of the conversation: themes, decisions, and next steps."
-        case .saving:
-            "Writing a durable Markdown note you can read with any editor."
-        case .discarding:
-            "Removing the accidental recording without creating a note."
-        }
+        // Shared with the top panel so a step never reads two ways.
+        step.displaySentence
     }
 }
 
@@ -634,6 +608,7 @@ private struct LiveShelfControlStyle: ButtonStyle {
     var isDestructive = false
     var isCompact = false
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.isFocused) private var isFocused
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -675,6 +650,10 @@ private struct LiveShelfControlStyle: ButtonStyle {
                     )
             }
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .nookFocusRing(
+                RoundedRectangle(cornerRadius: 10, style: .continuous),
+                isVisible: isFocused
+            )
     }
 }
 
