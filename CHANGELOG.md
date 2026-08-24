@@ -4,6 +4,16 @@ Nook follows a user-facing release-note model. Each published version has a
 Markdown note in [`Releases/`](Releases/) and a matching `v<version>` release in
 the [binary releases repository](https://github.com/wrnsnng/nook-releases/releases).
 
+## 1.14.0
+
+- Meeting notes gain Regenerate summary: the on-device write-up runs again
+  over the saved transcript, a second failure names its reason and leaves
+  the note untouched, pending My notes saves commit first, and ticked
+  action items keep their ticks when they survive.
+- Clicking into the meeting panel's My notes field now brings Nook
+  forward, so typing lands in the field during a recording instead of
+  continuing into the frontmost application.
+
 ## 1.13.0
 
 - Drafts survive everything: My notes save on blur, navigation, and quit;

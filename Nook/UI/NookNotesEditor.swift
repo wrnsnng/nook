@@ -73,6 +73,24 @@ struct NookNotesEditor: View {
     }
 }
 
+/// A text view that brings Nook forward when clicked.
+///
+/// The notch panel is a `.nonactivatingPanel`, so a click into the editor
+/// embedded there leaves Nook in the background with the meeting application
+/// still frontmost, and the window server keeps delivering every keystroke to
+/// that application: the caret sat in the field while the typing went
+/// somewhere else. Opening the floating-notes window already activated Nook
+/// through the ordinary window path; an editor that lives in the panel needs
+/// it at the mouse instead. For editors in ordinary windows this only
+/// restates what the click already did.
+private final class KeyActivatingTextView: NSTextView {
+    override func mouseDown(with event: NSEvent) {
+        super.mouseDown(with: event)
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+    }
+}
+
 private struct PlainNotesTextView: NSViewRepresentable {
     @Binding var text: String
     var isFocused: Binding<Bool>?
@@ -93,7 +111,7 @@ private struct PlainNotesTextView: NSViewRepresentable {
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
 
-        let textView = NSTextView()
+        let textView = KeyActivatingTextView()
         textView.delegate = context.coordinator
         textView.drawsBackground = false
         textView.isRichText = false

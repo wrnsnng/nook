@@ -50,6 +50,8 @@ struct MeetingDetailView: View {
     /// says: an accented or emoji-bearing note would otherwise report a
     /// number larger than anything a person could count in it.
     @State private var markdownCharacterCount = 0
+    /// Whether the regeneration pass over this note's transcript is running.
+    @State private var isRegeneratingSummary = false
     /// The note's checkbox lines as they exist on disk right now. Checkbox
     /// state is deliberately absent from the decoded model, so ticking from
     /// here needs the file's own truth to stay aligned with the sidebar.
@@ -183,6 +185,20 @@ struct MeetingDetailView: View {
                 store.reveal(note)
             } label: {
                 Label("Show in Finder", systemImage: "folder")
+            }
+
+            if SummaryRegenerator.isAvailable(for: note) {
+                Button {
+                    regenerateSummary()
+                } label: {
+                    Label("Regenerate summary", systemImage: "arrow.clockwise")
+                }
+                .disabled(markdownDraft.hasChanges || isRegeneratingSummary)
+                .help(
+                    markdownDraft.hasChanges
+                        ? "Save or revert Markdown edits before regenerating"
+                        : "Runs the on-device summary again over this transcript"
+                )
             }
 
             if note.kind != .digest {
@@ -940,6 +956,74 @@ struct MeetingDetailView: View {
             // thing the user has to know about.
             personalNotes.statusMessage = error.localizedDescription
             showCopyNotice(error.localizedDescription, severity: .failure)
+        }
+    }
+
+    /// Re-runs the structured summary over this note's own transcript.
+    ///
+    /// For every meeting whose write-up lost the model lottery: Apple
+    /// Intelligence was off, busy, or declined, and the note saved with only
+    /// transcript highlights. The failure named a cause; this is the remedy.
+    private func regenerateSummary() {
+        guard SummaryRegenerator.isAvailable(for: note),
+              !markdownDraft.hasChanges,
+              !isRegeneratingSummary
+        else { return }
+
+        // The save below rewrites the whole file from the store's freshest
+        // copy of the note. Words still sitting in the My notes draft would
+        // be overwritten by that copy, so they get their save first, and a
+        // refused save stops everything rather than losing words.
+        if personalNotes.noteID == note.id, personalNotes.hasChanges {
+            do {
+                _ = try personalNotes.save(note: note, store: store)
+            } catch {
+                showCopyNotice(
+                    "My notes couldn’t be saved, so the summary was left unchanged.",
+                    severity: .failure
+                )
+                return
+            }
+        }
+
+        guard let current = store.notes.first(where: { $0.id == note.id }) else {
+            showCopyNotice("This note is no longer in the library.", severity: .failure)
+            return
+        }
+
+        isRegeneratingSummary = true
+        Task {
+            let outcome = await SummaryRegenerator.regenerate(
+                current,
+                using: SummaryService()
+            )
+            finishSummaryRegeneration(outcome)
+        }
+    }
+
+    private func finishSummaryRegeneration(
+        _ outcome: SummaryRegenerator.Outcome
+    ) {
+        isRegeneratingSummary = false
+        switch outcome {
+        case .regenerated(let updated):
+            do {
+                let saved = try store.save(updated)
+                markdownDraft.refresh(for: saved, store: store)
+                reloadChecklist()
+                showCopyNotice("Summary regenerated")
+            } catch {
+                showCopyNotice(error.localizedDescription, severity: .failure)
+            }
+        case .retained(let reason):
+            if let reason {
+                showCopyNotice(reason.userSentence, severity: .failure)
+            } else {
+                showCopyNotice(
+                    "There is no transcript here to summarize.",
+                    severity: .info
+                )
+            }
         }
     }
 
