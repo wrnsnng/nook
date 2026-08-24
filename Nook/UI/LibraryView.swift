@@ -288,7 +288,15 @@ struct LibraryView: View {
         currentPhase.presentsLiveActivity
     }
 
+    // The body is split into three chained properties on purpose. As one
+    // expression this chain exceeded the stable compiler's type-check budget
+    // and only built on a newer toolchain, which AGENTS.md rule 2 forbids.
     var body: some View {
+        librarySheets
+    }
+
+    /// The window itself: panes, palette, toolbar, and the notice banner.
+    private var libraryChrome: some View {
         NavigationSplitView {
             sidebar
                 .navigationSplitViewColumnWidth(min: 260, ideal: 304, max: 380)
@@ -348,6 +356,11 @@ struct LibraryView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
+    }
+
+    /// Everything the library reacts to while it is open.
+    private var libraryEvents: some View {
+        libraryChrome
         .onAppear {
             store.reload()
             searchController.update(query: searchText, notes: store.notes)
@@ -430,6 +443,11 @@ struct LibraryView: View {
                 store.reload()
             }
         }
+    }
+
+    /// The sheets and alerts the library can raise over itself.
+    private var librarySheets: some View {
+        libraryEvents
         .sheet(item: $mergeTarget) { target in
             NoteMergePickerView(
                 target: target,
