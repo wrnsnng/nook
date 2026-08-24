@@ -59,6 +59,22 @@ enum NoteCombiner {
         let commitAudio: @Sendable () async throws -> Void
     }
 
+    /// Where a recording that has to be kept, but cannot stay where it is,
+    /// gets moved to.
+    ///
+    /// A parameter rather than a fixed policy because the fallback is the
+    /// branch that has to carry the bytes itself, and on any volume with a
+    /// Trash a test can never reach it. A preservation guarantee that only
+    /// runs on volumes nobody tests on is not a guarantee.
+    enum UnusableAudioDestination: Sendable {
+        /// The Trash, which is where it goes on any ordinary volume, and what
+        /// keeps the deletion reversible from the Finder.
+        case trash
+        /// A rename beside the original. What happens on a volume with no
+        /// Trash at all.
+        case renameBeside
+    }
+
     enum CombineError: LocalizedError {
         case unsupportedKind
 
@@ -74,7 +90,8 @@ enum NoteCombiner {
         _ absorbed: MeetingNote,
         into target: MeetingNote,
         recordingsDirectory: URL,
-        summarizer: some NoteSummarizing
+        summarizer: some NoteSummarizing,
+        unusableAudioDestination: UnusableAudioDestination = .trash
     ) async throws -> Result {
         guard target.kind != .digest, absorbed.kind != .digest else {
             throw CombineError.unsupportedKind
@@ -175,14 +192,20 @@ enum NoteCombiner {
                 // the source behind leaks a full duplicate recording.
                 discardMergedSourceAudio(at: incomingAudioURL)
             case .adoptedFromAbsorbed:
-                try setAsideUnusableAudio(at: baseAudioURL)
+                try setAsideUnusableAudio(
+                    at: baseAudioURL,
+                    destination: unusableAudioDestination
+                )
                 try FileManager.default.moveItem(
                     at: incomingAudioURL,
                     to: baseAudioURL
                 )
             case .targetOnly, .none:
                 if unreadableIncomingAudio {
-                    try setAsideUnusableAudio(at: incomingAudioURL)
+                    try setAsideUnusableAudio(
+                        at: incomingAudioURL,
+                        destination: unusableAudioDestination
+                    )
                 }
             }
         }
@@ -251,21 +274,30 @@ enum NoteCombiner {
     /// somebody may want back, and this is the one place a merge would
     /// otherwise unlink a recording the user asked Nook to keep. The Trash
     /// keeps it recoverable; on a volume without one, moving it aside does.
-    private static func setAsideUnusableAudio(at url: URL) throws {
+    private static func setAsideUnusableAudio(
+        at url: URL,
+        destination: UnusableAudioDestination
+    ) throws {
         let manager = FileManager.default
         guard manager.fileExists(atPath: url.path) else { return }
-        do {
-            try manager.trashItem(at: url, resultingItemURL: nil)
-        } catch {
-            let stamp = String(UUID().uuidString.prefix(8)).lowercased()
-            try manager.moveItem(
-                at: url,
-                to: url
-                    .deletingPathExtension()
-                    .appendingPathExtension("unreadable-\(stamp)")
-                    .appendingPathExtension("m4a")
-            )
+        if destination == .trash {
+            do {
+                try manager.trashItem(at: url, resultingItemURL: nil)
+                return
+            } catch {
+                // A volume without a Trash still must not lose somebody's
+                // recording, so the rename below is the fallback rather than
+                // the failure.
+            }
         }
+        let stamp = String(UUID().uuidString.prefix(8)).lowercased()
+        try manager.moveItem(
+            at: url,
+            to: url
+                .deletingPathExtension()
+                .appendingPathExtension("unreadable-\(stamp)")
+                .appendingPathExtension("m4a")
+        )
     }
 
     /// Removes a recording whose every second now lives in another file.

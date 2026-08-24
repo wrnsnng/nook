@@ -107,13 +107,23 @@ enum LibraryNoteGrouping {
 /// a tick that changes none of these into a cheap equality check instead of
 /// an `O(library)` pass.
 ///
-/// `noteCount` plus the latest `fileModified` stands in for the notes
-/// array's identity: two loads that produced the same count and the same
-/// newest file timestamp are the same library for grouping purposes, without
-/// diffing every note.
+/// `noteCount` plus a per-note fingerprint stands in for the notes array's
+/// identity: two loads that produced the same count and the same fingerprint
+/// are the same library for grouping purposes, without diffing every note on
+/// every comparison.
+///
+/// The fingerprint folds in `id`, `fileModified`, and `title`, not just the
+/// newest `fileModified` across the library. The latest-modified-date alone
+/// went stale whenever an edit's new timestamp did not change the overall
+/// maximum: two saves landing in the same tick, or a volume whose
+/// modification dates only carry second granularity, both leave the max
+/// looking identical to the last one cached even though a note's title (say)
+/// really did change. Folding every note's own triple in means a change to
+/// *any* note is visible in the fingerprint regardless of where the library's
+/// maximum sits.
 struct LibraryGroupingCacheKey: Equatable {
     let noteCount: Int
-    let latestModified: Date?
+    let notesFingerprint: Int
     let matchingIDs: Set<MeetingNote.ID>?
     let todayOnly: Bool
     let day: Date
@@ -126,14 +136,24 @@ struct LibraryGroupingCacheKey: Equatable {
         calendar: Calendar = .current
     ) {
         self.noteCount = notes.count
-        self.latestModified = notes.reduce(Date?.none) { latest, note in
-            guard let modified = note.fileModified else { return latest }
-            guard let latest else { return modified }
-            return max(latest, modified)
-        }
+        self.notesFingerprint = Self.fingerprint(of: notes)
         self.matchingIDs = matchingIDs
         self.todayOnly = todayOnly
         self.day = calendar.startOfDay(for: now)
+    }
+
+    /// Combined with XOR rather than folded through one running `Hasher`, so
+    /// the result does not depend on the notes' order: a reload that returns
+    /// the same notes in a different order must compare equal, or every
+    /// reload would look like a change and defeat the cache.
+    private static func fingerprint(of notes: [MeetingNote]) -> Int {
+        notes.reduce(into: 0) { fingerprint, note in
+            var hasher = Hasher()
+            hasher.combine(note.id)
+            hasher.combine(note.fileModified)
+            hasher.combine(note.title)
+            fingerprint ^= hasher.finalize()
+        }
     }
 }
 

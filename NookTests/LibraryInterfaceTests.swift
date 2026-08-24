@@ -374,4 +374,58 @@ struct LibraryInterfaceTests {
 
         #expect(before != after)
     }
+
+    @Test
+    func theGroupingCacheKeyChangesWhenATitleChangesAtTheSameModifiedTime() {
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        // Deliberately identical: a coarse filesystem clock, or two saves
+        // landing in the same tick, can leave `fileModified` looking
+        // unchanged even though the note's title on disk did change. The
+        // fingerprint has to catch this from the title alone.
+        let modified = Date(timeIntervalSince1970: 1_699_999_999)
+        var original = note("Design weekly", daysAgo: 0)
+        original.fileModified = modified
+
+        var renamed = original
+        renamed.title = "Design weekly, renamed"
+
+        let before = LibraryGroupingCacheKey(
+            notes: [original],
+            matchingIDs: nil,
+            todayOnly: false,
+            now: stamp
+        )
+        let after = LibraryGroupingCacheKey(
+            notes: [renamed],
+            matchingIDs: nil,
+            todayOnly: false,
+            now: stamp
+        )
+
+        #expect(before != after)
+    }
+
+    @Test
+    func theGroupingCacheKeyDoesNotDependOnNoteOrder() {
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let first = note("Design weekly", daysAgo: 0)
+        let second = note("Hiring loop", daysAgo: 1)
+
+        let forward = LibraryGroupingCacheKey(
+            notes: [first, second],
+            matchingIDs: nil,
+            todayOnly: false,
+            now: stamp
+        )
+        let reversed = LibraryGroupingCacheKey(
+            notes: [second, first],
+            matchingIDs: nil,
+            todayOnly: false,
+            now: stamp
+        )
+
+        // A reload that returns the same notes in a different order must not
+        // look like a change, or every reload would defeat the cache.
+        #expect(forward == reversed)
+    }
 }

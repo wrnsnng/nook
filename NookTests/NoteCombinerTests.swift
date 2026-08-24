@@ -111,6 +111,18 @@ struct NoteCombinerTests {
         try file.write(from: buffer)
     }
 
+    /// The recordings whose names carry `fragment`, so an assertion about one
+    /// can require it rather than skip itself when there is none.
+    private func recordingsMatching(
+        _ fragment: String,
+        in directory: URL
+    ) throws -> [URL] {
+        try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
+        ).filter { $0.lastPathComponent.contains(fragment) }
+    }
+
     /// Runs the three steps the library performs around a merge, in order.
     private func applyMerge(
         _ result: NoteCombiner.Result,
@@ -255,7 +267,8 @@ struct NoteCombinerTests {
             newer,
             into: older,
             recordingsDirectory: recordings,
-            summarizer: FixedSummarizer()
+            summarizer: FixedSummarizer(),
+            unusableAudioDestination: .renameBeside
         )
         #expect(result.audioOutcome == .none)
         _ = try await applyMerge(result, in: store)
@@ -265,17 +278,45 @@ struct NoteCombinerTests {
         #expect(!FileManager.default.fileExists(atPath: adopted.path))
         // Its note is in the Trash now, so leaving it under an identifier no
         // note claims would strand it in the recordings folder forever. It is
-        // set aside the same way an unreadable recording on the other side is.
+        // set aside the same way an unreadable recording on the other side is,
+        // and the bytes come through that move intact.
         #expect(!FileManager.default.fileExists(atPath: incomingAudio.path))
-        let leftovers = try FileManager.default.contentsOfDirectory(
-            at: recordings,
-            includingPropertiesForKeys: nil
+        let movedAside = try #require(
+            recordingsMatching("unreadable-", in: recordings).first
         )
-        if let movedAside = leftovers.first(
-            where: { $0.lastPathComponent.contains("unreadable-") }
-        ) {
-            #expect(try String(contentsOf: movedAside, encoding: .utf8) == "truncated")
-        }
+        #expect(try String(contentsOf: movedAside, encoding: .utf8) == "truncated")
+    }
+
+    @Test
+    func anUnreadableRecordingLeavesItsOldNameOnAnOrdinaryVolumeToo() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+
+        let older = try store.save(
+            note(title: "Kickoff", startedAt: 1_000_000, text: "First sitting.")
+        )
+        let newer = try store.save(
+            note(title: "Kickoff again", startedAt: 1_100_000, text: "Second sitting.")
+        )
+        let recordings = store.recordingsDirectory()
+        let incomingAudio = recordings
+            .appendingPathComponent("\(newer.id.uuidString).m4a")
+        try Data("truncated".utf8).write(to: incomingAudio)
+
+        // The shipping default, so the branch the user actually gets is
+        // covered as well as the fallback. The assertion is the one that holds
+        // whichever way it goes: the recording does not stay under an
+        // identifier no note claims.
+        let result = try await NoteCombiner.merge(
+            newer,
+            into: older,
+            recordingsDirectory: recordings,
+            summarizer: FixedSummarizer()
+        )
+        _ = try await applyMerge(result, in: store)
+
+        #expect(!FileManager.default.fileExists(atPath: incomingAudio.path))
     }
 
     @Test
@@ -337,28 +378,26 @@ struct NoteCombinerTests {
         try writeRecording(seconds: 1, to: incomingAudio)
         let incomingBytes = try Data(contentsOf: incomingAudio)
 
+        // The rename fallback is asked for by name. Trashing is what happens
+        // on an ordinary volume, and the Finder holds the original then, so a
+        // test that let it trash could never reach the branch that has to
+        // carry the bytes itself. Guarding the assertion behind "if a renamed
+        // file turned up" is how that guarantee went unproven.
         let result = try await NoteCombiner.merge(
             newer,
             into: older,
             recordingsDirectory: recordings,
-            summarizer: FixedSummarizer()
+            summarizer: FixedSummarizer(),
+            unusableAudioDestination: .renameBeside
         )
         #expect(result.audioOutcome == .adoptedFromAbsorbed)
         _ = try await applyMerge(result, in: store)
 
         #expect(try Data(contentsOf: baseAudio) == incomingBytes)
-        // Trashing is what usually happens, and the Finder holds the original
-        // then. A volume without a Trash gets the rename instead, and the
-        // original bytes have to still be there under it.
-        let leftovers = try FileManager.default.contentsOfDirectory(
-            at: recordings,
-            includingPropertiesForKeys: nil
+        let movedAside = try #require(
+            recordingsMatching("unreadable-", in: recordings).first
         )
-        if let movedAside = leftovers.first(
-            where: { $0.lastPathComponent.contains("unreadable-") }
-        ) {
-            #expect(try String(contentsOf: movedAside, encoding: .utf8) == "truncated")
-        }
+        #expect(try String(contentsOf: movedAside, encoding: .utf8) == "truncated")
     }
 
     @Test

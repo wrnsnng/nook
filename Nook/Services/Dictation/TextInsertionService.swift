@@ -203,6 +203,12 @@ final class TextInsertionService {
         guard let focused = focusedElement(), CFEqual(focused, element) else {
             return false
         }
+        // The same re-read `append` makes, for the same reason and with more
+        // time for it to matter: refinement runs for seconds before this, and
+        // a field that has become secure in between must not receive the
+        // rewrite. The verbatim words already in it are the user's own, which
+        // is the right thing to leave behind when this refuses.
+        guard !isSecureField(element) else { return false }
         guard let caret = selectedRange(of: element) else { return false }
         let start = caret.location + caret.length - insertedLength
         guard start >= 0 else { return false }
