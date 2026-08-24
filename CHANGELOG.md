@@ -4,6 +4,16 @@ Nook follows a user-facing release-note model. Each published version has a
 Markdown note in [`Releases/`](Releases/) and a matching `v<version>` release in
 the [binary releases repository](https://github.com/wrnsnng/nook-releases/releases).
 
+## 1.15.0
+
+- Every Nook keyboard shortcut is user remappable from Settings, Keyboard,
+  with live rebinding of the global flag hotkey, per-action and full reset,
+  and shared-combination warnings that include dictation.
+- Fixed long meetings reporting "too long for the on-device model":
+  condensing stalled once answers stopped packing into chunks, so rounds
+  never shrank the material; chunk budgets now hold two answers side by
+  side and round counts are sized to the meeting.
+
 ## 1.14.0
 
 - Meeting notes gain Regenerate summary: the on-device write-up runs again
