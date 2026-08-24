@@ -102,7 +102,11 @@ struct MeetingNote: Identifiable, Hashable, Sendable {
     ///
     /// Two items with identical text share one entry, so ticking one ticks
     /// both on the next whole-note save. Toggling goes through the line
-    /// rewriter, which addresses items by position and is unaffected.
+    /// rewriter, which addresses items by position and is unaffected. That
+    /// collapse is a reviewed tradeoff: giving items identity would have to
+    /// travel through every reader of `actionItems` above, and two follow-ups
+    /// worded identically in one note are the same follow-up far more often
+    /// than they are two.
     var completedActionItems: Set<String> = []
     var personalNotes: String
     var transcript: [TranscriptSegment]
@@ -176,13 +180,24 @@ struct MeetingNote: Identifiable, Hashable, Sendable {
     /// Used as a floor by the store: a save that would empty an existing file
     /// is a decode gap, not an edit.
     var hasNoContent: Bool {
+        hasNoContentBesidesPersonalNotes
+            && personalNotes.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ).isEmpty
+    }
+
+    /// The same question with `personalNotes` set aside.
+    ///
+    /// A note whose only writing is in My notes is an ordinary thing to keep,
+    /// and clearing that field is an ordinary thing to do. The store's floor
+    /// exists for a model that lost content it never meant to touch, so it
+    /// needs to tell that apart from the one field a caller is deliberately
+    /// rewriting.
+    var hasNoContentBesidesPersonalNotes: Bool {
         summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && keyPoints.isEmpty
             && decisions.isEmpty
             && actionItems.isEmpty
-            && personalNotes.trimmingCharacters(
-                in: .whitespacesAndNewlines
-            ).isEmpty
             && transcript.isEmpty
             && extraSections.isEmpty
     }

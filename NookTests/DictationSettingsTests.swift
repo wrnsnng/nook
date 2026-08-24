@@ -271,6 +271,65 @@ struct DictationPasteTargetTests {
     }
 }
 
+/// Whether a run may start at all, and by which mechanism.
+///
+/// The paste path has refused a password field since it existed. The
+/// direct-write path never asked, so a dictation that began in one streamed
+/// the user's spoken password straight into it, one chunk at a time.
+struct DictationRunTargetTests {
+    @Test
+    func aRunThatStartsInAPasswordFieldTypesNowhere() {
+        // Settable and text-accepting: everything a password field also is.
+        #expect(
+            TextInsertionService.runCapability(
+                focusIsSecure: true,
+                supportsDirectWriting: true,
+                acceptsText: true
+            ) == .secureField
+        )
+        #expect(
+            TextInsertionService.runCapability(
+                focusIsSecure: true,
+                supportsDirectWriting: false,
+                acceptsText: true
+            ) == .secureField
+        )
+    }
+
+    @Test
+    func anOrdinaryWritableFieldStreams() {
+        #expect(
+            TextInsertionService.runCapability(
+                focusIsSecure: false,
+                supportsDirectWriting: true,
+                acceptsText: true
+            ) == .streaming
+        )
+    }
+
+    @Test
+    func aFieldThatOnlyTakesAPasteIsPastedInto() {
+        #expect(
+            TextInsertionService.runCapability(
+                focusIsSecure: false,
+                supportsDirectWriting: false,
+                acceptsText: true
+            ) == .pasteOnly
+        )
+    }
+
+    @Test
+    func somewhereThatCannotTakeTextSendsTheWordsToTheNotePad() {
+        #expect(
+            TextInsertionService.runCapability(
+                focusIsSecure: false,
+                supportsDirectWriting: false,
+                acceptsText: false
+            ) == .noTextField
+        )
+    }
+}
+
 /// How long one dictation may hold the microphone.
 ///
 /// Hold-to-talk ends on key-up, and macOS Secure Input can swallow that key-up

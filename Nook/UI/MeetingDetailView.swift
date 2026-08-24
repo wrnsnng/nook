@@ -21,7 +21,6 @@ struct MeetingDetailView: View {
     @EnvironmentObject private var store: MarkdownStore
     @EnvironmentObject private var markdownDraft: MarkdownDraftController
     @EnvironmentObject private var personalNotes: PersonalNotesDraftController
-    @EnvironmentObject private var meeting: MeetingCoordinator
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let note: MeetingNote
 
@@ -55,6 +54,12 @@ struct MeetingDetailView: View {
     /// state is deliberately absent from the decoded model, so ticking from
     /// here needs the file's own truth to stay aligned with the sidebar.
     @State private var checklistLines: [ActionItemLine] = []
+    /// Words across the whole transcript, computed once when the note
+    /// changes rather than inside the header. `ViewThatFits` measures both of
+    /// its candidate layouts, which ran this reduce over every transcript
+    /// segment twice per body pass; a long meeting paid that cost at
+    /// whatever rate anything else in the window invalidated this view.
+    @State private var transcriptWordCount = 0
 
     init(note: MeetingNote, initialTab: DetailTab = .notes) {
         self.note = note
@@ -96,12 +101,14 @@ struct MeetingDetailView: View {
             markdownDraft.prepare(for: note, store: store)
             personalNotes.prepare(for: note, store: store)
             markdownCharacterCount = markdownDraft.rawMarkdown.count
+            transcriptWordCount = note.transcriptWordCount
             reloadChecklist()
         }
         .onChange(of: markdownDraft.rawMarkdown) { _, markdown in
             markdownCharacterCount = markdown.count
         }
-        .onChange(of: note) { _, _ in
+        .onChange(of: note) { _, newValue in
+            transcriptWordCount = newValue.transcriptWordCount
             reloadChecklist()
         }
         .onChange(of: note.personalNotes) { _, _ in
@@ -180,18 +187,7 @@ struct MeetingDetailView: View {
 
             if note.kind != .digest {
                 Divider()
-                Button {
-                    meeting.continueRecording(into: note)
-                } label: {
-                    Label(
-                        "Record into this note",
-                        systemImage: "record.circle"
-                    )
-                }
-                .disabled(!canRecordIntoThisNote)
-                .help(
-                    "Appends the next recording to this note instead of creating a new one"
-                )
+                RecordIntoNoteMenuItem(note: note)
             }
         } label: {
             Image(systemName: "ellipsis")
@@ -204,14 +200,6 @@ struct MeetingDetailView: View {
         .fixedSize()
         .help("Meeting actions")
         .accessibilityLabel("Meeting actions")
-    }
-
-    /// Recording can only join a note from a quiet state; the coordinator
-    /// guards this too, and this keeps the menu item honest about it.
-    private var canRecordIntoThisNote: Bool {
-        if meeting.phase.isRecording { return false }
-        if case .processing = meeting.phase { return false }
-        return true
     }
 
     private var titleBlock: some View {
@@ -243,7 +231,7 @@ struct MeetingDetailView: View {
                     NookMetadataLabel(title: note.sourceApp, symbol: "macbook")
                 }
                 NookMetadataLabel(
-                    title: "\(note.transcriptWordCount) words",
+                    title: "\(transcriptWordCount) words",
                     symbol: "text.word.spacing"
                 )
             }
@@ -1034,6 +1022,42 @@ struct MeetingDetailView: View {
                 copyNotice = nil
             }
         }
+    }
+}
+
+/// The "Record into this note" menu item, isolated into its own view so it
+/// is the only piece of `MeetingDetailView` that observes the coordinator.
+///
+/// `MeetingCoordinator` publishes audio level (up to ~12 Hz) and live
+/// transcript (up to ~10 Hz) while a meeting records. `MeetingDetailView`
+/// used to hold `@EnvironmentObject var meeting` just for this one menu
+/// item, which meant browsing any note while a meeting recorded in the
+/// background re-ran the whole detail pane, `ViewThatFits` header and all,
+/// at the meter's rate. Isolating the one thing that actually needs the
+/// coordinator here means those ticks land on this small, rarely-visible
+/// menu item instead.
+private struct RecordIntoNoteMenuItem: View {
+    @EnvironmentObject private var meeting: MeetingCoordinator
+    let note: MeetingNote
+
+    var body: some View {
+        Button {
+            meeting.continueRecording(into: note)
+        } label: {
+            Label("Record into this note", systemImage: "record.circle")
+        }
+        .disabled(!canRecordIntoThisNote)
+        .help(
+            "Appends the next recording to this note instead of creating a new one"
+        )
+    }
+
+    /// Recording can only join a note from a quiet state; the coordinator
+    /// guards this too, and this keeps the menu item honest about it.
+    private var canRecordIntoThisNote: Bool {
+        if meeting.phase.isRecording { return false }
+        if case .processing = meeting.phase { return false }
+        return true
     }
 }
 

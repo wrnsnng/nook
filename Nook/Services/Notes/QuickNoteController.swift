@@ -398,9 +398,18 @@ final class QuickNoteController: ObservableObject {
     /// between, so neither half is rewritten; the meeting's own transcript and
     /// summary are untouched. Closing without saving-as-spoken keeps one
     /// thought in one place rather than two copies.
+    ///
+    /// Filing is a move, not a copy. By the time anybody reaches this menu the
+    /// debounced autosave has usually already written these words as their own
+    /// spoken note, and leaving that file behind made every filed thought
+    /// appear twice in the library.
     func fileIntoMeeting(_ target: MeetingNote) {
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { return }
+        // Cancelled before the write, not after: a debounce that fired in
+        // between would put the standalone note straight back.
+        saveDebounce?.cancel()
+        saveDebounce = nil
         do {
             let existing = target.personalNotes
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -408,11 +417,25 @@ final class QuickNoteController: ObservableObject {
                 ? body
                 : "\(existing)\n\n\(body)"
             _ = try store.updatePersonalNotes(joined, for: target)
+            // The words are in the meeting now, so the autosaved copy goes to
+            // the Trash exactly as discarding it would send it there.
+            var strandedCopy: String?
+            if let savedNoteID,
+               let autosaved = store.notes.first(where: { $0.id == savedNoteID }),
+               !store.delete(autosaved) {
+                strandedCopy = autosaved.fileURL?.lastPathComponent
+            }
             text = ""
             savedNoteID = nil
             savedNoteURL = nil
             lastSavedAt = Date()
-            message = nil
+            hasUnsavedEdits = false
+            hasUnsavedFailure = false
+            // Filed either way; a copy that would not move is worth saying so
+            // the user is not left wondering why the note is in two places.
+            message = strandedCopy.map {
+                "Filed into that meeting, but the earlier copy in \($0) could not be moved to the Trash."
+            }
             isPresenting = false
             panel?.orderOut(nil)
             panel = nil

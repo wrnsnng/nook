@@ -1430,6 +1430,82 @@ struct AnchoredSectionTests {
     }
 }
 
+/// A file can carry a heading Nook itself writes more than once: somebody
+/// pastes a second "## Summary" in, or a note action appends its result under
+/// one. The decoder reads only the first, so the rest used to be swallowed and
+/// deleted by the next save.
+struct RepeatedHeadingTests {
+    private func note() -> MeetingNote {
+        MeetingNote(
+            title: "Launch review",
+            startedAt: Date(timeIntervalSince1970: 1_780_000_000),
+            endedAt: Date(timeIntervalSince1970: 1_780_003_600),
+            sourceApp: "Zoom",
+            summary: "The team agreed on the launch scope.",
+            actionItems: ["Send the pricing page"]
+        )
+    }
+
+    @Test
+    func aSecondSummaryHeadingSurvivesReEncoding() throws {
+        let handEdited = MarkdownCodec.encode(note())
+            .replacingOccurrences(
+                of: "## My notes",
+                with: """
+                ## Summary
+
+                Added by hand: we also settled the beta list.
+
+                ## My notes
+                """
+            )
+
+        let decoded = try #require(MarkdownCodec.decode(handEdited))
+        #expect(decoded.summary == "The team agreed on the launch scope.")
+
+        let reencoded = MarkdownCodec.encode(decoded)
+        #expect(reencoded.contains("The team agreed on the launch scope."))
+        #expect(
+            reencoded.contains("Added by hand: we also settled the beta list.")
+        )
+
+        // And it is still there after the next save, rather than surviving one
+        // round trip and going on the one after it.
+        let again = try #require(MarkdownCodec.decode(reencoded))
+        #expect(
+            MarkdownCodec.encode(again)
+                .contains("Added by hand: we also settled the beta list.")
+        )
+    }
+
+    @Test
+    func aSectionWrittenUnderARepeatedHeadingIsKeptToo() throws {
+        let handEdited = MarkdownCodec.encode(note())
+            .replacingOccurrences(
+                of: "## My notes",
+                with: """
+                ## Summary
+
+                Added by hand: we also settled the beta list.
+
+                ## Agenda
+
+                Pricing, then the beta list.
+
+                ## My notes
+                """
+            )
+
+        let decoded = try #require(MarkdownCodec.decode(handEdited))
+        let reencoded = MarkdownCodec.encode(decoded)
+
+        #expect(
+            reencoded.contains("Added by hand: we also settled the beta list.")
+        )
+        #expect(reencoded.contains("Pricing, then the beta list."))
+    }
+}
+
 /// Moments are flagged offsets in frontmatter, so they survive every
 /// re-encoding the note goes through and never pollute portable body text.
 struct MomentRoundTripTests {

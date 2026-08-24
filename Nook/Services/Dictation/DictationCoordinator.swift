@@ -367,6 +367,17 @@ final class DictationCoordinator: ObservableObject {
             return
         }
 
+        // A run that starts in a password field ends here, before the
+        // microphone is ever opened. The words would have nowhere to go: not
+        // the field, and not the pad either, which is a file on disk. Refusing
+        // now rather than after the sentence also means nothing is recognised
+        // and nothing is held in memory.
+        guard capability != .secureField else {
+            phase = .idle
+            fail(Self.secureFieldMessage)
+            return
+        }
+
         // A note is deliberately not opened yet.
         //
         // Where the words belong is decided when they are ready, not when the
@@ -760,7 +771,8 @@ final class DictationCoordinator: ObservableObject {
             }
         case .noTextField:
             deliverWithoutAKnownField(finalText, spoken: spoken)
-        case .unavailable:
+        case .secureField, .unavailable:
+            // Both are refused in `begin`, so neither reaches a delivery.
             break
         }
 
@@ -855,7 +867,12 @@ final class DictationCoordinator: ObservableObject {
                 }
             }
             return
-        case .noTextField, .unavailable:
+        case .secureField, .noTextField, .unavailable:
+            // A password field found on the second look is not where these
+            // words came from: this run started with no field at all, so
+            // nothing spoken into it is a password. It is somewhere the words
+            // merely must not go, and the pad is the right home, which is the
+            // same distinction `pasteRefusal` draws.
             break
         }
 

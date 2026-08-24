@@ -83,8 +83,20 @@ final class MarkdownStore: ObservableObject {
         }
     }
 
+    /// The one field a caller is deliberately rewriting, when it has one.
+    ///
+    /// The store's empty-file floor exists for a model that lost content on
+    /// the way in. Saying which field is being edited on purpose is what lets
+    /// that floor stay in place without also refusing an ordinary edit.
+    enum DeliberateEdit {
+        case personalNotes
+    }
+
     @discardableResult
-    func save(_ note: MeetingNote) throws -> MeetingNote {
+    func save(
+        _ note: MeetingNote,
+        deliberatelyEditing: DeliberateEdit? = nil
+    ) throws -> MeetingNote {
         ensureDirectory()
         var saved = note
         let known = notes.first(where: { $0.id == note.id })
@@ -102,7 +114,11 @@ final class MarkdownStore: ObservableObject {
         )
 
         let markdown = MarkdownCodec.encode(note)
-        try refuseIfItWouldEmpty(destination, with: note)
+        try refuseIfItWouldEmpty(
+            destination,
+            with: note,
+            deliberatelyEditing: deliberatelyEditing
+        )
         try markdown.write(to: destination, atomically: true, encoding: .utf8)
         protectSensitiveFile(at: destination)
         saved.fileURL = destination
@@ -137,7 +153,9 @@ final class MarkdownStore: ObservableObject {
             throw MarkdownStoreError.writeVerificationFailed
         }
 
-        let saved = try save(updated)
+        // Emptying My notes is a select-all-delete, not a decode that lost the
+        // body, so the store's floor is told which field this save is about.
+        let saved = try save(updated, deliberatelyEditing: .personalNotes)
 
         guard
             let destination = saved.fileURL,
@@ -179,12 +197,20 @@ final class MarkdownStore: ObservableObject {
 
     /// Refuses a save that would replace a file's contents with nothing.
     ///
-    /// A note with no content is a legitimate thing to create, but never a
-    /// legitimate thing to turn a written file into. Whenever those two meet,
-    /// the cause is a decode that failed to find the body, so the file wins.
+    /// A note with no content is a legitimate thing to create, but rarely a
+    /// legitimate thing to turn a written file into: usually the cause is a
+    /// decode that failed to find the body, so the file wins.
+    ///
+    /// The exception is the field the caller says it is rewriting. A note
+    /// whose only writing lives in My notes, which is every template note
+    /// somebody typed into, could otherwise never be cleared: select all,
+    /// delete, and the save was refused forever with a message about a file
+    /// nobody had touched. When everything the file still holds is in that one
+    /// field, emptying it is an edit and it goes through.
     private func refuseIfItWouldEmpty(
         _ destination: URL,
-        with note: MeetingNote
+        with note: MeetingNote,
+        deliberatelyEditing: DeliberateEdit?
     ) throws {
         guard note.hasNoContent,
               let existing = try? String(contentsOf: destination, encoding: .utf8),
@@ -192,6 +218,10 @@ final class MarkdownStore: ObservableObject {
               let decoded = MarkdownCodec.decode(existing),
               !decoded.hasNoContent
         else { return }
+        if deliberatelyEditing == .personalNotes,
+           decoded.hasNoContentBesidesPersonalNotes {
+            return
+        }
         lastError = MarkdownStoreError.wouldEmptyNote.errorDescription
         throw MarkdownStoreError.wouldEmptyNote
     }

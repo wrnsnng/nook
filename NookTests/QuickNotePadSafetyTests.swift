@@ -140,6 +140,40 @@ struct QuickNotePadSafetyTests {
         #expect(store.notes.first?.summary == "One line, then another.")
     }
 
+    @Test
+    func filingIntoAMeetingTakesTheAutosavedCopyWithIt() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        let meeting = try store.save(
+            MeetingNote(
+                title: "Launch review",
+                startedAt: Date(timeIntervalSince1970: 1_780_000_000),
+                endedAt: Date(timeIntervalSince1970: 1_780_003_600),
+                sourceApp: "Zoom",
+                summary: "The team agreed on the launch scope."
+            )
+        )
+        let pad = QuickNoteController(store: store)
+
+        pad.text = "Ask Ana whether the beta list is final."
+        // What the debounced autosave has usually already done by the time
+        // anybody reaches the filing menu.
+        #expect(pad.saveIfNeeded() != nil)
+        let autosaved = try #require(store.notes.first { $0.kind == .spoken })
+        let autosavedFile = try #require(autosaved.fileURL)
+
+        pad.fileIntoMeeting(meeting)
+
+        // Filing is a move, not a copy: one thought, in one place.
+        #expect(!store.notes.contains { $0.id == autosaved.id })
+        #expect(!FileManager.default.fileExists(atPath: autosavedFile.path))
+        #expect(
+            store.notes.first { $0.id == meeting.id }?.personalNotes
+                == "Ask Ana whether the beta list is final."
+        )
+    }
+
     // MARK: Model output that reaches the note
 
     @Test

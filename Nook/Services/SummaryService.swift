@@ -530,6 +530,16 @@ actor SummaryService {
 }
 
 enum MeetingInsightValidator {
+    /// The floor a generated summary has to clear before it reaches a note.
+    ///
+    /// The length ratio is the part that catches a model echoing the
+    /// conversation back instead of summarising it. It is a floor and not a
+    /// proof: a reviewed edge remains where a short meeting, under the 500
+    /// character threshold that skips the ratio entirely, can be handed back
+    /// almost verbatim and pass. That is deliberate. A two-sentence meeting
+    /// summarised as those two sentences is a reasonable summary, and every
+    /// stricter rule tried here rejected honest summaries of short
+    /// conversations more often than it caught echoes.
     static func validate(
         _ insights: MeetingInsights,
         against transcript: [TranscriptSegment]

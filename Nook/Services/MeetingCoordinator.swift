@@ -91,6 +91,22 @@ enum MeetingTerminationState: Equatable, Sendable {
 }
 
 /// One part of a long summary, out of the parts in the current round.
+/// Audio that could not be put back after a failed adoption.
+///
+/// Adopting a session recording renames the note's old audio out of the way
+/// before moving the new file in. When the move in fails and the rename cannot
+/// be undone, the recording is intact but no longer where the note points.
+/// Carrying the path in the error is what lets the caller keep the cleanup
+/// pass off it and, when nothing else will list it, name it to the user.
+struct KeptAudioStranded: Error {
+    /// Where the note's earlier audio actually ended up.
+    let strandedURL: URL
+    /// Whether that name is one the recovery scan lists. When it is, Settings
+    /// offers the recording back and the user is not sent looking for a file.
+    let isListedByRecoveryScan: Bool
+    let underlying: any Error
+}
+
 struct SummaryProgress: Equatable, Sendable {
     let part: Int
     let total: Int
@@ -1403,6 +1419,20 @@ final class MeetingCoordinator: ObservableObject {
                 )
             )
             if plan != .none { preserve.insert(priorAudioURL) }
+        } catch let stranded as KeptAudioStranded {
+            // Neither move worked and the old file could not go back, so the
+            // note's earlier audio is no longer where the note points at it.
+            // Preserving it keeps the cleanup pass off it; naming it in the
+            // notice is reserved for the case where nothing else will list it,
+            // because telling somebody to go and find a file they can already
+            // recover from Settings is worse than saying nothing.
+            NookEventLog.write(.keptAudioStranded)
+            audioFailures.append(sessionAudioURL)
+            preserve.insert(stranded.strandedURL)
+            if !stranded.isListedByRecoveryScan {
+                audioFailures.append(stranded.strandedURL)
+            }
+            if keepAudio { preserve.insert(sessionAudioURL) }
         } catch {
             // The note is already saved, so audio that would not move is
             // reported like any other file the user may have to handle, not
@@ -1450,13 +1480,70 @@ final class MeetingCoordinator: ObservableObject {
                 throw error
             }
         case .adoptSession:
-            // An unreadable file is moved aside rather than deleted. Its stem
-            // is deliberately not a bare identifier, so neither the recovery
-            // scan nor artifact cleanup mistakes it for a loose recording.
-            if manager.fileExists(atPath: priorAudioURL.path) {
-                try manager.moveItem(at: priorAudioURL, to: asideURL)
+            try Self.adoptSessionAudio(
+                priorExists: manager.fileExists(atPath: priorAudioURL.path),
+                priorAudioURL: priorAudioURL,
+                sessionAudioURL: sessionAudioURL,
+                asideURL: asideURL,
+                recoverableURL: asideURL
+                    .deletingLastPathComponent()
+                    .appendingPathComponent("\(UUID().uuidString).m4a"),
+                move: { try manager.moveItem(at: $0, to: $1) }
+            )
+        }
+    }
+
+    /// The two moves that make a session recording become the note's audio.
+    ///
+    /// They are two operations and not one, so the window between them is real:
+    /// the old file has been renamed to something nothing scans, and the new
+    /// one has not arrived yet. A failure there used to leave the note pointing
+    /// at a path with nothing in it while its audio sat under a name only a
+    /// Finder search would find. The old file goes back first; only if that
+    /// fails too is the audio reported by name, and it is reported rather than
+    /// left silent.
+    ///
+    /// The file operations are a parameter so the failure ordering, which is
+    /// the part that can lose a recording, can be tested without a FileManager
+    /// that fails on demand.
+    nonisolated static func adoptSessionAudio(
+        priorExists: Bool,
+        priorAudioURL: URL,
+        sessionAudioURL: URL,
+        asideURL: URL,
+        recoverableURL: URL,
+        move: (URL, URL) throws -> Void
+    ) throws {
+        // An unreadable file is moved aside rather than deleted. Its stem is
+        // deliberately not a bare identifier, so neither the recovery scan nor
+        // artifact cleanup mistakes it for a loose recording.
+        if priorExists {
+            try move(priorAudioURL, asideURL)
+        }
+        do {
+            try move(sessionAudioURL, priorAudioURL)
+        } catch {
+            guard priorExists else { throw error }
+            // Undo the rename first. The note then keeps exactly the audio it
+            // had before this sitting, which is a whole outcome rather than a
+            // gap, and the caller reports only the session file that would not
+            // move.
+            if (try? move(asideURL, priorAudioURL)) != nil { throw error }
+            // It would not go back either. A name the recovery scan lists is
+            // the difference between audio Settings offers back and audio only
+            // a Finder search would ever find.
+            if (try? move(asideURL, recoverableURL)) != nil {
+                throw KeptAudioStranded(
+                    strandedURL: recoverableURL,
+                    isListedByRecoveryScan: true,
+                    underlying: error
+                )
             }
-            try manager.moveItem(at: sessionAudioURL, to: priorAudioURL)
+            throw KeptAudioStranded(
+                strandedURL: asideURL,
+                isListedByRecoveryScan: false,
+                underlying: error
+            )
         }
     }
 

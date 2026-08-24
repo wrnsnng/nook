@@ -201,6 +201,90 @@ struct PersonalNotesDraftTests {
     }
 
     @Test
+    func wordsARefusedSaveCouldNotWriteNeverLandInAnotherNotesFile() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        let first = try savedNote(title: "Launch review", in: store)
+        let second = try savedNote(title: "Design sync", in: store)
+        let third = try savedNote(title: "Hiring loop", in: store)
+
+        let draft = PersonalNotesDraftController()
+        draft.prepare(for: first, store: store)
+        draft.text = "Belongs to the launch review."
+
+        // Something else wrote the file, so the store refuses this save.
+        let firstFile = try #require(first.fileURL)
+        let untouched = try #require(
+            FileManager.default.attributesOfItem(atPath: firstFile.path)[
+                .modificationDate
+            ] as? Date
+        )
+        try FileManager.default.setAttributes(
+            [.modificationDate: untouched.addingTimeInterval(30)],
+            ofItemAtPath: firstFile.path
+        )
+
+        draft.prepare(for: second, store: store)
+
+        // The field belongs to what is on screen, whatever the refusal did,
+        // and the refusal is visible rather than silent.
+        #expect(draft.noteID == second.id)
+        #expect(draft.text.isEmpty)
+        #expect(draft.statusMessage != nil)
+
+        draft.text = "Belongs to the design sync."
+
+        // Whatever the other writer was doing has settled, so a retry can go
+        // through. It must go through against the note it was typed in.
+        try FileManager.default.setAttributes(
+            [.modificationDate: untouched],
+            ofItemAtPath: firstFile.path
+        )
+        draft.prepare(for: third, store: store)
+
+        let launchReview = try String(contentsOf: firstFile, encoding: .utf8)
+        #expect(launchReview.contains("Belongs to the launch review."))
+        #expect(!launchReview.contains("Belongs to the design sync."))
+
+        let designSync = try String(
+            contentsOf: try #require(second.fileURL),
+            encoding: .utf8
+        )
+        #expect(designSync.contains("Belongs to the design sync."))
+        #expect(!designSync.contains("Belongs to the launch review."))
+    }
+
+    @Test
+    func wordsARefusedSaveKeptComeBackWhenThatNoteIsOpenedAgain() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        let first = try savedNote(title: "Launch review", in: store)
+        let second = try savedNote(title: "Design sync", in: store)
+
+        let draft = PersonalNotesDraftController()
+        draft.prepare(for: first, store: store)
+        draft.text = "The one line that matters."
+
+        let firstFile = try #require(first.fileURL)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(30)],
+            ofItemAtPath: firstFile.path
+        )
+
+        draft.prepare(for: second, store: store)
+        #expect(draft.noteID == second.id)
+
+        // Back where they were typed: the words are in the field again, not
+        // quietly replaced by the older copy on disk.
+        draft.prepare(for: first, store: store)
+        #expect(draft.noteID == first.id)
+        #expect(draft.text == "The one line that matters.")
+        #expect(draft.hasChanges)
+    }
+
+    @Test
     func aFileChangedOutsideNookRefusesTheSaveInsteadOfOverwritingIt() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -220,5 +304,48 @@ struct PersonalNotesDraftTests {
 
         #expect(draft.saveIfNeeded(store: store) != nil)
         #expect(draft.text == "Typed in Nook.")
+    }
+
+    @Test
+    func hasUnwrittenNotesCountsAParkedDraftEvenWhenTheFieldOnScreenIsClean() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        let first = try savedNote(title: "Launch review", in: store)
+        let second = try savedNote(title: "Design sync", in: store)
+
+        let draft = PersonalNotesDraftController()
+        draft.prepare(for: first, store: store)
+        draft.text = "Belongs to the launch review."
+
+        // Something else wrote the file, so the store refuses this save and
+        // the words are parked against `first` instead of lost.
+        let firstFile = try #require(first.fileURL)
+        let untouched = try #require(
+            FileManager.default.attributesOfItem(atPath: firstFile.path)[
+                .modificationDate
+            ] as? Date
+        )
+        try FileManager.default.setAttributes(
+            [.modificationDate: untouched.addingTimeInterval(30)],
+            ofItemAtPath: firstFile.path
+        )
+        draft.prepare(for: second, store: store)
+
+        // The field on screen is clean: it now belongs to `second`, and
+        // nothing has been typed into it. `hasChanges` alone would say there
+        // is nothing to do, but the parked words are still unwritten, which
+        // is exactly what a leave-guard has to know about.
+        #expect(!draft.hasChanges)
+        #expect(draft.hasUnwrittenNotes)
+
+        // Once the write can go through again, the parked draft stops
+        // counting.
+        try FileManager.default.setAttributes(
+            [.modificationDate: untouched],
+            ofItemAtPath: firstFile.path
+        )
+        #expect(draft.saveIfNeeded(store: store) == nil)
+        #expect(!draft.hasUnwrittenNotes)
     }
 }

@@ -31,6 +31,9 @@ struct SettingsView: View {
     @State private var orphanPendingDeletion: OrphanedRecording?
     @State private var selectedPane: SettingsPane
     @State private var accessibilityGranted = TextInsertionService.isTrusted
+    /// Nil until the bundle's signature has been read, which happens off the
+    /// main thread the first time About is shown.
+    @State private var signature: NookCodeSignature?
 
     init(initialPane: SettingsPane = .general) {
         _selectedPane = State(initialValue: initialPane)
@@ -599,10 +602,34 @@ struct SettingsView: View {
                 // hardcoded badge told every local and ad-hoc build it was
                 // Developer ID signed, which is exactly the claim a user would
                 // want to be able to trust.
-                Label(signature.label, systemImage: signature.symbol)
-                    .font(NookType.micro.weight(.semibold))
-                    .foregroundStyle(signature.tint)
-                    .accessibilityLabel(signature.label)
+                if let signature {
+                    Label(signature.label, systemImage: signature.symbol)
+                        .font(NookType.micro.weight(.semibold))
+                        .foregroundStyle(signature.tint)
+                        .accessibilityLabel(signature.label)
+                } else {
+                    // Holds the badge's place while the bundle is being
+                    // checked, so nothing under it jumps when the answer
+                    // lands. Deliberately silent: a line saying the signature
+                    // is being verified reads as a warning about the very
+                    // thing it is about to confirm.
+                    Label("Checking", systemImage: "checkmark.seal")
+                        .font(NookType.micro.weight(.semibold))
+                        .opacity(0)
+                        .accessibilityHidden(true)
+                }
+            }
+            .task {
+                // Off the main thread, and only once per pane. Verifying a
+                // signature hashes every byte of the bundle; doing it inside a
+                // view body meant the first draw of About paid for that hash
+                // before it could show anything, which on a cold Mac is a
+                // visible stall. The badge is a fact about the build, not
+                // about anything the user is doing, so it can arrive late.
+                guard signature == nil else { return }
+                signature = await Task.detached(priority: .userInitiated) {
+                    NookCodeSignature.current
+                }.value
             }
 
             Spacer()
@@ -734,8 +761,6 @@ struct SettingsView: View {
         .formStyle(.grouped)
     }
 
-    private var signature: NookCodeSignature { .current }
-
     private var appVersion: String {
         let version = Bundle.main.object(
             forInfoDictionaryKey: "CFBundleShortVersionString"
@@ -796,12 +821,17 @@ struct SettingsView: View {
 /// the same green seal. macOS already knows the answer, so this asks it. The
 /// check is entirely local: it reads the bundle on disk and evaluates Apple's
 /// own Developer ID requirement. Nothing is contacted.
-enum NookCodeSignature: Equatable {
+enum NookCodeSignature: Equatable, Sendable {
     case developerID(team: String)
     case builtFromSource
 
     /// Resolved once. Verifying a signature hashes the whole bundle, which is
-    /// not work a settings pane should repeat on every redraw.
+    /// not work a settings pane should repeat on every redraw, and not work it
+    /// should do on the main thread even once: read straight from a view body
+    /// this hashed every byte of the app before About drew its first frame,
+    /// which on a cold Mac with nothing in the page cache is a visible stall.
+    /// `NookCodeSignatureReader` is what About reads; this stays for anything
+    /// that genuinely wants the answer synchronously.
     static let current = resolve()
 
     var label: String {
@@ -846,7 +876,7 @@ enum NookCodeSignature: Equatable {
         return name.trimmingCharacters(in: .whitespaces)
     }
 
-    private static func resolve() -> NookCodeSignature {
+    static func resolve() -> NookCodeSignature {
         var code: SecCode?
         guard SecCodeCopySelf([], &code) == errSecSuccess, let code else {
             return .builtFromSource

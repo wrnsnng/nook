@@ -113,7 +113,7 @@ final class LibraryAnswerService: ObservableObject {
             // passages; for a large library that is real work, so it runs
             // inside the detached task rather than blocking the main actor
             // before this function's first await.
-            let outcome = try await Task.detached(priority: .userInitiated) {
+            let ranking = Task.detached(priority: .userInitiated) {
                 () async throws -> (Bool, [RankedChunk]) in
                 let chunks = Self.chunks(from: notes)
                 guard !chunks.isEmpty else { return (true, []) }
@@ -126,7 +126,17 @@ final class LibraryAnswerService: ObservableObject {
                         cacheURL: self.cacheURL
                     )
                 )
-            }.value
+            }
+            // A detached task inherits nothing, cancellation included, so the
+            // `Task.isCancelled` checks inside ranking were dead code and every
+            // abandoned question embedded the whole library anyway. Bridging
+            // the two makes them live: typing a new question now stops the old
+            // one instead of racing it.
+            let outcome = try await withTaskCancellationHandler {
+                try await ranking.value
+            } onCancel: {
+                ranking.cancel()
+            }
 
             let (libraryIsEmpty, ranked) = outcome
             guard !libraryIsEmpty else {
@@ -149,11 +159,19 @@ final class LibraryAnswerService: ObservableObject {
                 )
             }
 
+            // The model pass is the expensive half, and nobody is waiting for
+            // an answer to a question that has already been replaced.
+            guard !Task.isCancelled else { return Self.abandoned }
+
             let excerpts = Array(ranked.prefix(Self.maximumExcerpts))
             return await Self.compose(
                 question: trimmed,
                 excerpts: excerpts
             )
+        } catch is CancellationError {
+            // Abandoning a question is the user changing their mind, not a
+            // failure to put in front of them.
+            return Self.abandoned
         } catch {
             lastError = error.localizedDescription
             return LibraryAnswer(
@@ -163,6 +181,14 @@ final class LibraryAnswerService: ObservableObject {
             )
         }
     }
+
+    /// What an abandoned question returns. The caller that started it has
+    /// already stopped listening, so this is never displayed.
+    private static let abandoned = LibraryAnswer(
+        text: "",
+        citations: [],
+        refusedReason: nil
+    )
 
     /// Grounds the answer in the numbered excerpts through the on-device
     /// model, falling back to showing the passages themselves if the model is

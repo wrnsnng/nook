@@ -7,10 +7,134 @@ private enum LibrarySelection: Hashable {
     case prep
 }
 
-private struct LibraryNoteGroup: Identifiable {
+struct LibraryNoteGroup: Identifiable {
     let title: String
     let notes: [MeetingNote]
     var id: String { title }
+}
+
+/// Which phases put the "Now" row in the sidebar and the live pane in the
+/// detail column.
+///
+/// Lives on the phase itself, not as a private computed property on the
+/// view, so both the view that decides the initial selection and the small
+/// child view that renders the "Now" row (each observing the coordinator
+/// independently, for the reasons explained on `MeetingPhaseObserver`) agree
+/// on exactly the same phases without duplicating the switch.
+extension MeetingPhase {
+    var presentsLiveActivity: Bool {
+        switch self {
+        case .recording, .processing, .failed: true
+        case .idle, .detected, .completed: false
+        }
+    }
+}
+
+/// The sidebar's filtering (search, today-only) and day-bucketing, pulled out
+/// of the view so both halves can be pinned with tests and cached without
+/// rendering anything.
+enum LibraryNoteGrouping {
+    static func filter(
+        _ notes: [MeetingNote],
+        todayOnly: Bool,
+        matchingIDs: Set<MeetingNote.ID>?,
+        calendar: Calendar = .current
+    ) -> [MeetingNote] {
+        var result = notes
+        if todayOnly {
+            result = result.filter { calendar.isDateInToday($0.startedAt) }
+        }
+        guard let matchingIDs else { return result }
+        return result.filter { matchingIDs.contains($0.id) }
+    }
+
+    static func group(
+        _ notes: [MeetingNote],
+        referenceDate: Date = Date(),
+        calendar: Calendar = .autoupdatingCurrent
+    ) -> [LibraryNoteGroup] {
+        var orderedTitles: [String] = []
+        var values: [String: [MeetingNote]] = [:]
+        for note in notes {
+            let title = title(
+                for: note.startedAt,
+                referenceDate: referenceDate,
+                calendar: calendar
+            )
+            if values[title] == nil {
+                orderedTitles.append(title)
+            }
+            values[title, default: []].append(note)
+        }
+        return orderedTitles.map {
+            LibraryNoteGroup(title: $0, notes: values[$0] ?? [])
+        }
+    }
+
+    static func title(
+        for date: Date,
+        referenceDate: Date,
+        calendar: Calendar
+    ) -> String {
+        if calendar.isDateInToday(date) {
+            return "Today"
+        }
+        if calendar.isDateInYesterday(date) {
+            return "Yesterday"
+        }
+        if let currentWeek = calendar.dateInterval(
+            of: .weekOfYear,
+            for: referenceDate
+        ), currentWeek.contains(date) {
+            return "This week"
+        }
+        return date.formatted(
+            .dateTime
+                .month(.wide)
+                .year()
+        )
+    }
+}
+
+/// What the sidebar's grouped, filtered note list was last computed from.
+///
+/// While a meeting records, the coordinator publishes audio level up to
+/// ~12 times a second and the live transcript up to ~10 times a second.
+/// `LibraryView` used to recompute this filter-and-group pass, Calendar
+/// arithmetic and all, on every one of those ticks even though none of them
+/// touch a note, a search match, or the clock crossing midnight. Comparing
+/// this key first, and only redoing the work when it actually changes, turns
+/// a tick that changes none of these into a cheap equality check instead of
+/// an `O(library)` pass.
+///
+/// `noteCount` plus the latest `fileModified` stands in for the notes
+/// array's identity: two loads that produced the same count and the same
+/// newest file timestamp are the same library for grouping purposes, without
+/// diffing every note.
+struct LibraryGroupingCacheKey: Equatable {
+    let noteCount: Int
+    let latestModified: Date?
+    let matchingIDs: Set<MeetingNote.ID>?
+    let todayOnly: Bool
+    let day: Date
+
+    init(
+        notes: [MeetingNote],
+        matchingIDs: Set<MeetingNote.ID>?,
+        todayOnly: Bool,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) {
+        self.noteCount = notes.count
+        self.latestModified = notes.reduce(Date?.none) { latest, note in
+            guard let modified = note.fileModified else { return latest }
+            guard let latest else { return modified }
+            return max(latest, modified)
+        }
+        self.matchingIDs = matchingIDs
+        self.todayOnly = todayOnly
+        self.day = calendar.startOfDay(for: now)
+    }
 }
 
 /// How much of the standing sidebar furniture is allowed to sit above the
@@ -53,7 +177,6 @@ enum LibrarySidebarPolicy {
 
 struct LibraryView: View {
     @EnvironmentObject private var store: MarkdownStore
-    @EnvironmentObject private var meeting: MeetingCoordinator
     @EnvironmentObject private var markdownDraft: MarkdownDraftController
     @EnvironmentObject private var personalNotesDraft: PersonalNotesDraftController
     @EnvironmentObject private var prep: PrepBriefController
@@ -75,6 +198,16 @@ struct LibraryView: View {
     @State private var showsCommandPalette = false
     /// Sidebar scope: the whole library or just today's capture.
     @State private var todayOnly = false
+    /// Mirrors `meeting.phase`, kept current by `MeetingPhaseObserver`. See
+    /// that type for why this view reads a plain, rarely-changing `@State`
+    /// value here rather than holding the coordinator itself.
+    @State private var currentPhase: MeetingPhase = .idle
+    /// The last grouping pass's inputs, and its result. Recomputed only when
+    /// `groupingCacheKey` no longer matches; see
+    /// `LibraryGroupingCacheKey` for why this exists.
+    @State private var groupingCacheKey: LibraryGroupingCacheKey?
+    @State private var cachedFilteredNotes: [MeetingNote] = []
+    @State private var cachedGroupedNotes: [LibraryNoteGroup] = []
     /// Whether the two standing sections above the meetings are open, and
     /// whether the open-actions list is showing past its cap.
     ///
@@ -93,47 +226,46 @@ struct LibraryView: View {
         )
     }
 
-    private var filteredNotes: [MeetingNote] {
-        var notes = store.notes
-        if todayOnly {
-            notes = notes.filter {
-                Calendar.current.isDateInToday($0.startedAt)
-            }
-        }
-        guard let matchingIDs = searchController.matchingIDs else {
-            return notes
-        }
-        return notes.filter { matchingIDs.contains($0.id) }
-    }
+    /// The filtered notes as of the last cache refresh. See
+    /// `LibraryGroupingCacheKey`.
+    private var filteredNotes: [MeetingNote] { cachedFilteredNotes }
+
+    /// The grouped notes as of the last cache refresh. See
+    /// `LibraryGroupingCacheKey`.
+    private var groupedNotes: [LibraryNoteGroup] { cachedGroupedNotes }
 
     private var selectedNote: MeetingNote? {
         guard case .note(let id) = selection else { return nil }
         return store.notes.first(where: { $0.id == id })
     }
 
-    private var groupedNotes: [LibraryNoteGroup] {
-        var orderedTitles: [String] = []
-        var values: [String: [MeetingNote]] = [:]
+    private var currentGroupingCacheKey: LibraryGroupingCacheKey {
+        LibraryGroupingCacheKey(
+            notes: store.notes,
+            matchingIDs: searchController.matchingIDs,
+            todayOnly: todayOnly
+        )
+    }
 
-        for note in filteredNotes {
-            let title = groupTitle(for: note.startedAt)
-            if values[title] == nil {
-                orderedTitles.append(title)
-            }
-            values[title, default: []].append(note)
-        }
-        return orderedTitles.map {
-            LibraryNoteGroup(title: $0, notes: values[$0] ?? [])
-        }
+    /// Redoes the filter-and-group pass, but only when
+    /// `currentGroupingCacheKey` no longer matches what it was last computed
+    /// from. Called from `.onChange(of: currentGroupingCacheKey)`, so a tick
+    /// that changes none of the key's inputs never reaches this.
+    private func refreshLibraryCacheIfNeeded() {
+        let key = currentGroupingCacheKey
+        guard key != groupingCacheKey else { return }
+        groupingCacheKey = key
+        let filtered = LibraryNoteGrouping.filter(
+            store.notes,
+            todayOnly: todayOnly,
+            matchingIDs: searchController.matchingIDs
+        )
+        cachedFilteredNotes = filtered
+        cachedGroupedNotes = LibraryNoteGrouping.group(filtered)
     }
 
     private var presentsLiveActivity: Bool {
-        switch meeting.phase {
-        case .recording, .processing, .failed:
-            true
-        case .idle, .detected, .completed:
-            false
-        }
+        currentPhase.presentsLiveActivity
     }
 
     var body: some View {
@@ -145,6 +277,10 @@ struct LibraryView: View {
         }
         .tint(NookPalette.accent)
         .background {
+            // See `MeetingPhaseObserver`: this is the only place in the view
+            // that subscribes to the coordinator, so meter ticks land here
+            // instead of on the sidebar's grouping and filtering.
+            MeetingPhaseObserver(phase: $currentPhase)
             // A hidden accelerator so ⌘K reaches the palette from anywhere in
             // the window, toolbar focus included.
             Button("Command Palette") { showsCommandPalette = true }
@@ -182,41 +318,7 @@ struct LibraryView: View {
                 }
                 .help("Compile this week's meetings into one note")
 
-                if meeting.phase.isRecording {
-                    Button {
-                        meeting.togglePause()
-                    } label: {
-                        Label(
-                            meeting.isPaused ? "Resume" : "Pause",
-                            systemImage: meeting.isPaused
-                                ? "play.fill"
-                                : "pause.fill"
-                        )
-                    }
-                    .disabled(meeting.pauseTransitionInFlight)
-
-                    Button {
-                        meeting.stopRecording()
-                    } label: {
-                        Label("Finish", systemImage: "stop.fill")
-                    }
-                    .foregroundStyle(NookPalette.danger)
-                    .disabled(meeting.pauseTransitionInFlight)
-                    .help("Stop recording and create notes")
-                } else {
-                    Menu {
-                        ForEach(NoteTemplate.allCases) { template in
-                            Button(template.menuTitle) {
-                                createNote(from: template)
-                            }
-                        }
-                    } label: {
-                        Label("New note", systemImage: "square.and.pencil")
-                    }
-                    .disabled(isProcessing)
-                    .keyboardShortcut("n", modifiers: .command)
-                    .help("Create a local note from a starting point")
-                }
+                LibraryRecordingToolbar(createNote: createNote)
             }
         }
         .overlay(alignment: .top) {
@@ -229,8 +331,12 @@ struct LibraryView: View {
         .onAppear {
             store.reload()
             searchController.update(query: searchText, notes: store.notes)
+            refreshLibraryCacheIfNeeded()
             chooseInitialSelection()
             Task { await openActions.refresh(store: store) }
+        }
+        .onChange(of: currentGroupingCacheKey) { _, _ in
+            refreshLibraryCacheIfNeeded()
         }
         .onChange(of: store.notes) { _, _ in
             Task { await openActions.refresh(store: store) }
@@ -278,7 +384,7 @@ struct LibraryView: View {
         .onChange(of: searchController.matchingIDs) { _, _ in
             synchronizeSelectionWithSearch()
         }
-        .onChange(of: meeting.phase) { _, phase in
+        .onChange(of: currentPhase) { _, phase in
             withAnimation(reduceMotion ? nil : .smooth(duration: 0.34)) {
                 switch phase {
                 case .recording, .processing, .failed:
@@ -389,24 +495,7 @@ struct LibraryView: View {
             prepSection
             openActionsSection
 
-            if presentsLiveActivity {
-                Section {
-                    LiveSidebarRow(
-                        phase: meeting.phase,
-                        elapsed: meeting.elapsed,
-                        isPaused: meeting.isPaused,
-                        isSelected: selection == .live
-                    )
-                    .tag(LibrarySelection.live)
-                    .listRowBackground(
-                        selection == .live
-                            ? NookPalette.sidebarSelection
-                            : Color.clear
-                    )
-                } header: {
-                    sidebarSectionHeader("Now")
-                }
-            }
+            LibraryLiveSection(selection: selection)
 
             if let lastError = store.lastError {
                 Section("Library status") {
@@ -494,10 +583,10 @@ struct LibraryView: View {
                             if note.kind != .digest {
                                 Divider()
                                 Button("Record into this note") {
-                                    meeting.continueRecording(into: note)
+                                    AppModel.shared.meeting.continueRecording(into: note)
                                 }
                                 .disabled(
-                                    meeting.phase.isRecording || isProcessing
+                                    currentPhase.isRecording || isProcessing
                                 )
                                 .help(
                                     "Appends the next recording to this note instead of creating a new one"
@@ -539,10 +628,7 @@ struct LibraryView: View {
     }
 
     private func sidebarSectionHeader(_ title: String) -> some View {
-        Text(title)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(Color(nsColor: .secondaryLabelColor))
-            .textCase(nil)
+        librarySidebarSectionHeader(title)
     }
 
     /// A section header that folds its own section away.
@@ -713,7 +799,11 @@ struct LibraryView: View {
                 // Thu 7:34 PM". Withheld while a recording is already
                 // running, which is the one case the coordinator refuses.
                 onRecordSitting: canStartRecording
-                    ? { meeting.startCalendarMeeting(title: brief.eventTitle) }
+                    ? {
+                        AppModel.shared.meeting.startCalendarMeeting(
+                            title: brief.eventTitle
+                        )
+                    }
                     : nil
             )
         } else if let selectedNote {
@@ -721,7 +811,7 @@ struct LibraryView: View {
                 .id(selectedNote.id)
         } else {
             EmptyLibraryView {
-                meeting.startManualMeeting()
+                AppModel.shared.meeting.startManualMeeting()
             }
         }
     }
@@ -759,12 +849,12 @@ struct LibraryView: View {
     }
 
     private var isProcessing: Bool {
-        if case .processing = meeting.phase { return true }
+        if case .processing = currentPhase { return true }
         return false
     }
 
     private var canStartRecording: Bool {
-        !meeting.phase.isRecording && !isProcessing
+        !currentPhase.isRecording && !isProcessing
     }
 
     /// Changes what the detail pane shows, after settling what the pane it is
@@ -786,7 +876,11 @@ struct LibraryView: View {
         switch LibraryLeaveGuard.decide(
             hasMarkdownChanges: markdownDraft.hasChanges
                 && markdownDraft.noteID == selectedID,
-            hasPersonalNotesChanges: personalNotesDraft.hasChanges
+            // Not `hasChanges`: a parked draft belongs to whichever note
+            // refused it, which may not be `selectedID` at all, so leaving
+            // must account for it explicitly rather than only for what is
+            // live in the field right now.
+            hasPersonalNotesChanges: personalNotesDraft.hasUnwrittenNotes
         ) {
         case .leave:
             selection = requestedSelection
@@ -879,27 +973,6 @@ struct LibraryView: View {
         } catch {
             store.lastError = error.localizedDescription
         }
-    }
-
-    private func groupTitle(for date: Date) -> String {
-        let calendar = Calendar.autoupdatingCurrent
-        if calendar.isDateInToday(date) {
-            return "Today"
-        }
-        if calendar.isDateInYesterday(date) {
-            return "Yesterday"
-        }
-        if let currentWeek = calendar.dateInterval(
-            of: .weekOfYear,
-            for: Date()
-        ), currentWeek.contains(date) {
-            return "This week"
-        }
-        return date.formatted(
-            .dateTime
-                .month(.wide)
-                .year()
-        )
     }
 
     /// Compiles the week's meetings into one digest note and opens it.
@@ -1000,12 +1073,19 @@ struct LibraryView: View {
         }
     }
 
+    /// Picks a note when there is nothing else to show yet.
+    ///
+    /// Deliberately does not check `presentsLiveActivity` here: at the
+    /// moment this runs, `MeetingPhaseObserver` may not have synced
+    /// `currentPhase` from the coordinator yet, and reading it early would
+    /// race. If a meeting really is already live, the observer's own
+    /// `onAppear` sets `currentPhase` moments later, which is itself a
+    /// change from its `.idle` default and fires
+    /// `.onChange(of: currentPhase)` below, moving the selection to `.live`
+    /// exactly the way any later phase transition does.
     private func chooseInitialSelection() {
-        if presentsLiveActivity {
-            selection = .live
-        } else if selection == nil {
-            selection = restoredOrFirstSelection(in: store.notes)
-        }
+        guard selection == nil else { return }
+        selection = restoredOrFirstSelection(in: store.notes)
     }
 
     private func restoredOrFirstSelection(
@@ -1018,6 +1098,120 @@ struct LibraryView: View {
         }
         return notes.first.map { .note($0.id) }
     }
+}
+
+/// Mirrors only `meeting.phase` into a plain `@State` value on `LibraryView`.
+///
+/// `MeetingCoordinator` is one `ObservableObject` that publishes phase
+/// alongside audio level (up to ~12 Hz) and live transcript (up to ~10 Hz)
+/// while a meeting records. Holding `@EnvironmentObject` directly on
+/// `LibraryView` subscribes to all of that at once, since Combine's
+/// `objectWillChange` does not distinguish which published property
+/// changed: every tick would invalidate the whole view, including the
+/// sidebar's note grouping and filtering, for a phase that changes only a
+/// handful of times per meeting. This bridge is the one place that pays the
+/// tick rate; its own body does nothing but compare and store a value, so
+/// the cost of absorbing those ticks here is negligible.
+private struct MeetingPhaseObserver: View {
+    @EnvironmentObject private var meeting: MeetingCoordinator
+    @Binding var phase: MeetingPhase
+
+    var body: some View {
+        Color.clear
+            .onAppear { phase = meeting.phase }
+            .onChange(of: meeting.phase) { _, newValue in phase = newValue }
+    }
+}
+
+/// The toolbar's recording controls, isolated into their own view so only
+/// this small piece re-renders on the coordinator's meter ticks; `LibraryView`
+/// itself no longer holds `MeetingCoordinator` at all (see
+/// `MeetingPhaseObserver`).
+private struct LibraryRecordingToolbar: View {
+    @EnvironmentObject private var meeting: MeetingCoordinator
+    let createNote: (NoteTemplate) -> Void
+
+    var body: some View {
+        if meeting.phase.isRecording {
+            Button {
+                meeting.togglePause()
+            } label: {
+                Label(
+                    meeting.isPaused ? "Resume" : "Pause",
+                    systemImage: meeting.isPaused
+                        ? "play.fill"
+                        : "pause.fill"
+                )
+            }
+            .disabled(meeting.pauseTransitionInFlight)
+
+            Button {
+                meeting.stopRecording()
+            } label: {
+                Label("Finish", systemImage: "stop.fill")
+            }
+            .foregroundStyle(NookPalette.danger)
+            .disabled(meeting.pauseTransitionInFlight)
+            .help("Stop recording and create notes")
+        } else {
+            Menu {
+                ForEach(NoteTemplate.allCases) { template in
+                    Button(template.menuTitle) {
+                        createNote(template)
+                    }
+                }
+            } label: {
+                Label("New note", systemImage: "square.and.pencil")
+            }
+            .disabled(isProcessing)
+            .keyboardShortcut("n", modifiers: .command)
+            .help("Create a local note from a starting point")
+        }
+    }
+
+    private var isProcessing: Bool {
+        if case .processing = meeting.phase { return true }
+        return false
+    }
+}
+
+/// The sidebar's "Now" row, isolated into its own view so only this small
+/// section re-renders on the coordinator's meter ticks (elapsed at ~1 Hz,
+/// audio level at up to ~12 Hz while recording) instead of the sidebar's
+/// note grouping and filtering above it.
+private struct LibraryLiveSection: View {
+    @EnvironmentObject private var meeting: MeetingCoordinator
+    let selection: LibrarySelection?
+
+    var body: some View {
+        if meeting.phase.presentsLiveActivity {
+            Section {
+                LiveSidebarRow(
+                    phase: meeting.phase,
+                    elapsed: meeting.elapsed,
+                    isPaused: meeting.isPaused,
+                    isSelected: selection == .live
+                )
+                .tag(LibrarySelection.live)
+                .listRowBackground(
+                    selection == .live
+                        ? NookPalette.sidebarSelection
+                        : Color.clear
+                )
+            } header: {
+                librarySidebarSectionHeader("Now")
+            }
+        }
+    }
+}
+
+/// Shared header styling for `LibraryView`'s own sections and for
+/// `LibraryLiveSection`, which cannot call a private method on the view.
+private func librarySidebarSectionHeader(_ title: String) -> some View {
+    Text(title)
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+        .textCase(nil)
 }
 
 private struct MeetingRow: View {

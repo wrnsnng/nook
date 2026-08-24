@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Testing
 @testable import Nook
@@ -75,6 +76,39 @@ struct NoteCombinerTests {
                 )
             ]
         )
+    }
+
+    /// Writes a short, real recording.
+    ///
+    /// Arbitrary bytes with an `.m4a` name are not a stand-in any more: the
+    /// merge asks how long a recording is before it will adopt or join it, and
+    /// a file it cannot measure is a different case with different correct
+    /// behaviour. Tests that mean "an unreadable recording" still write bytes.
+    private func writeRecording(seconds: Double, to url: URL) throws {
+        struct CouldNotWriteAudio: Error {}
+        guard
+            let format = AVAudioFormat(
+                standardFormatWithSampleRate: 44_100,
+                channels: 1
+            ),
+            let buffer = AVAudioPCMBuffer(
+                pcmFormat: format,
+                frameCapacity: AVAudioFrameCount(44_100 * seconds)
+            )
+        else {
+            throw CouldNotWriteAudio()
+        }
+        buffer.frameLength = buffer.frameCapacity
+        // Silence: nothing here listens, it only measures.
+        let file = try AVAudioFile(
+            forWriting: url,
+            settings: [
+                AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVSampleRateKey: 44_100,
+                AVNumberOfChannelsKey: 1
+            ]
+        )
+        try file.write(from: buffer)
     }
 
     /// Runs the three steps the library performs around a merge, in order.
@@ -180,7 +214,8 @@ struct NoteCombinerTests {
         let recordings = store.recordingsDirectory()
         let incomingAudio = recordings
             .appendingPathComponent("\(newer.id.uuidString).m4a")
-        try Data("second sitting audio".utf8).write(to: incomingAudio)
+        try writeRecording(seconds: 1, to: incomingAudio)
+        let incomingBytes = try Data(contentsOf: incomingAudio)
 
         let result = try await NoteCombiner.merge(
             newer,
@@ -194,9 +229,89 @@ struct NoteCombinerTests {
         let adopted = recordings.appendingPathComponent("\(older.id.uuidString).m4a")
         #expect(FileManager.default.fileExists(atPath: adopted.path))
         #expect(!FileManager.default.fileExists(atPath: incomingAudio.path))
-        #expect(
-            try String(contentsOf: adopted, encoding: .utf8) == "second sitting audio"
+        #expect(try Data(contentsOf: adopted) == incomingBytes)
+    }
+
+    @Test
+    func aRecordingTheMergeCannotReadIsNeverAdoptedAsTheNotesAudio() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+
+        let older = try store.save(
+            note(title: "Kickoff", startedAt: 1_000_000, text: "First sitting.")
         )
+        let newer = try store.save(
+            note(title: "Kickoff again", startedAt: 1_100_000, text: "Second sitting.")
+        )
+        let recordings = store.recordingsDirectory()
+        // The surviving note has no audio at all, and what the other one has
+        // cannot be measured, so there is nothing worth adopting.
+        let incomingAudio = recordings
+            .appendingPathComponent("\(newer.id.uuidString).m4a")
+        try Data("truncated".utf8).write(to: incomingAudio)
+
+        let result = try await NoteCombiner.merge(
+            newer,
+            into: older,
+            recordingsDirectory: recordings,
+            summarizer: FixedSummarizer()
+        )
+        #expect(result.audioOutcome == .none)
+        _ = try await applyMerge(result, in: store)
+
+        let adopted = recordings
+            .appendingPathComponent("\(older.id.uuidString).m4a")
+        #expect(!FileManager.default.fileExists(atPath: adopted.path))
+        // Its note is in the Trash now, so leaving it under an identifier no
+        // note claims would strand it in the recordings folder forever. It is
+        // set aside the same way an unreadable recording on the other side is.
+        #expect(!FileManager.default.fileExists(atPath: incomingAudio.path))
+        let leftovers = try FileManager.default.contentsOfDirectory(
+            at: recordings,
+            includingPropertiesForKeys: nil
+        )
+        if let movedAside = leftovers.first(
+            where: { $0.lastPathComponent.contains("unreadable-") }
+        ) {
+            #expect(try String(contentsOf: movedAside, encoding: .utf8) == "truncated")
+        }
+    }
+
+    @Test
+    func joiningBothRecordingsDoesNotLeaveTheOtherCopyBehind() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+
+        let older = try store.save(
+            note(title: "Kickoff", startedAt: 1_000_000, text: "First sitting.")
+        )
+        let newer = try store.save(
+            note(title: "Kickoff again", startedAt: 1_100_000, text: "Second sitting.")
+        )
+        let recordings = store.recordingsDirectory()
+        let baseAudio = recordings
+            .appendingPathComponent("\(older.id.uuidString).m4a")
+        let incomingAudio = recordings
+            .appendingPathComponent("\(newer.id.uuidString).m4a")
+        try writeRecording(seconds: 1, to: baseAudio)
+        try writeRecording(seconds: 1, to: incomingAudio)
+
+        let result = try await NoteCombiner.merge(
+            newer,
+            into: older,
+            recordingsDirectory: recordings,
+            summarizer: FixedSummarizer()
+        )
+        #expect(result.audioOutcome == .concatenated)
+        _ = try await applyMerge(result, in: store)
+
+        // Every second of it is in the joined file and the note it came from
+        // is in the Trash, so a copy left here is a whole duplicate recording
+        // nothing will ever offer back or clean up.
+        #expect(FileManager.default.fileExists(atPath: baseAudio.path))
+        #expect(!FileManager.default.fileExists(atPath: incomingAudio.path))
     }
 
     @Test
@@ -212,14 +327,15 @@ struct NoteCombinerTests {
             note(title: "Kickoff again", startedAt: 1_100_000, text: "Second sitting.")
         )
         let recordings = store.recordingsDirectory()
-        // Neither file is real audio, so the base recording cannot be measured
-        // and the merge has to decide what to do with it.
+        // The base recording is not real audio, so it cannot be measured and
+        // the merge has to decide what to do with it.
         let baseAudio = recordings
             .appendingPathComponent("\(older.id.uuidString).m4a")
         let incomingAudio = recordings
             .appendingPathComponent("\(newer.id.uuidString).m4a")
         try Data("truncated".utf8).write(to: baseAudio)
-        try Data("second sitting audio".utf8).write(to: incomingAudio)
+        try writeRecording(seconds: 1, to: incomingAudio)
+        let incomingBytes = try Data(contentsOf: incomingAudio)
 
         let result = try await NoteCombiner.merge(
             newer,
@@ -230,9 +346,7 @@ struct NoteCombinerTests {
         #expect(result.audioOutcome == .adoptedFromAbsorbed)
         _ = try await applyMerge(result, in: store)
 
-        #expect(
-            try String(contentsOf: baseAudio, encoding: .utf8) == "second sitting audio"
-        )
+        #expect(try Data(contentsOf: baseAudio) == incomingBytes)
         // Trashing is what usually happens, and the Finder holds the original
         // then. A volume without a Trash gets the rename instead, and the
         // original bytes have to still be there under it.

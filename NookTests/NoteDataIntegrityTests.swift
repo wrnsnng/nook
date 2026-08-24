@@ -351,6 +351,45 @@ struct SpokenNoteBodyTests {
         #expect(written.contains("Open with the demo, then the numbers."))
         #expect(store.lastError != nil)
     }
+
+    @Test
+    @MainActor
+    func clearingTheOnlyNotesATemplateHasIsAnEditAndNotAGap() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "NookEmptyGuard-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = MarkdownStore(noteLoader: { _, _ in
+            .success((notes: [], issues: []))
+        })
+        store.storageURL = directory
+
+        // A blank template has no summary, no items, and no transcript, so its
+        // personal notes are the only content it will ever have.
+        let note = try store.createTemplatedNote(from: .blank)
+        let written = try store.updatePersonalNotes(
+            "A thought I typed here.",
+            for: note
+        )
+
+        // Select all, delete. The user meant it.
+        let cleared = try store.updatePersonalNotes("", for: written)
+
+        #expect(cleared.personalNotes.isEmpty)
+        let onDisk = try String(
+            contentsOf: try #require(cleared.fileURL),
+            encoding: .utf8
+        )
+        #expect(!onDisk.contains("A thought I typed here."))
+        #expect(store.lastError == nil)
+    }
 }
 
 /// One note belongs in one file. Deriving the destination from the title again

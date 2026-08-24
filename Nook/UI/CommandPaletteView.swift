@@ -73,6 +73,14 @@ struct CommandPaletteView: View {
 
     @State private var query = ""
     @State private var selectedIndex = 0
+    /// The sections as of the last refresh. `sections` used to be computed
+    /// straight in the body, lowercasing every note on every hover
+    /// (`selectedIndex` is `@State`, so a hover invalidated the view) and on
+    /// every tick the coordinator publishes while the palette happens to be
+    /// open during a recording. Recomputed only from `refreshSections()`,
+    /// called when the query, the notes, or whether a meeting is recording
+    /// actually changes.
+    @State private var cachedSections: [CommandPaletteSection] = []
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -141,9 +149,17 @@ struct CommandPaletteView: View {
         .onExitCommand { isPresented = false }
         .onAppear {
             selectedIndex = 0
+            refreshSections()
         }
         .onChange(of: query) { _, _ in
             selectedIndex = 0
+            refreshSections()
+        }
+        .onChange(of: store.notes) { _, _ in
+            refreshSections()
+        }
+        .onChange(of: meeting.phase) { _, _ in
+            refreshSections()
         }
         .accessibilityLabel("Command palette")
     }
@@ -300,7 +316,19 @@ struct CommandPaletteView: View {
 
     // MARK: - Items
 
-    private var sections: [CommandPaletteSection] {
+    /// The sections as of the last `refreshSections()` call. See
+    /// `cachedSections`.
+    private var sections: [CommandPaletteSection] { cachedSections }
+
+    /// Redoes the query match, the note search, and the open-actions list.
+    /// Called from `refreshSections()`'s call sites rather than from `body`,
+    /// so a hover or a meter tick that changes none of the query, the notes,
+    /// or the recording state does not lowercase and filter every note again.
+    private func refreshSections() {
+        cachedSections = computeSections()
+    }
+
+    private func computeSections() -> [CommandPaletteSection] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
             .localizedLowercase
 

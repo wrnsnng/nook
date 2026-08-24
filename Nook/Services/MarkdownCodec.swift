@@ -811,12 +811,19 @@ extension MarkdownCodec {
     /// Without this, a hand-written "## Agenda" and any prose sitting inside a
     /// list section vanished the next time anything saved the whole note,
     /// because encoding rebuilds the document from the fields alone.
+    ///
+    /// A recognised heading that appears a second time is one of those, not a
+    /// section Nook wrote. Every field reader takes the first block only, so a
+    /// pasted-in "## Summary" or an assistant's appended one used to be read
+    /// by nobody and deleted by the next save. It is kept verbatim, heading and
+    /// all, anchored where it was written.
     static func preservedSections(in blocks: [BodyBlock]) -> [ExtraSection] {
         var extras: [ExtraSection] = []
         var anchor: String?
         // Summary and My notes keep their own sub-headings as part of their
         // text, so those blocks are already accounted for.
         var anchorKeepsItsSubheadings = false
+        var seenRecognizedHeadings: Set<String> = []
 
         for block in blocks {
             guard let normalized = block.normalizedHeading else {
@@ -830,7 +837,8 @@ extension MarkdownCodec {
                 }
                 continue
             }
-            if recognizedHeadings.contains(normalized) {
+            if recognizedHeadings.contains(normalized),
+               seenRecognizedHeadings.insert(normalized).inserted {
                 anchor = normalized
                 anchorKeepsItsSubheadings = normalized == "## summary"
                     || normalized == "## my notes"
@@ -844,6 +852,12 @@ extension MarkdownCodec {
                     )
                 }
                 continue
+            }
+            // A repeat ends the prose the anchor was still absorbing: the
+            // section readers stop at it, so anything after it would otherwise
+            // be swallowed into a field that never reads it.
+            if recognizedHeadings.contains(normalized) {
+                anchorKeepsItsSubheadings = false
             }
             guard !anchorKeepsItsSubheadings else { continue }
             extras.append(

@@ -122,6 +122,8 @@ private struct PlainNotesTextView: NSViewRepresentable {
         insertionPort?.textView = textView
 
         configure(textView)
+        context.coordinator.appliedFontSize = fontSize
+        context.coordinator.appliedLineSpacing = lineSpacing
         textView.string = text
         return scrollView
     }
@@ -131,7 +133,20 @@ private struct PlainNotesTextView: NSViewRepresentable {
         guard let textView = scrollView.documentView as? NSTextView else {
             return
         }
-        configure(textView)
+        // SwiftUI calls this on every update to the view, including ones
+        // that have nothing to do with styling: a keystroke elsewhere in the
+        // window, or (for the editors bound to `MeetingCoordinator`) an
+        // audio-level or elapsed-time tick while a meeting records. Font size
+        // and line spacing are fixed per call site, so re-applying them to
+        // the whole text storage on every one of those updates was an
+        // O(document length) rewrite for nothing; only redo it when one of
+        // the two inputs that actually changes the styling has changed.
+        if context.coordinator.appliedFontSize != fontSize
+            || context.coordinator.appliedLineSpacing != lineSpacing {
+            configure(textView)
+            context.coordinator.appliedFontSize = fontSize
+            context.coordinator.appliedLineSpacing = lineSpacing
+        }
         textView.isEditable = isEditable
         if textView.string != text {
             let selection = textView.selectedRange()
@@ -195,6 +210,11 @@ private struct PlainNotesTextView: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: PlainNotesTextView
         weak var textView: NSTextView?
+        /// The font size and line spacing last written into the text view,
+        /// so `updateNSView` can tell a styling change from an unrelated one
+        /// without re-applying attributes to find out. See `updateNSView`.
+        var appliedFontSize: CGFloat?
+        var appliedLineSpacing: CGFloat?
 
         init(parent: PlainNotesTextView) {
             self.parent = parent

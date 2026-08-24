@@ -41,6 +41,60 @@ struct LibraryAnswerTests {
         }
     }
 
+    /// Counts every passage it is asked to embed, and takes long enough per
+    /// passage that a cancellation lands partway through a large library.
+    private final class CountingEmbedding:
+        LibraryAnswerService.TextEmbeddingProvider, @unchecked Sendable
+    {
+        private let lock = NSLock()
+        private var embedded = 0
+
+        var count: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return embedded
+        }
+
+        func vector(for text: String) -> [Double]? {
+            lock.lock()
+            embedded += 1
+            lock.unlock()
+            Thread.sleep(forTimeInterval: 0.005)
+            return [1, 0]
+        }
+    }
+
+    /// Abandoning a question has to stop the work it started, not merely
+    /// ignore the answer. Ranking runs on a detached task, and a detached task
+    /// inherits no cancellation, so every abandoned question used to embed the
+    /// whole library and then run a full model pass nobody would read.
+    @Test
+    func abandoningAQuestionStopsTheWorkItStarted() async throws {
+        let embedding = CountingEmbedding()
+        let service = LibraryAnswerService(
+            embedding: embedding,
+            cacheURL: URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("nook-ask-cancel-\(UUID().uuidString).json")
+        )
+        let notes = (0..<400).map { index in
+            MeetingNote(
+                title: "Meeting \(index)",
+                startedAt: Date(timeIntervalSince1970: 1_780_000_000),
+                endedAt: Date(timeIntervalSince1970: 1_780_003_600),
+                sourceApp: "Zoom",
+                summary: "Passage number \(index) about the pricing page."
+            )
+        }
+
+        let asking = Task { await service.answer(question: "pricing", notes: notes) }
+        try await Task.sleep(for: .milliseconds(120))
+        asking.cancel()
+        _ = await asking.value
+
+        // Well short of the library: ranking stopped where it was told to.
+        #expect(embedding.count < notes.count)
+    }
+
     @Test
     func rankingPutsTheClosestPassageFirst() async throws {
         let chunks = [

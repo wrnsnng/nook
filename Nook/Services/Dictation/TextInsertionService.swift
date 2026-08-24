@@ -43,6 +43,10 @@ final class TextInsertionService {
         case streaming
         /// One insertion at the end, via the pasteboard.
         case pasteOnly
+        /// The run started in a password field. Nothing is typed there and
+        /// nothing is written to a note either: speech aimed at a secure field
+        /// is a secret, and a note is a file on disk.
+        case secureField
         /// Focus is somewhere that cannot take text — a list, a button, the
         /// desktop. Pasting here would fire ⌘V at whatever happens to be in
         /// front, so the words go to a note instead.
@@ -107,22 +111,55 @@ final class TextInsertionService {
         lastInspection = describe(focused)
         #endif
 
-        if supportsDirectWriting(focused) {
+        let capability = Self.runCapability(
+            focusIsSecure: isSecureField(focused),
+            supportsDirectWriting: supportsDirectWriting(focused),
+            acceptsText: acceptsText(focused)
+        )
+        switch capability {
+        case .streaming, .pasteOnly:
             element = focused
-            return .streaming
+        case .secureField, .noTextField, .unavailable:
+            break
         }
+        return capability
+    }
+
+    /// What a run may do, given what the element focus is on reports.
+    ///
+    /// Kept pure and separate from the accessibility reads for the same reason
+    /// `pasteRefusal` is: a test process has no accessibility tree to focus
+    /// anything in, and this is the rule that decides where somebody's speech
+    /// is allowed to go.
+    /// The two mechanism checks are autoclosures so a run that streams does
+    /// not also pay for the several accessibility reads `acceptsText` makes.
+    nonisolated static func runCapability(
+        focusIsSecure: Bool,
+        supportsDirectWriting: @autoclosure () -> Bool,
+        acceptsText: @autoclosure () -> Bool
+    ) -> Capability {
+        // Secure comes first, before either delivery mechanism is considered.
+        // The paste path has always refused a password field; the direct-write
+        // path never asked, so a run that began in one streamed the user's
+        // spoken password straight into it.
+        if focusIsSecure { return .secureField }
+        if supportsDirectWriting() { return .streaming }
         // Not directly writable. Pasting is worth trying only where the focus
         // could plausibly accept text — otherwise ⌘V lands somewhere arbitrary
         // and may trigger whatever that app binds paste to.
-        guard acceptsText(focused) else { return .noTextField }
-        element = focused
-        return .pasteOnly
+        return acceptsText() ? .pasteOnly : .noTextField
     }
 
     /// Appends finalized text at the caret. Streaming runs only.
     @discardableResult
     func append(_ text: String) -> Bool {
         guard !text.isEmpty, let element else { return false }
+        // Re-read rather than trusted from the start of the run. It is one
+        // attribute copy against an element already in hand, which is nothing
+        // beside recognising a sentence, and it is the last check standing
+        // between spoken text and a password field whose subrole was
+        // unreadable when the run began.
+        guard !isSecureField(element) else { return false }
 
         let before = selectedRange(of: element)
         guard setValue(text as CFString, for: kAXSelectedTextAttribute, on: element) else {

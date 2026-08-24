@@ -345,6 +345,149 @@ struct FailedStopDiscoveryTests {
     }
 }
 
+/// Adopting a session recording as a note's audio is two moves, not one: the
+/// old file is renamed out of the way, then the new one takes its place. The
+/// window between them is where a recording can go missing, so what happens
+/// when the second move fails is the whole behaviour.
+struct AdoptedAudioRecoveryTests {
+    private let prior = URL(fileURLWithPath: "/recordings/note.m4a")
+    private let session = URL(fileURLWithPath: "/recordings/session.m4a")
+    private let aside = URL(fileURLWithPath: "/recordings/note-unreadable-x.m4a")
+    private let recoverable = URL(fileURLWithPath: "/recordings/fresh-id.m4a")
+
+    private struct MoveFailed: Error {}
+
+    /// Records every move attempted, and fails the ones named.
+    private final class Moves {
+        private(set) var attempted: [String] = []
+        var failing: Set<String> = []
+
+        func move(_ from: URL, _ to: URL) throws {
+            let step = "\(from.lastPathComponent)->\(to.lastPathComponent)"
+            attempted.append(step)
+            if failing.contains(step) { throw MoveFailed() }
+        }
+    }
+
+    @Test
+    func theOrdinaryCaseSetsTheOldFileAsideAndMovesTheNewOneIn() throws {
+        let moves = Moves()
+        try MeetingCoordinator.adoptSessionAudio(
+            priorExists: true,
+            priorAudioURL: prior,
+            sessionAudioURL: session,
+            asideURL: aside,
+            recoverableURL: recoverable,
+            move: moves.move
+        )
+        #expect(
+            moves.attempted == [
+                "note.m4a->note-unreadable-x.m4a",
+                "session.m4a->note.m4a"
+            ]
+        )
+    }
+
+    @Test
+    func aFailedMoveInPutsTheNotesOwnAudioBack() {
+        let moves = Moves()
+        moves.failing = ["session.m4a->note.m4a"]
+
+        // The failure is still reported: this sitting's audio did not land.
+        #expect(throws: MoveFailed.self) {
+            try MeetingCoordinator.adoptSessionAudio(
+                priorExists: true,
+                priorAudioURL: prior,
+                sessionAudioURL: session,
+                asideURL: aside,
+                recoverableURL: recoverable,
+                move: moves.move
+            )
+        }
+        // The note keeps exactly the audio it had, rather than pointing at a
+        // path with nothing in it while its recording sits under a name the
+        // orphan scan is written to ignore.
+        #expect(moves.attempted.last == "note-unreadable-x.m4a->note.m4a")
+    }
+
+    @Test
+    func audioThatCannotGoBackIsGivenANameTheRecoveryScanLists() {
+        let moves = Moves()
+        moves.failing = [
+            "session.m4a->note.m4a",
+            "note-unreadable-x.m4a->note.m4a"
+        ]
+
+        var stranded: KeptAudioStranded?
+        do {
+            try MeetingCoordinator.adoptSessionAudio(
+                priorExists: true,
+                priorAudioURL: prior,
+                sessionAudioURL: session,
+                asideURL: aside,
+                recoverableURL: recoverable,
+                move: moves.move
+            )
+        } catch let error as KeptAudioStranded {
+            stranded = error
+        } catch {
+            Issue.record("Expected the stranded audio to be reported.")
+        }
+
+        #expect(stranded?.strandedURL == recoverable)
+        #expect(stranded?.isListedByRecoveryScan == true)
+    }
+
+    @Test
+    func audioThatCannotBeMovedAtAllIsNamedToTheUser() {
+        let moves = Moves()
+        moves.failing = [
+            "session.m4a->note.m4a",
+            "note-unreadable-x.m4a->note.m4a",
+            "note-unreadable-x.m4a->fresh-id.m4a"
+        ]
+
+        var stranded: KeptAudioStranded?
+        do {
+            try MeetingCoordinator.adoptSessionAudio(
+                priorExists: true,
+                priorAudioURL: prior,
+                sessionAudioURL: session,
+                asideURL: aside,
+                recoverableURL: recoverable,
+                move: moves.move
+            )
+        } catch let error as KeptAudioStranded {
+            stranded = error
+        } catch {
+            Issue.record("Expected the stranded audio to be reported.")
+        }
+
+        // Nothing lists this name, so the notice is the only way the user
+        // hears where their earlier audio went.
+        #expect(stranded?.strandedURL == aside)
+        #expect(stranded?.isListedByRecoveryScan == false)
+    }
+
+    @Test
+    func aNoteWithNoAudioOfItsOwnHasNothingToPutBack() {
+        let moves = Moves()
+        moves.failing = ["session.m4a->note.m4a"]
+
+        #expect(throws: MoveFailed.self) {
+            try MeetingCoordinator.adoptSessionAudio(
+                priorExists: false,
+                priorAudioURL: prior,
+                sessionAudioURL: session,
+                asideURL: aside,
+                recoverableURL: recoverable,
+                move: moves.move
+            )
+        }
+        #expect(moves.attempted == ["session.m4a->note.m4a"])
+    }
+}
+
 /// Recordings kept after a failure must be findable again. Keeping audio the
 /// user can never see would trade a rare catastrophe for a quiet one.
 @MainActor

@@ -15,6 +15,9 @@ enum NookEventLog {
         case captureStoppedUnexpectedly = "capture.stopped-unexpectedly"
         case capturePauseFinalizationUnconfirmed = "capture.pause-finalization-unconfirmed"
         case dictationFailed = "dictation.failed"
+        // Adopting a session recording renamed the note's old audio aside and
+        // then could neither move the new file in nor put the old one back.
+        case keptAudioStranded = "audio.kept-stranded"
         case dictationFinished = "dictation.finished"
         case dictationStarted = "dictation.started"
         case meetingProcessingFailed = "meeting.processing-failed"

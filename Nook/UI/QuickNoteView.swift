@@ -8,13 +8,25 @@ struct QuickNoteView: View {
     /// change.
     @State private var dismissedSuggestion: String?
     @State private var showsFilingPicker = false
+    /// The parsed task suggestion for the note's current words, recomputed
+    /// only when `note.text` actually changes. The pad's body also
+    /// re-evaluates on every dictation audio-level tick while listening
+    /// (`isHearing`/`dictation.volatileText`); parsing the whole buffer for a
+    /// due-date cue on each of those, when typing had not happened, was pure
+    /// waste.
+    @State private var cachedSuggestion: QuickCaptureTaskParser.Suggestion?
 
     private var taskSuggestion: QuickCaptureTaskParser.Suggestion? {
-        let candidate = QuickCaptureTaskParser.suggestion(in: note.text)
-        guard let candidate, candidate.paragraph != dismissedSuggestion else {
+        guard let cachedSuggestion,
+              cachedSuggestion.paragraph != dismissedSuggestion
+        else {
             return nil
         }
-        return candidate
+        return cachedSuggestion
+    }
+
+    private func refreshTaskSuggestion() {
+        cachedSuggestion = QuickCaptureTaskParser.suggestion(in: note.text)
     }
 
     /// What is worth saying above the bar right now, at most two things.
@@ -47,8 +59,10 @@ struct QuickNoteView: View {
         .background { closeShortcut }
         // Escape leaves the pad the way every other exit does, by saving.
         .onExitCommand { note.done() }
+        .onAppear { refreshTaskSuggestion() }
         .onChange(of: note.text) { _, _ in
             note.scheduleSave()
+            refreshTaskSuggestion()
         }
         .onChange(of: note.isContinuous) { _, continuous in
             guard note.isFrontmost else { return }

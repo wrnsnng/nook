@@ -27,7 +27,8 @@ enum NoteCombiner {
         /// Both notes' audio was concatenated onto the surviving note's file.
         case concatenated
         /// Only the surviving note had usable kept audio, and it still covers
-        /// only its own material. The other note had none to contribute.
+        /// only its own material. The other note had none to contribute, or
+        /// what it had could not be read.
         case targetOnly
         /// The other note's audio was adopted as the surviving note's audio.
         case adoptedFromAbsorbed
@@ -101,6 +102,15 @@ enum NoteCombiner {
             ? await NoteSessionAppend.audioDuration(of: baseAudioURL)
             : nil
         let hadUsableBaseAudio = baseAudioExists && baseAudioDuration != nil
+        // The incoming side is checked the same way the base side is. Adopting
+        // a file whose duration cannot be read handed the merged note a
+        // recording nothing can play, and did it by overwriting or trashing
+        // the audio the note already had.
+        let incomingAudioDuration = incomingAudioExists
+            ? await NoteSessionAppend.audioDuration(of: incomingAudioURL)
+            : nil
+        let hadUsableIncomingAudio = incomingAudioExists
+            && incomingAudioDuration != nil
 
         // Where the incoming note's timeline begins. Kept-audio length is the
         // authority when it exists; otherwise the transcript extent stands in.
@@ -133,12 +143,17 @@ enum NoteCombiner {
         // below this line fails.
         let audioOutcome: AudioOutcome
         if hadUsableBaseAudio {
-            audioOutcome = incomingAudioExists ? .concatenated : .targetOnly
-        } else if incomingAudioExists {
+            audioOutcome = hadUsableIncomingAudio ? .concatenated : .targetOnly
+        } else if hadUsableIncomingAudio {
             audioOutcome = .adoptedFromAbsorbed
         } else {
             audioOutcome = .none
         }
+        // An incoming recording nobody can read still belongs to somebody. Its
+        // note is about to be trashed, so without this it would sit in the
+        // recordings folder forever under an identifier no note claims.
+        let unreadableIncomingAudio = incomingAudioExists
+            && !hadUsableIncomingAudio
 
         let commitAudio: @Sendable () async throws -> Void = {
             switch audioOutcome {
@@ -155,6 +170,10 @@ enum NoteCombiner {
                     baseAudioURL,
                     withItemAt: combinedTemporaryURL
                 )
+                // The joined file now holds every second of this audio, and
+                // the note it belonged to is about to be trashed, so leaving
+                // the source behind leaks a full duplicate recording.
+                discardMergedSourceAudio(at: incomingAudioURL)
             case .adoptedFromAbsorbed:
                 try setAsideUnusableAudio(at: baseAudioURL)
                 try FileManager.default.moveItem(
@@ -162,7 +181,9 @@ enum NoteCombiner {
                     to: baseAudioURL
                 )
             case .targetOnly, .none:
-                break
+                if unreadableIncomingAudio {
+                    try setAsideUnusableAudio(at: incomingAudioURL)
+                }
             }
         }
 
@@ -244,6 +265,24 @@ enum NoteCombiner {
                     .appendingPathExtension("unreadable-\(stamp)")
                     .appendingPathExtension("m4a")
             )
+        }
+    }
+
+    /// Removes a recording whose every second now lives in another file.
+    ///
+    /// Trashed rather than unlinked, so a merge that turns out to be wrong is
+    /// still undoable from the Finder. A volume without a Trash still must not
+    /// be left holding a duplicate of the merged note's own audio, so the
+    /// unlink is the fallback rather than the first move. Failing to remove it
+    /// is not a failure of the merge: the audio is already safe in the file
+    /// the note points at.
+    private static func discardMergedSourceAudio(at url: URL) {
+        let manager = FileManager.default
+        guard manager.fileExists(atPath: url.path) else { return }
+        do {
+            try manager.trashItem(at: url, resultingItemURL: nil)
+        } catch {
+            try? manager.removeItem(at: url)
         }
     }
 

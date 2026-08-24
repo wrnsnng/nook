@@ -17,20 +17,11 @@ struct FloatingNotesView: View {
 
                 SoftDivider()
 
-                NookNotesEditor(
-                    text: $meeting.liveNotes,
-                    placeholder: "Capture a thought, question, or follow-up…",
+                LiveNotesEditor(
                     isFocused: Binding(
                         get: { editorFocused },
                         set: { editorFocused = $0 }
-                    ),
-                    contentInsets: EdgeInsets(
-                        top: 20,
-                        leading: 23,
-                        bottom: 20,
-                        trailing: 23
-                    ),
-                    lineSpacing: 5
+                    )
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -102,5 +93,33 @@ struct FloatingNotesView: View {
 
     private var elapsedLabel: String {
         NookElapsedTime.clock(meeting.elapsed)
+    }
+}
+
+/// The live-notes editor alone, binding straight to `meeting.liveNotes`.
+///
+/// `FloatingNotesView` itself still needs the coordinator for its header's
+/// elapsed clock, so it cannot avoid observing `MeetingCoordinator`
+/// altogether; pulling the editor out here at least keeps it from being
+/// entangled with the header and the window bridge in one body, and matches
+/// `NookNotesEditor`'s own fix (see its `updateNSView`) that already makes an
+/// audio-level or elapsed tick a no-op for the text view underneath this.
+private struct LiveNotesEditor: View {
+    @EnvironmentObject private var meeting: MeetingCoordinator
+    var isFocused: Binding<Bool>
+
+    var body: some View {
+        NookNotesEditor(
+            text: $meeting.liveNotes,
+            placeholder: "Capture a thought, question, or follow-up…",
+            isFocused: isFocused,
+            contentInsets: EdgeInsets(
+                top: 20,
+                leading: 23,
+                bottom: 20,
+                trailing: 23
+            ),
+            lineSpacing: 5
+        )
     }
 }

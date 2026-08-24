@@ -203,4 +203,175 @@ struct LibraryInterfaceTests {
                 == "You have met once before, 1m total"
         )
     }
+
+    // MARK: - Sidebar grouping
+
+    private func timedNote(_ title: String, startedAt: Date) -> MeetingNote {
+        MeetingNote(
+            title: title,
+            startedAt: startedAt,
+            endedAt: startedAt.addingTimeInterval(1_800),
+            sourceApp: "Zoom",
+            summary: "Talked it through."
+        )
+    }
+
+    @Test
+    func filteringNarrowsToTodayOnlyAndSearchMatches() {
+        let calendar = Calendar.autoupdatingCurrent
+        let now = Date()
+        let today = timedNote("Today's standup", startedAt: now)
+        let yesterday = timedNote(
+            "Yesterday's sync",
+            startedAt: calendar.date(byAdding: .day, value: -1, to: now)!
+        )
+        let notes = [today, yesterday]
+
+        let todayOnly = LibraryNoteGrouping.filter(
+            notes,
+            todayOnly: true,
+            matchingIDs: nil,
+            calendar: calendar
+        )
+        #expect(todayOnly.map(\.id) == [today.id])
+
+        let searched = LibraryNoteGrouping.filter(
+            notes,
+            todayOnly: false,
+            matchingIDs: [yesterday.id]
+        )
+        #expect(searched.map(\.id) == [yesterday.id])
+    }
+
+    @Test
+    func groupingBucketsTodayAndYesterdaySeparatelyFromOlderMeetings() {
+        let calendar = Calendar.autoupdatingCurrent
+        let now = Date()
+        let today = timedNote("Today's standup", startedAt: now)
+        let yesterday = timedNote(
+            "Yesterday's sync",
+            startedAt: calendar.date(byAdding: .day, value: -1, to: now)!
+        )
+        // Far enough back to fall outside "This week" regardless of which
+        // day the current locale's week starts on.
+        let older = timedNote(
+            "Quarterly planning",
+            startedAt: calendar.date(byAdding: .day, value: -400, to: now)!
+        )
+
+        let groups = LibraryNoteGrouping.group(
+            [today, yesterday, older],
+            referenceDate: now,
+            calendar: calendar
+        )
+
+        #expect(groups.map(\.title) == [
+            "Today",
+            "Yesterday",
+            older.startedAt.formatted(.dateTime.month(.wide).year()),
+        ])
+        #expect(
+            groups.map { $0.notes.map(\.id) }
+                == [[today.id], [yesterday.id], [older.id]]
+        )
+    }
+
+    @Test
+    func liveActivityCoversRecordingProcessingAndFailedPhases() {
+        #expect(
+            MeetingPhase.recording(title: "x", startedAt: .now)
+                .presentsLiveActivity
+        )
+        #expect(MeetingPhase.processing(.transcribing).presentsLiveActivity)
+        #expect(MeetingPhase.failed("oops").presentsLiveActivity)
+        #expect(!MeetingPhase.idle.presentsLiveActivity)
+        #expect(!MeetingPhase.completed("done").presentsLiveActivity)
+    }
+
+    // MARK: - Grouping cache key
+
+    @Test
+    func theGroupingCacheKeyIsStableWhenNothingRelevantChanges() {
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let notes = [note("Design weekly", daysAgo: 0)]
+
+        let first = LibraryGroupingCacheKey(
+            notes: notes,
+            matchingIDs: nil,
+            todayOnly: false,
+            now: stamp
+        )
+        let second = LibraryGroupingCacheKey(
+            notes: notes,
+            matchingIDs: nil,
+            todayOnly: false,
+            now: stamp
+        )
+
+        #expect(first == second)
+    }
+
+    @Test
+    func theGroupingCacheKeyChangesWithNotesSearchScopeOrDay() {
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let original = [note("Design weekly", daysAgo: 0)]
+        var withAnotherNote = original
+        withAnotherNote.append(note("Hiring loop", daysAgo: 1))
+
+        let base = LibraryGroupingCacheKey(
+            notes: original,
+            matchingIDs: nil,
+            todayOnly: false,
+            now: stamp
+        )
+
+        #expect(base != LibraryGroupingCacheKey(
+            notes: withAnotherNote,
+            matchingIDs: nil,
+            todayOnly: false,
+            now: stamp
+        ))
+        #expect(base != LibraryGroupingCacheKey(
+            notes: original,
+            matchingIDs: [original[0].id],
+            todayOnly: false,
+            now: stamp
+        ))
+        #expect(base != LibraryGroupingCacheKey(
+            notes: original,
+            matchingIDs: nil,
+            todayOnly: true,
+            now: stamp
+        ))
+        #expect(base != LibraryGroupingCacheKey(
+            notes: original,
+            matchingIDs: nil,
+            todayOnly: false,
+            now: stamp.addingTimeInterval(86_400)
+        ))
+    }
+
+    @Test
+    func theGroupingCacheKeyTracksTheNewestFileModifiedDate() {
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        var edited = note("Design weekly", daysAgo: 0)
+        edited.fileModified = stamp
+        var untouched = note("Design weekly", daysAgo: 0)
+        untouched.fileModified = nil
+
+        let before = LibraryGroupingCacheKey(
+            notes: [untouched],
+            matchingIDs: nil,
+            todayOnly: false,
+            now: stamp
+        )
+        let after = LibraryGroupingCacheKey(
+            notes: [edited],
+            matchingIDs: nil,
+            todayOnly: false,
+            now: stamp
+        )
+
+        #expect(before != after)
+    }
 }

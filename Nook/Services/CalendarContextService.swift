@@ -24,16 +24,43 @@ protocol CalendarEventProviding: Sendable {
 struct EventKitCalendarProvider: CalendarEventProviding {
     // A fresh `EKEventStore` per call re-primed its calendar list and
     // permission state every poll; one store held for the provider's
-    // lifetime is what EventKit itself recommends. Reads through it happen
-    // one at a time (a single background poll loop, plus the occasional
-    // synchronous enrichment lookup), so this does not need its own lock.
+    // lifetime is what EventKit itself recommends.
+    //
+    // Reads do not happen one at a time, which an earlier comment here claimed
+    // they did. The poll fetches on a detached task while detection enrichment
+    // reads synchronously on the main actor, and those two genuinely overlap.
+    // `EKEventStore` is not documented as thread-safe, so every call into it
+    // goes through one serial queue.
     nonisolated(unsafe) private let store = EKEventStore()
+    private let queue = DispatchQueue(
+        label: "co.common-tools.nook.calendar-store"
+    )
 
     func requestAccess() async -> Bool {
-        (try? await store.requestFullAccessToEvents()) ?? false
+        // The completion-handler form, so the request itself queues alongside
+        // the reads. The async form has to suspend outside the queue, which is
+        // the gap being closed. The callback touches nothing but its own
+        // continuation, so it is free to arrive off the queue later.
+        await withCheckedContinuation { continuation in
+            queue.async {
+                self.store.requestFullAccessToEvents { granted, _ in
+                    continuation.resume(returning: granted)
+                }
+            }
+        }
     }
 
     func events(between start: Date, end: Date) -> [CalendarMeetingEvent] {
+        // Enrichment runs on the main actor and can now wait behind one poll's
+        // query. That is a bounded read of the local store, and a moment of
+        // waiting beats two threads inside one `EKEventStore`.
+        queue.sync { fetchEvents(between: start, end: end) }
+    }
+
+    private func fetchEvents(
+        between start: Date,
+        end: Date
+    ) -> [CalendarMeetingEvent] {
         let predicate = store.predicateForEvents(
             withStart: start,
             end: end,
