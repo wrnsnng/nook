@@ -4,6 +4,13 @@ Nook follows a user-facing release-note model. Each published version has a
 Markdown note in [`Releases/`](Releases/) and a matching `v<version>` release in
 the [binary releases repository](https://github.com/wrnsnng/nook-releases/releases).
 
+## 1.15.1
+
+- Fixed: My notes stopped accepting typing the moment a recording
+  started, in both the meeting panel and the detached window. Render
+  passes at the audio meter's rate kept blurring the field; focus is now
+  requested once and can no longer be revoked by a refresh.
+
 ## 1.15.0
 
 - Every Nook keyboard shortcut is user remappable from Settings, Keyboard,
