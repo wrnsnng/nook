@@ -27,14 +27,11 @@ struct TranscriptSegment: Codable, Hashable, Identifiable, Sendable {
         self.source = source
     }
 
+    /// Where this segment starts, in the one stamp format Nook writes into a
+    /// note's Markdown. Shared with `MeetingMoment` so a flagged moment and the
+    /// line it points at cannot disagree about the same second.
     var timestamp: String {
-        let total = max(0, Int(startTime))
-        let hours = total / 3_600
-        let minutes = (total % 3_600) / 60
-        let seconds = total % 60
-        return hours > 0
-            ? String(format: "%02d:%02d:%02d", hours, minutes, seconds)
-            : String(format: "%02d:%02d", minutes, seconds)
+        NookElapsedTime.stamp(startTime)
     }
 }
 

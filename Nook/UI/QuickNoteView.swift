@@ -251,7 +251,7 @@ struct QuickNoteView: View {
     private var noAssistantRow: some View {
         Label(
             "No assistant on this Mac. Turn on Apple Intelligence in System Settings, or install Claude Code or Codex.",
-            systemImage: "sparkles.slash"
+            systemImage: "info.circle"
         )
         .font(NookType.caption)
         .foregroundStyle(.secondary)

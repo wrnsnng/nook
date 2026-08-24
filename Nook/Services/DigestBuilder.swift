@@ -109,13 +109,6 @@ enum DigestBuilder {
     /// note's sitting-aware duration, so a multi-session meeting counts its
     /// recorded time rather than the span between sittings.
     static func conversationTimeLabel(for seconds: TimeInterval) -> String {
-        let minutes = Int(seconds) / 60
-        if minutes >= 60 {
-            let remainder = minutes % 60
-            return remainder == 0
-                ? "\(minutes / 60)h of conversation"
-                : "\(minutes / 60)h \(remainder)m of conversation"
-        }
-        return "\(minutes)m of conversation"
+        "\(NookElapsedTime.minutes(seconds)) of conversation"
     }
 }

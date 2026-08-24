@@ -149,11 +149,16 @@ struct LiveMeetingView: View {
             ForEach(meeting.liveTranscript.segments) { segment in
                 LiveTranscriptRow(segment: segment)
                     .id(segment.id)
+                    // A new line sliding up is the motion Reduce Motion is
+                    // asking Nook not to make, so it fades in instead.
                     .transition(
-                        .asymmetric(
-                            insertion: .opacity.combined(with: .move(edge: .bottom)),
-                            removal: .opacity
-                        )
+                        reduceMotion
+                            ? .opacity
+                            : .asymmetric(
+                                insertion: .opacity
+                                    .combined(with: .move(edge: .bottom)),
+                                removal: .opacity
+                            )
                     )
             }
 
@@ -498,7 +503,7 @@ struct LiveMeetingView: View {
                 Text("Nook needs a hand")
                     .font(NookType.title)
                 Text(message)
-                    .font(.system(size: 14))
+                    .font(NookType.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 520)
@@ -812,11 +817,14 @@ private struct ProcessingRail: View {
 
     private func shortTitle(_ step: MeetingPhase.ProcessingStep) -> String {
         switch step {
+        // All nouns: the rail names the thing being made at each step, not
+        // an instruction. It used to mix the two, so "Transcript" and "Distill"
+        // read as different kinds of label sitting in the same row.
         case .preparing: "Capture"
         case .refining, .transcribing: "Transcript"
-        case .summarizing: "Distill"
-        case .saving: "Save"
-        case .discarding: "Discard"
+        case .summarizing: "Summary"
+        case .saving: "Note"
+        case .discarding: "Cleanup"
         }
     }
 }

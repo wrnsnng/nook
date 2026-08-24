@@ -1,7 +1,14 @@
 import AppKit
+import Security
 import SwiftUI
 
+/// The panes of Settings, named for what they hold.
+///
+/// `general` exists because appearance and calendar had been filed under
+/// "Listening", where nobody looking for them would think to open: a pane
+/// named for one job should not be where three unrelated ones live.
 enum SettingsPane: Hashable {
+    case general
     case listening
     case dictation
     case privacy
@@ -25,12 +32,18 @@ struct SettingsView: View {
     @State private var selectedPane: SettingsPane
     @State private var accessibilityGranted = TextInsertionService.isTrusted
 
-    init(initialPane: SettingsPane = .listening) {
+    init(initialPane: SettingsPane = .general) {
         _selectedPane = State(initialValue: initialPane)
     }
 
     var body: some View {
         TabView(selection: $selectedPane) {
+            generalPane
+                .tabItem {
+                    Label("General", systemImage: "gearshape")
+                }
+                .tag(SettingsPane.general)
+
             listeningPane
                 .tabItem {
                     Label("Listening", systemImage: "waveform.and.mic")
@@ -87,7 +100,9 @@ struct SettingsView: View {
         }
     }
 
-    private var listeningPane: some View {
+    /// Appearance and calendar: the two settings that are about Nook itself
+    /// rather than about a thing Nook does.
+    private var generalPane: some View {
         Form {
             Section {
                 Picker("Appearance", selection: $appearance.selection) {
@@ -104,7 +119,12 @@ struct SettingsView: View {
             }
 
             calendarSection
+        }
+        .formStyle(.grouped)
+    }
 
+    private var listeningPane: some View {
+        Form {
             Section {
                 Toggle(
                     "Detect meetings automatically",
@@ -122,6 +142,18 @@ struct SettingsView: View {
 
             Section {
                 Picker("Spoken language", selection: $meeting.localeIdentifier) {
+                    // A Mac whose region differs from its language reports an
+                    // identifier like "en_US@rg=auzzzz", which matched none of
+                    // the rows below. The picker then drew blank, so the one
+                    // thing it did not show was the language Nook was actually
+                    // going to transcribe in.
+                    if Self.locales.allSatisfy({
+                        $0.0 != meeting.localeIdentifier
+                    }) {
+                        Text(Self.name(forLocale: meeting.localeIdentifier))
+                            .tag(meeting.localeIdentifier)
+                    }
+
                     ForEach(Self.locales, id: \.0) { identifier, name in
                         Text(name).tag(identifier)
                     }
@@ -131,8 +163,48 @@ struct SettingsView: View {
             } footer: {
                 Text("Recognition runs with Apple’s on-device speech model. You can change the language between meetings.")
             }
+
+            storageSection
         }
         .formStyle(.grouped)
+    }
+
+    /// Where what Nook hears ends up, and for how long. Filed with listening
+    /// rather than with privacy because it is the end of the same sentence:
+    /// hear the meeting, write it down, keep it here.
+    private var storageSection: some View {
+        Section {
+            LabeledContent("Notes folder") {
+                HStack(spacing: 9) {
+                    Text(store.storageURL.path(percentEncoded: false))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Button("Choose…") {
+                        pendingStorageURL = store.selectStorageDirectory()
+                    }
+                }
+                .frame(maxWidth: 330, alignment: .trailing)
+            }
+
+            Toggle(
+                "Keep extracted meeting audio",
+                isOn: $meeting.keepAudio
+            )
+
+            AudioRetentionSettingsRow()
+
+            if let storageMessage {
+                Label(storageMessage, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(NookPalette.danger)
+            }
+        } header: {
+            Label("Storage", systemImage: "externaldrive")
+        } footer: {
+            Text("Every note is an ordinary Markdown file. When audio retention is off, the temporary recording is removed as soon as the note is safely written.")
+        }
     }
 
     /// Optional calendar context. Access is requested only when this switch
@@ -190,13 +262,36 @@ struct SettingsView: View {
                     }
                 }
             } header: {
-                Label("Voice typing", systemImage: "keyboard.badge.waveform")
+                Label("Voice typing", systemImage: "keyboard")
             } footer: {
                 Text(
                     dictation.isEnabled
                         ? "\(dictation.activation.detail) Your words appear as you speak, then land in whichever text field has focus."
                         : "Hold a shortcut anywhere on your Mac, speak, and Nook types it into the field you are already in."
                 )
+            }
+
+            // Switched off, this pane used to be a single toggle in an empty
+            // window, which reads as a feature that failed to load rather than
+            // one waiting to be turned on. These two rows say what the switch
+            // is actually offering.
+            if !dictation.isEnabled {
+                Section {
+                    PrivacyFeatureRow(
+                        symbol: "text.cursor",
+                        title: "Your words, in any field",
+                        detail: "A message, a search box, a document. Speech is recognised on this Mac, and only settled words are typed."
+                    )
+                    PrivacyFeatureRow(
+                        symbol: "note.text",
+                        title: "Somewhere for a stray thought",
+                        detail: "With no text field focused, the same shortcut opens a quick note instead of doing nothing."
+                    )
+                } header: {
+                    Label("What this adds", systemImage: "wand.and.stars")
+                } footer: {
+                    Text("Dictation is off until you turn it on, and asks for Accessibility access only the first time you use it. Meeting notes work without it.")
+                }
             }
 
             if dictation.isEnabled {
@@ -264,7 +359,7 @@ struct SettingsView: View {
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                             Spacer(minLength: 0)
-                            Button("Keep Local") {
+                            Button("Keep on this Mac") {
                                 quickNote.revokeConsent(for: quickNote.engine)
                             }
                         }
@@ -335,7 +430,6 @@ struct SettingsView: View {
         }
         .onAppear {
             quickNote.refreshEngines()
-            recovery.scan()
         }
     }
 
@@ -356,39 +450,6 @@ struct SettingsView: View {
 
     private var privacyPane: some View {
         Form {
-            Section {
-                LabeledContent("Notes folder") {
-                    HStack(spacing: 9) {
-                        Text(store.storageURL.path(percentEncoded: false))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Button("Choose…") {
-                            pendingStorageURL = store.selectStorageDirectory()
-                        }
-                    }
-                    .frame(maxWidth: 330, alignment: .trailing)
-                }
-
-                Toggle(
-                    "Keep extracted meeting audio",
-                    isOn: $meeting.keepAudio
-                )
-
-                AudioRetentionSettingsRow()
-
-                if let storageMessage {
-                    Label(storageMessage, systemImage: "exclamationmark.triangle")
-                        .font(.caption)
-                        .foregroundStyle(NookPalette.danger)
-                }
-            } header: {
-                Label("Storage", systemImage: "externaldrive")
-            } footer: {
-                Text("Every note is an ordinary Markdown file. When audio retention is off, the temporary recording is removed as soon as the note is safely written.")
-            }
-
             if !recovery.orphans.isEmpty {
                 Section {
                     ForEach(recovery.orphans) { orphan in
@@ -464,6 +525,16 @@ struct SettingsView: View {
                     title: "System-controlled access",
                     detail: "macOS controls microphone, speech, and system audio permissions."
                 )
+                // Naming the one exception here is the point of the section.
+                // A privacy summary that lists only the reassuring facts is
+                // the kind of thing a user is right to stop believing.
+                PrivacyFeatureRow(
+                    symbol: "terminal",
+                    title: "One exception: note actions",
+                    detail: "A note action can be handed to Claude Code or the Codex CLI installed on this Mac, which sends that note on. Off by default, agreed to once per provider, and never for anything you have not run an action on.",
+                    actionTitle: "Open dictation settings",
+                    action: { selectedPane = .dictation }
+                )
 
                 HStack {
                     Spacer()
@@ -479,6 +550,10 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        // Scanned here rather than on another pane: this is the pane that
+        // shows what the scan finds, and someone who opens Settings straight
+        // to Privacy was previously told about no stray recordings at all.
+        .onAppear { recovery.scan() }
         .alert(
             "Move this recording to the Trash?",
             isPresented: Binding(
@@ -510,7 +585,7 @@ struct SettingsView: View {
             VStack(spacing: 6) {
                 Text("Nook")
                     .font(NookType.title)
-                Text("A quiet place where conversations settle.")
+                Text("Meetings, tucked away.")
                     .font(NookType.body)
                     .foregroundStyle(.secondary)
             }
@@ -520,12 +595,14 @@ struct SettingsView: View {
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
 
-                Label(
-                    "Developer ID signed · Common Tools Co.",
-                    systemImage: "checkmark.seal.fill"
-                )
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(NookPalette.success)
+                // Read from the running bundle rather than written here. A
+                // hardcoded badge told every local and ad-hoc build it was
+                // Developer ID signed, which is exactly the claim a user would
+                // want to be able to trust.
+                Label(signature.label, systemImage: signature.symbol)
+                    .font(NookType.micro.weight(.semibold))
+                    .foregroundStyle(signature.tint)
+                    .accessibilityLabel(signature.label)
             }
 
             Spacer()
@@ -646,7 +723,7 @@ struct SettingsView: View {
                     detail: "Nook rejects an update if its feed, archive signature, or Developer ID does not match."
                 )
                 PrivacyFeatureRow(
-                    symbol: "arrow.clockwise.app",
+                    symbol: "arrow.down.app",
                     title: "A standard Mac experience",
                     detail: "Updates install through Sparkle’s native dialog and reopen Nook when ready."
                 )
@@ -656,6 +733,8 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
     }
+
+    private var signature: NookCodeSignature { .current }
 
     private var appVersion: String {
         let version = Bundle.main.object(
@@ -685,6 +764,17 @@ struct SettingsView: View {
         pendingStorageURL = nil
     }
 
+    /// A readable name for a locale Nook does not list, with any keyword
+    /// suffix trimmed first so "en_US@rg=auzzzz" still resolves to the row it
+    /// obviously means.
+    private static func name(forLocale identifier: String) -> String {
+        let core = String(identifier.prefix { $0 != "@" })
+        if let listed = locales.first(where: { $0.0 == core }) {
+            return listed.1
+        }
+        return Locale.current.localizedString(forIdentifier: core) ?? core
+    }
+
     private static let locales = [
         ("en_AU", "English (Australia)"),
         ("en_US", "English (United States)"),
@@ -699,28 +789,163 @@ struct SettingsView: View {
     ]
 }
 
+/// What the running bundle's code signature actually says.
+///
+/// About used to state "Developer ID signed · Common Tools Co." as a constant,
+/// so a build from source, an ad-hoc re-sign, and a tampered copy all showed
+/// the same green seal. macOS already knows the answer, so this asks it. The
+/// check is entirely local: it reads the bundle on disk and evaluates Apple's
+/// own Developer ID requirement. Nothing is contacted.
+enum NookCodeSignature: Equatable {
+    case developerID(team: String)
+    case builtFromSource
+
+    /// Resolved once. Verifying a signature hashes the whole bundle, which is
+    /// not work a settings pane should repeat on every redraw.
+    static let current = resolve()
+
+    var label: String {
+        switch self {
+        case .developerID(let team) where !team.isEmpty:
+            "Developer ID signed · \(team)"
+        case .developerID:
+            "Developer ID signed"
+        case .builtFromSource:
+            "Built from source"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .developerID: "checkmark.seal.fill"
+        case .builtFromSource: "hammer"
+        }
+    }
+
+    /// A contributor build is a normal thing to be running, not a fault, so it
+    /// stays quiet rather than borrowing the warning colour.
+    var tint: Color {
+        switch self {
+        case .developerID: NookPalette.success
+        case .builtFromSource: .secondary
+        }
+    }
+
+    /// The organisation out of a Developer ID leaf certificate's common name,
+    /// which reads "Developer ID Application: Some Company (TEAMID)". Split out
+    /// so the parsing can be tested without a signed bundle to hand.
+    static func team(fromCommonName commonName: String) -> String {
+        var name = commonName
+        if let colon = name.firstIndex(of: ":") {
+            name = String(name[name.index(after: colon)...])
+        }
+        name = name.trimmingCharacters(in: .whitespaces)
+        if name.hasSuffix(")"), let paren = name.lastIndex(of: "(") {
+            name = String(name[..<paren])
+        }
+        return name.trimmingCharacters(in: .whitespaces)
+    }
+
+    private static func resolve() -> NookCodeSignature {
+        var code: SecCode?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code else {
+            return .builtFromSource
+        }
+        var staticCode: SecStaticCode?
+        guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess,
+              let staticCode
+        else {
+            return .builtFromSource
+        }
+
+        // Apple's own marker for a Developer ID leaf certificate. Matching on
+        // the certificate rather than on a name means a renamed or re-signed
+        // copy cannot inherit the badge.
+        var requirement: SecRequirement?
+        let text = "anchor apple generic and certificate leaf"
+            + "[field.1.2.840.113635.100.6.1.13] exists"
+        guard
+            SecRequirementCreateWithString(
+                text as CFString,
+                [],
+                &requirement
+            ) == errSecSuccess,
+            let requirement,
+            SecStaticCodeCheckValidity(
+                staticCode,
+                [],
+                requirement
+            ) == errSecSuccess
+        else {
+            return .builtFromSource
+        }
+
+        return .developerID(team: signingTeam(of: staticCode))
+    }
+
+    private static func signingTeam(of code: SecStaticCode) -> String {
+        var information: CFDictionary?
+        guard
+            SecCodeCopySigningInformation(
+                code,
+                SecCSFlags(rawValue: kSecCSSigningInformation),
+                &information
+            ) == errSecSuccess,
+            let details = information as? [String: Any],
+            let certificates = details[kSecCodeInfoCertificates as String]
+                as? [SecCertificate],
+            let leaf = certificates.first
+        else {
+            return ""
+        }
+
+        var commonName: CFString?
+        guard SecCertificateCopyCommonName(leaf, &commonName) == errSecSuccess,
+              let commonName
+        else {
+            return ""
+        }
+        return team(fromCommonName: commonName as String)
+    }
+}
+
 private struct PrivacyFeatureRow: View {
     let symbol: String
     let title: String
     let detail: String
+    /// Set when the fact this row states is also something the user can go and
+    /// control. A claim about privacy that cannot be checked is just a claim.
+    var actionTitle: String?
+    var action: (() -> Void)?
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: symbol)
-                .font(.system(size: 14, weight: .semibold))
+                .font(NookType.bodyEmphasized)
                 .foregroundStyle(NookPalette.accent)
+                .symbolRenderingMode(.monochrome)
                 .frame(width: 22)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(title)
                     .font(.caption.weight(.semibold))
                 Text(detail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let actionTitle, let action {
+                    Button(actionTitle, action: action)
+                        .controlSize(.small)
+                        .padding(.top, 1)
+                }
             }
+            Spacer(minLength: 0)
         }
         .padding(.vertical, 3)
-        .accessibilityElement(children: .combine)
+        // Combined while the row is only a statement; kept separate once it
+        // carries a button, which VoiceOver has to be able to reach.
+        .accessibilityElement(children: action == nil ? .combine : .contain)
     }
 }
 

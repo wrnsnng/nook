@@ -211,7 +211,7 @@ struct NotchPanelView: View {
     }
 
     private func updateHoverState(_ hovering: Bool) {
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+        withAnimation(reduceMotion ? nil : NookMotion.quick) {
             isHovering = hovering
         }
     }
@@ -297,7 +297,7 @@ struct NotchPanelView: View {
     private var shellAnimation: Animation? {
         reduceMotion
             ? nil
-            : .timingCurve(0.16, 1, 0.30, 1, duration: 0.32)
+            : NookMotion.glide(over: 0.32)
     }
 
     private var contentRevealProgress: CGFloat {
@@ -755,7 +755,7 @@ struct NotchPanelView: View {
                     meeting.requestProcessingCancellation()
                 }
                 .buttonStyle(PanelTextButtonStyle())
-                .help("Cancel and discard this recording")
+                .help("Cancel and discard recording")
                 .accessibilityHint("Asks before permanently discarding this recording")
             } else {
                 ProgressView()
@@ -779,7 +779,7 @@ struct NotchPanelView: View {
 
             Spacer()
 
-            Button("Open notes") {
+            Button("Open library") {
                 openLibrary()
                 meeting.resetStatus()
             }
@@ -921,7 +921,7 @@ private struct PanelTextButtonStyle: ButtonStyle {
                 isVisible: isFocused
             )
             .animation(
-                .timingCurve(0.22, 1, 0.36, 1, duration: 0.12),
+                NookMotion.settle(over: 0.12),
                 value: configuration.isPressed
             )
     }
@@ -963,7 +963,7 @@ private struct PanelIconButtonStyle: ButtonStyle {
                 isVisible: isFocused
             )
             .animation(
-                .timingCurve(0.22, 1, 0.36, 1, duration: 0.12),
+                NookMotion.settle(over: 0.12),
                 value: configuration.isPressed
             )
     }
@@ -991,7 +991,7 @@ private struct HiddenRecordingIndicatorStyle: ButtonStyle {
                 isVisible: isFocused
             )
             .animation(
-                .timingCurve(0.22, 1, 0.36, 1, duration: 0.12),
+                NookMotion.settle(over: 0.12),
                 value: configuration.isPressed
             )
     }
@@ -1384,7 +1384,7 @@ private struct DetachedNotesPanel: View {
                 )
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("My Notes is floating")
+                Text("My notes is floating")
                     .font(NookType.bodyEmphasized)
                 Text("Keep writing there while Nook shows the meeting here.")
                     .font(NookType.caption)
@@ -1394,13 +1394,13 @@ private struct DetachedNotesPanel: View {
 
             Spacer()
 
-            Button("Bring Forward", action: bringForward)
+            Button("Bring forward", action: bringForward)
                 .buttonStyle(NookButtonStyle(tint: NookPalette.accent))
         }
         .frame(maxWidth: .infinity, minHeight: 126)
         .padding(.horizontal, 10)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("My Notes is open in a floating window")
+        .accessibilityLabel("My notes is open in a floating window")
     }
 }
 
@@ -1456,15 +1456,11 @@ private struct NotchCaptionStream: View {
         .padding(.bottom, 4)
         .clipped()
         .animation(
-            reduceMotion
-                ? nil
-                : .timingCurve(0.22, 1, 0.36, 1, duration: 0.26),
+            reduceMotion ? nil : NookMotion.settle(over: 0.26),
             value: lines.map(\.id)
         )
         .animation(
-            reduceMotion
-                ? nil
-                : .timingCurve(0.22, 1, 0.36, 1, duration: 0.16),
+            reduceMotion ? nil : NookMotion.settle(over: 0.16),
             value: revision
         )
         .accessibilityElement(children: .contain)

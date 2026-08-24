@@ -8,6 +8,10 @@ import SwiftUI
 struct PrepBriefView: View {
     let brief: PrepBrief
     let onSelectNote: (MeetingNote.ID) -> Void
+    /// Starts a recording filed under this series. Absent wherever the view
+    /// has no coordinator to ask, so the action is hidden rather than shown
+    /// doing nothing.
+    var onRecordSitting: (() -> Void)?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -64,6 +68,10 @@ struct PrepBriefView: View {
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+                            .help("Open note")
+                            .accessibilityHint(
+                                "Opens the note this action came from"
+                            )
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -81,12 +89,12 @@ struct PrepBriefView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label(
-                "Prep for sitting \(brief.upcomingSittingNumber)",
-                systemImage: "cup.and.saucer.fill"
-            )
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(NookPalette.accent)
+            // "Prep for sitting 2" was Nook's own bookkeeping. What the page
+            // is for says itself; how often this has happened is context, so
+            // it reads as a sentence underneath.
+            Label("Before this meeting", systemImage: "cup.and.saucer.fill")
+                .font(NookType.caption.weight(.semibold))
+                .foregroundStyle(NookPalette.accent)
 
             Text(brief.eventTitle)
                 .font(NookType.title)
@@ -95,10 +103,11 @@ struct PrepBriefView: View {
 
             HStack(spacing: 15) {
                 NookMetadataLabel(
-                    title: brief.startDate.formatted(
-                        date: .omitted,
-                        time: .shortened
-                    ),
+                    title: "Starts "
+                        + brief.startDate.formatted(
+                            date: .omitted,
+                            time: .shortened
+                        ),
                     symbol: "clock"
                 )
                 if let lastMetAt = brief.lastMetAt {
@@ -111,13 +120,48 @@ struct PrepBriefView: View {
                         symbol: "calendar"
                     )
                 }
-                NookMetadataLabel(
-                    title: brief.totalDuration.formattedAsHoursAndMinutes,
-                    symbol: "hourglass"
-                )
             }
+
+            Text(
+                PrepBriefCopy.history(
+                    sittings: brief.sittings.count,
+                    totalDuration: brief.totalDuration
+                )
+            )
+            .font(NookType.caption)
+            .foregroundStyle(.secondary)
+
+            headerActions
+                .padding(.top, 6)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The two things a person actually does from here: reread the last
+    /// sitting, or start this one. Without them the page was something to
+    /// look at and then leave.
+    @ViewBuilder
+    private var headerActions: some View {
+        HStack(spacing: NookSpacing.small) {
+            if let lastSitting = brief.sittings.first {
+                Button("Open last notes") {
+                    onSelectNote(lastSitting.id)
+                }
+                .buttonStyle(NookButtonStyle(tint: NookPalette.accent))
+                .help("Open the note from \(lastSitting.title)")
+            }
+
+            if let onRecordSitting {
+                Button("Record this sitting", action: onRecordSitting)
+                    .buttonStyle(
+                        NookButtonStyle(
+                            tint: NookPalette.accent,
+                            isProminent: true
+                        )
+                    )
+                    .help("Start recording and file it under this meeting")
+            }
+        }
     }
 
     private func listSection(
@@ -129,10 +173,7 @@ struct PrepBriefView: View {
             NookSectionLabel(title: title, symbol: symbol, tint: NookPalette.accent)
             ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                 HStack(alignment: .firstTextBaseline, spacing: 14) {
-                    Text(String(format: "%02d", index + 1))
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(NookPalette.accent)
-                        .frame(width: 24, alignment: .leading)
+                    NookBullet()
                     Text(item)
                         .font(NookType.transcript)
                         .lineSpacing(4)
@@ -180,6 +221,7 @@ struct PrepBriefView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .help("Open note")
             }
             if brief.sittings.count > 8 {
                 Text("\(brief.sittings.count - 8) more in your library")
@@ -191,14 +233,32 @@ struct PrepBriefView: View {
     }
 }
 
-private extension TimeInterval {
-    /// Compact hour-and-minute text; zero renders honestly as nothing held.
-    var formattedAsHoursAndMinutes: String {
-        let minutes = Int(self) / 60
-        if minutes >= 60 {
-            return "\(minutes / 60)h \(minutes % 60)m total"
+/// The prep brief's plain-language framing of a series' history.
+///
+/// Kept out of the view so the wording is testable: "sitting 2" was Nook's
+/// bookkeeping leaking into the page, and the replacement has to read as a
+/// sentence at every count.
+enum PrepBriefCopy {
+    static func history(
+        sittings: Int,
+        totalDuration: TimeInterval
+    ) -> String {
+        guard sittings > 0 else { return "You have not met before." }
+        // A sitting shorter than a minute still happened; "0m total" reads as
+        // a bug rather than as a very short meeting.
+        let held = NookElapsedTime.minutes(
+            totalDuration,
+            atLeastAMinute: true
+        )
+        return "You have met \(times(sittings)) before, \(held) total"
+    }
+
+    static func times(_ count: Int) -> String {
+        switch count {
+        case 1: "once"
+        case 2: "twice"
+        default: "\(count) times"
         }
-        return "\(max(1, minutes))m total"
     }
 }
 
@@ -248,6 +308,6 @@ struct PrepCard: View {
 
     private var subtitle: String {
         let start = brief.startDate.formatted(date: .omitted, time: .shortened)
-        return "Starts \(start) · sitting \(brief.upcomingSittingNumber)"
+        return "Starts \(start) · met \(PrepBriefCopy.times(brief.sittings.count))"
     }
 }

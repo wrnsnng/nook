@@ -172,9 +172,7 @@ final class NotchPanelCoordinator {
         Task { @MainActor [weak self] in
             await Task.yield()
             guard let self, self.panel.isVisible else { return }
-            withAnimation(
-                .timingCurve(0.16, 1, 0.30, 1, duration: 0.36)
-            ) {
+            withAnimation(NookMotion.glide(over: 0.36)) {
                 self.geometry.revealProgress = 1
             }
         }
@@ -458,7 +456,7 @@ final class NotchPanelCoordinator {
             }
 
             if self.shouldAnimate {
-                withAnimation(.timingCurve(0.16, 1, 0.30, 1, duration: 0.28)) {
+                withAnimation(NookMotion.glide(over: 0.28)) {
                     self.geometry.detectionPromptIsCompact = true
                 }
             } else {

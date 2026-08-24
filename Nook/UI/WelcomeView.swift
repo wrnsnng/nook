@@ -115,7 +115,11 @@ struct WelcomeView: View {
                     }
                 }
                 .id(step)
-                .transition(.opacity.combined(with: .move(edge: .trailing)))
+                .transition(
+                    reduceMotion
+                        ? .opacity
+                        : .opacity.combined(with: .move(edge: .trailing))
+                )
 
                 setupFooter
             }
@@ -174,9 +178,15 @@ struct WelcomeView: View {
     private var introduction: some View {
         VStack(spacing: 0) {
             VStack(spacing: 9) {
-                NookPresence(state: .resting, size: 58)
+                WelcomeStepArt {
+                    NookPresence(
+                        state: .resting,
+                        size: 44,
+                        showsSurface: false
+                    )
+                }
 
-                Text("Your meetings, kept close.")
+                Text("Meetings, tucked away.")
                     .font(NookType.title)
                     .accessibilityAddTraits(.isHeader)
 
@@ -224,15 +234,7 @@ struct WelcomeView: View {
 
         return VStack(spacing: 0) {
             VStack(spacing: 12) {
-                ZStack {
-                    Circle()
-                        .fill(NookPalette.accent.opacity(0.11))
-                        .frame(width: 74, height: 74)
-                    Image(systemName: permission.symbol)
-                        .font(.system(size: 30, weight: .medium))
-                        .foregroundStyle(NookPalette.accent)
-                }
-                .accessibilityHidden(true)
+                WelcomeStepArt(symbol: permission.symbol)
 
                 Text(permission.title)
                     .font(NookType.title)
@@ -322,9 +324,7 @@ struct WelcomeView: View {
     private var calendarIntroduction: some View {
         VStack(spacing: 0) {
             VStack(spacing: 9) {
-                Image(systemName: "calendar.badge.clock")
-                    .font(.system(size: 34, weight: .light))
-                    .foregroundStyle(NookPalette.accent)
+                WelcomeStepArt(symbol: "calendar.badge.clock")
 
                 Text("Name meetings after their event")
                     .font(NookType.title)
@@ -389,10 +389,15 @@ struct WelcomeView: View {
     private var ready: some View {
         VStack(spacing: 0) {
             VStack(spacing: 10) {
-                NookPresence(
-                    state: permissions.allPermissionsAllowed ? .saved : .resting,
-                    size: 64
-                )
+                WelcomeStepArt {
+                    NookPresence(
+                        state: permissions.allPermissionsAllowed
+                            ? .saved
+                            : .resting,
+                        size: 44,
+                        showsSurface: false
+                    )
+                }
 
                 Text(
                     permissions.allPermissionsAllowed
@@ -412,92 +417,136 @@ struct WelcomeView: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 470)
             }
-            .padding(.top, 27)
+            .padding(.top, 22)
 
-            VStack(spacing: 0) {
-                ForEach(NookPermission.allCases) { permission in
-                    let status = permissions.status(for: permission)
-                    HStack(spacing: 11) {
-                        Image(systemName: permission.symbol)
-                            .foregroundStyle(NookPalette.accent)
-                            .frame(width: 20)
-                        Text(permission.title)
-                            .font(NookType.bodyEmphasized)
-                        Spacer()
-                        Label(status.label, systemImage: status.symbol)
-                            .font(NookType.caption)
-                            .foregroundStyle(statusTint(status))
-                    }
-                    .padding(.vertical, 11)
+            // Card, switch and tips share one inner edge. They used to be laid
+            // out with three different insets, and each block also hugged its
+            // own content, so nothing on the last screen lined up with
+            // anything else on it.
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(spacing: 0) {
+                    ForEach(NookPermission.allCases) { permission in
+                        permissionSummaryRow(permission)
 
-                    if permission != NookPermission.allCases.last {
-                        SoftDivider()
+                        if permission != NookPermission.allCases.last {
+                            SoftDivider()
+                        }
                     }
                 }
-            }
-            .padding(.horizontal, 17)
-            .background(
-                NookPalette.paper,
-                in: RoundedRectangle(
-                    cornerRadius: NookRadius.surface,
-                    style: .continuous
+                .padding(.horizontal, 17)
+                .background(
+                    NookPalette.paper,
+                    in: RoundedRectangle(
+                        cornerRadius: NookRadius.surface,
+                        style: .continuous
+                    )
                 )
-            )
-            .overlay {
-                RoundedRectangle(
-                    cornerRadius: NookRadius.surface,
-                    style: .continuous
-                )
-                .stroke(.primary.opacity(0.09), lineWidth: 0.7)
+                .overlay {
+                    RoundedRectangle(
+                        cornerRadius: NookRadius.surface,
+                        style: .continuous
+                    )
+                    .stroke(.primary.opacity(0.09), lineWidth: 0.7)
+                }
+
+                Toggle(
+                    isOn: Binding(
+                        get: { detector.isEnabled },
+                        set: { detector.isEnabled = $0 }
+                    )
+                ) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Notice likely meetings")
+                            .font(NookType.control)
+                        Text("Nook checks local meeting activity and always asks before recording.")
+                            .font(NookType.micro)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+                .padding(.horizontal, 17)
+                .padding(.top, 18)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    worthKnowingRow(
+                        symbol: "flag",
+                        text: "Flag a moment while recording with ⌥⌘F, and play it back later."
+                    )
+                    worthKnowingRow(
+                        symbol: "sparkle.magnifyingglass",
+                        text: "Ask your library anything in the toolbar; answers cite their meetings."
+                    )
+                    worthKnowingRow(
+                        symbol: "newspaper",
+                        text: "Compile the week into one digest note whenever you like."
+                    )
+                }
+                .padding(.horizontal, 17)
+                .padding(.top, 13)
+                .accessibilityElement(children: .combine)
             }
             .padding(.horizontal, 80)
-            .padding(.top, 23)
-
-            Toggle(
-                isOn: Binding(
-                    get: { detector.isEnabled },
-                    set: { detector.isEnabled = $0 }
-                )
-            ) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Notice likely meetings")
-                        .font(NookType.control)
-                    Text("Nook checks local meeting activity and always asks before recording.")
-                        .font(NookType.micro)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .toggleStyle(.switch)
-            .padding(.horizontal, 84)
             .padding(.top, 18)
-
-            VStack(alignment: .leading, spacing: 8) {
-                worthKnowingRow(
-                    symbol: "flag",
-                    text: "Flag a moment while recording with ⌥⌘F, and play it back later."
-                )
-                worthKnowingRow(
-                    symbol: "sparkle.magnifyingglass",
-                    text: "Ask your library anything in the toolbar; answers cite their meetings."
-                )
-                worthKnowingRow(
-                    symbol: "newspaper",
-                    text: "Compile the week into one digest note whenever you like."
-                )
-            }
-            .padding(.horizontal, 84)
-            .padding(.top, 16)
-            .accessibilityElement(children: .combine)
 
             Spacer()
         }
     }
 
+    /// One permission on the last screen. A row that only reports "Not set up"
+    /// leaves the user to guess where setting it up happens, so it offers the
+    /// same action the step for that permission would have offered.
+    private func permissionSummaryRow(
+        _ permission: NookPermission
+    ) -> some View {
+        let status = permissions.status(for: permission)
+
+        return HStack(spacing: 11) {
+            Image(systemName: permission.symbol)
+                .foregroundStyle(NookPalette.accent)
+                .symbolRenderingMode(.monochrome)
+                .frame(width: 20)
+                .accessibilityHidden(true)
+            Text(permission.title)
+                .font(NookType.bodyEmphasized)
+            Spacer(minLength: 9)
+            Label(status.label, systemImage: status.symbol)
+                .font(NookType.caption)
+                .foregroundStyle(statusTint(status))
+                .accessibilityLabel("\(permission.title): \(status.label)")
+
+            if status != .allowed {
+                Button(status == .needsAttention ? "Open Settings" : "Set up") {
+                    resolve(permission)
+                }
+                .buttonStyle(NookButtonStyle(tint: NookPalette.accent))
+                .disabled(permissions.permissionInFlight != nil)
+                .accessibilityLabel("Set up \(permission.title)")
+            }
+        }
+        // Sized around the button rather than the text, so a row offering an
+        // action is not taller than the rows beside it.
+        .frame(minHeight: 34)
+        .padding(.vertical, 5)
+    }
+
+    /// The same branch the footer button takes, so the two cannot drift apart.
+    private func resolve(_ permission: NookPermission) {
+        switch permissions.status(for: permission) {
+        case .notRequested:
+            Task { await permissions.request(permission) }
+        case .needsAttention:
+            permissions.openSettings(for: permission)
+        case .allowed:
+            break
+        }
+    }
+
     private func worthKnowingRow(symbol: String, text: String) -> some View {
-        HStack(alignment: .top, spacing: 9) {
+        HStack(alignment: .top, spacing: 11) {
             Image(systemName: symbol)
                 .foregroundStyle(NookPalette.accent)
-                .frame(width: 16)
+                .symbolRenderingMode(.monochrome)
+                .frame(width: 20)
                 .accessibilityHidden(true)
             Text(text)
                 .font(NookType.caption)
@@ -515,9 +564,7 @@ struct WelcomeView: View {
     private var dictationIntroduction: some View {
         VStack(spacing: 0) {
             VStack(spacing: 9) {
-                Image(systemName: "keyboard.badge.waveform")
-                    .font(.system(size: 34, weight: .light))
-                    .foregroundStyle(NookPalette.accent)
+                WelcomeStepArt(symbol: "mic.and.signal.meter")
 
                 Text("Speak anywhere on your Mac")
                     .font(NookType.title)
@@ -761,7 +808,11 @@ struct WelcomeView: View {
             guard !Task.isCancelled else { return }
 
             for step in 1...3 {
-                withAnimation(step == 3 ? NookMotion.settle : NookMotion.spatial) {
+                withAnimation(
+                    step == 3
+                        ? NookMotion.settle(over: 0.64)
+                        : NookMotion.spatial
+                ) {
                     previewStep = step
                 }
                 try? await Task.sleep(
@@ -777,6 +828,49 @@ struct WelcomeView: View {
         previewTask?.cancel()
         completeWelcomeAction()
         dismissWindow(id: "welcome")
+    }
+}
+
+/// One header treatment for every setup step.
+///
+/// The steps used to disagree: a tinted disc on the permission screens, a bare
+/// glyph on calendar, the brand mark on the first and last, and on dictation a
+/// symbol name that does not exist in SF Symbols, so nothing at all. Walking
+/// forward through setup looked like walking through four different apps.
+private struct WelcomeStepArt<Content: View>: View {
+    private let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(NookPalette.accent.opacity(0.11))
+                .frame(width: 74, height: 74)
+            content
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+private struct WelcomeStepSymbol: View {
+    let name: String
+
+    var body: some View {
+        Image(systemName: name)
+            .font(.largeTitle)
+            .foregroundStyle(NookPalette.accent)
+            // Several of these symbols have a multicolour variant that macOS
+            // prefers, which put a stock blue glyph in a tinted Nook circle.
+            .symbolRenderingMode(.monochrome)
+    }
+}
+
+extension WelcomeStepArt where Content == WelcomeStepSymbol {
+    init(symbol: String) {
+        self.init { WelcomeStepSymbol(name: symbol) }
     }
 }
 
@@ -807,7 +901,9 @@ private struct WelcomeTransformation: View {
             VStack(alignment: .leading, spacing: 7) {
                 Label(
                     step >= 3 ? "Saved locally" : "Useful note",
-                    systemImage: step >= 3 ? "doc.badge.checkmark" : "text.alignleft"
+                    systemImage: step >= 3
+                        ? "text.badge.checkmark"
+                        : "text.alignleft"
                 )
                 .font(NookType.metadata)
                 .foregroundStyle(step >= 3 ? NookPalette.accent : .secondary)
@@ -816,9 +912,19 @@ private struct WelcomeTransformation: View {
                     Image(systemName: "circle")
                         .font(.system(size: 5, weight: .bold))
                         .foregroundStyle(NookPalette.accent)
+                    // This is the state the screen opens in and the only state
+                    // Reduce Motion ever shows, so the sentence the whole
+                    // preview is about has to be readable before anything
+                    // animates. Tertiary measured 1.9:1 and plain secondary
+                    // 4.0:1 on this surface; both fail at 13pt. The resting
+                    // style is still visibly lighter than the settled one.
                     Text("Send revised brief · Friday")
                         .font(NookType.bodyEmphasized)
-                        .foregroundStyle(step >= 2 ? .primary : .tertiary)
+                        .foregroundStyle(
+                            step >= 2
+                                ? AnyShapeStyle(.primary)
+                                : AnyShapeStyle(Color.primary.opacity(0.66))
+                        )
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

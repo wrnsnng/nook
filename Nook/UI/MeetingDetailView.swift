@@ -43,6 +43,14 @@ struct MeetingDetailView: View {
     /// saving silently discarded titles whenever the user clicked another
     /// note instead of pressing Return first.
     @FocusState private var titleFieldFocused: Bool
+    /// The Markdown length, recomputed when the draft changes rather than on
+    /// every pass through `body`. Counting a long note's characters during
+    /// layout ran the whole string for a label nobody was reading.
+    ///
+    /// Counted as characters, not UTF-8 bytes, because that is what the label
+    /// says: an accented or emoji-bearing note would otherwise report a
+    /// number larger than anything a person could count in it.
+    @State private var markdownCharacterCount = 0
     /// The note's checkbox lines as they exist on disk right now. Checkbox
     /// state is deliberately absent from the decoded model, so ticking from
     /// here needs the file's own truth to stay aligned with the sidebar.
@@ -87,7 +95,11 @@ struct MeetingDetailView: View {
         .onAppear {
             markdownDraft.prepare(for: note, store: store)
             personalNotes.prepare(for: note, store: store)
+            markdownCharacterCount = markdownDraft.rawMarkdown.count
             reloadChecklist()
+        }
+        .onChange(of: markdownDraft.rawMarkdown) { _, markdown in
+            markdownCharacterCount = markdown.count
         }
         .onChange(of: note) { _, _ in
             reloadChecklist()
@@ -262,10 +274,7 @@ struct MeetingDetailView: View {
                         VStack(alignment: .leading, spacing: 17) {
                             ForEach(Array(note.keyPoints.enumerated()), id: \.offset) { index, item in
                                 HStack(alignment: .firstTextBaseline, spacing: 14) {
-                                    Text(String(format: "%02d", index + 1))
-                                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                                        .foregroundStyle(NookPalette.accent)
-                                        .frame(width: 24, alignment: .leading)
+                                    NookBullet()
                                     Text(item)
                                         .font(NookType.transcript)
                                         .lineSpacing(4)
@@ -287,14 +296,14 @@ struct MeetingDetailView: View {
                         VStack(alignment: .leading, spacing: 16) {
                             ForEach(Array(note.decisions.enumerated()), id: \.offset) { _, decision in
                                 HStack(alignment: .top, spacing: 13) {
-                                    Image(systemName: "checkmark")
-                                        .font(.system(size: 10, weight: .bold))
+                                    // Not a tick in a circle. That is exactly
+                                    // the action-item control one section
+                                    // below, and a decision read as a task
+                                    // somebody had already completed.
+                                    Image(systemName: "arrow.turn.down.right")
+                                        .font(NookType.caption.weight(.semibold))
                                         .foregroundStyle(NookPalette.accent)
                                         .frame(width: 20, height: 20)
-                                        .background(
-                                            NookPalette.accent.opacity(0.10),
-                                            in: Circle()
-                                        )
                                         .accessibilityHidden(true)
                                     Text(decision)
                                         .font(NookType.transcriptEmphasized)
@@ -814,10 +823,15 @@ struct MeetingDetailView: View {
             )
             .frame(maxWidth: 360)
 
-            Text("\(filteredTranscript.count) of \(note.transcript.count) passages")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.secondary)
-                .contentTransition(.numericText())
+            // Only a search has a result count. With an empty field the line
+            // read as a progress indicator through the transcript, which it
+            // was not.
+            if !transcriptSearch.isEmpty {
+                Text("\(filteredTranscript.count) of \(note.transcript.count) passages")
+                    .font(NookType.micro.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .contentTransition(.numericText())
+            }
 
             Spacer()
 
@@ -842,15 +856,15 @@ struct MeetingDetailView: View {
                     Text("Plain Markdown source")
                         .font(NookType.control)
                     Text(note.fileURL?.lastPathComponent ?? "Unsaved note")
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(NookType.code)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
 
                 Spacer()
 
-                Text("\(markdownDraft.rawMarkdown.count) characters")
-                    .font(.system(size: 10, weight: .medium))
+                Text("\(markdownCharacterCount) characters")
+                    .font(NookType.micro.weight(.medium))
                     .foregroundStyle(.secondary)
                     .contentTransition(.numericText())
 
@@ -859,7 +873,7 @@ struct MeetingDetailView: View {
                         statusMessage,
                         systemImage: statusMessage == "Saved" ? "checkmark.circle.fill" : "exclamationmark.circle"
                     )
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(NookType.micro.weight(.semibold))
                     .foregroundStyle(statusMessage == "Saved" ? NookPalette.success : NookPalette.danger)
                     .lineLimit(2)
                     .transition(.opacity.combined(with: .scale(scale: 0.96)))
@@ -888,15 +902,24 @@ struct MeetingDetailView: View {
 
             SoftDivider()
 
+            // Source is still prose to read. Full-pane lines ran past 200
+            // characters on a wide window, which no one tracks by eye, so the
+            // column is capped near a hundred and centred like a page.
             TextEditor(text: $markdownDraft.rawMarkdown)
                 .font(NookType.code)
                 .lineSpacing(3)
                 .scrollContentBackground(.hidden)
                 .padding(.horizontal, 28)
                 .padding(.vertical, 20)
+                .frame(maxWidth: Self.markdownColumnWidth)
+                .frame(maxWidth: .infinity)
                 .background(Color(nsColor: .textBackgroundColor).opacity(0.66))
         }
     }
+
+    /// Roughly a hundred monospaced characters at `NookType.code`, plus the
+    /// editor's own horizontal padding.
+    private static let markdownColumnWidth: CGFloat = 716
 
     private var hasMarkdownChanges: Bool {
         markdownDraft.noteID == note.id && markdownDraft.hasChanges
@@ -950,7 +973,9 @@ struct MeetingDetailView: View {
             showCopyNotice("Title saved")
         } catch {
             titleDraft = note.title
-            showCopyNotice("Title couldn’t be saved")
+            // A failure in a success banner reads as a confirmation, and the
+            // typed title has just been reverted under the user.
+            showCopyNotice("Title couldn’t be saved", severity: .failure)
         }
     }
 

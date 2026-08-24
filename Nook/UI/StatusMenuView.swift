@@ -2,6 +2,12 @@ import AppKit
 import Combine
 import SwiftUI
 
+/// Nook's native menu-bar menu.
+///
+/// Every command here is Title Case, which is the macOS convention for a menu
+/// and what the app's own Meeting menu, Settings… and Check for Updates…
+/// already used. Half of this menu was sentence case, so the same verb was
+/// written two ways depending on which menu the user opened it from.
 struct StatusMenuView: View {
     @EnvironmentObject private var updater: NookUpdateController
     @Environment(\.openSettings) private var openSettings
@@ -33,18 +39,18 @@ struct StatusMenuView: View {
             Button {
                 AppModel.shared.openLibrary()
             } label: {
-                Label("Open meeting library", systemImage: "books.vertical")
+                Label("Open Library", systemImage: "books.vertical")
             }
             .keyboardShortcut("o")
 
             Button {
                 AppModel.shared.store.openStorageDirectory()
             } label: {
-                Label("Open notes folder", systemImage: "folder")
+                Label("Open Notes Folder", systemImage: "folder")
             }
 
             if !state.recentNotes.isEmpty {
-                Menu("Recent meetings") {
+                Menu("Recent Meetings") {
                     ForEach(state.recentNotes) { note in
                         Button(note.title) {
                             AppModel.shared.store.reveal(note)
@@ -84,7 +90,7 @@ struct StatusMenuView: View {
                     AppModel.shared.meeting.requestProcessingCancellation()
                 } label: {
                     Label(
-                        "Cancel and discard recording",
+                        "Cancel and Discard Recording",
                         systemImage: "trash"
                     )
                 }
@@ -103,7 +109,7 @@ struct StatusMenuView: View {
             Button {
                 AppModel.shared.meeting.dismissPrompt()
             } label: {
-                Label("Not now", systemImage: "xmark")
+                Label("Not Now", systemImage: "xmark")
             }
         case .failed:
             Button {
@@ -115,13 +121,13 @@ struct StatusMenuView: View {
             Button {
                 AppModel.shared.openLatestMeeting()
             } label: {
-                Label("Open saved meeting", systemImage: "doc.text")
+                Label("Open Note", systemImage: "doc.text")
             }
         case .idle:
             Button {
                 AppModel.shared.meeting.startManualMeeting()
             } label: {
-                Label("Start recording", systemImage: "waveform.badge.mic")
+                Label("Start Recording", systemImage: "waveform.badge.mic")
             }
             .keyboardShortcut("r", modifiers: [.command, .shift])
         }
@@ -132,7 +138,7 @@ struct StatusMenuView: View {
             Button {
                 AppModel.shared.meeting.flagMoment()
             } label: {
-                Label("Flag this moment", systemImage: "flag")
+                Label("Flag This Moment", systemImage: "flag")
             }
             .keyboardShortcut("f", modifiers: [.command, .option])
 
@@ -140,7 +146,7 @@ struct StatusMenuView: View {
                 AppModel.shared.meeting.togglePause()
             } label: {
                 Label(
-                    state.isPaused ? "Resume recording" : "Pause recording",
+                    state.isPaused ? "Resume Recording" : "Pause Recording",
                     systemImage: state.isPaused
                         ? "play.circle"
                         : "pause.circle"
@@ -152,7 +158,7 @@ struct StatusMenuView: View {
             Button {
                 AppModel.shared.meeting.stopRecording()
             } label: {
-                Label("Finish meeting", systemImage: "stop.circle.fill")
+                Label("Finish Meeting", systemImage: "stop.circle.fill")
             }
             .keyboardShortcut(".", modifiers: [.command, .shift])
             .disabled(state.pauseTransitionInFlight)
@@ -163,7 +169,7 @@ struct StatusMenuView: View {
                 Button {
                     AppModel.shared.meeting.restoreTopPanel()
                 } label: {
-                    Label("Show top panel", systemImage: "rectangle.expand.vertical")
+                    Label("Show Top Panel", systemImage: "rectangle.expand.vertical")
                 }
             } else {
                 Button {
@@ -175,8 +181,8 @@ struct StatusMenuView: View {
                 } label: {
                     Label(
                         state.showsWorkspace
-                            ? "Collapse top panel"
-                            : "Expand top panel",
+                            ? "Collapse Top Panel"
+                            : "Expand Top Panel",
                         systemImage: state.showsWorkspace
                             ? "rectangle.compress.vertical"
                             : "rectangle.expand.vertical"
@@ -186,11 +192,11 @@ struct StatusMenuView: View {
                 Button {
                     AppModel.shared.meeting.hideTopPanel()
                 } label: {
-                    Label("Hide top panel", systemImage: "rectangle.slash")
+                    Label("Hide Top Panel", systemImage: "rectangle.slash")
                 }
 
                 if state.showsWorkspace {
-                    Menu("Workspace view") {
+                    Menu("Workspace View") {
                         ForEach(MeetingPanelMode.allCases) { mode in
                             Button {
                                 AppModel.shared.meeting.selectPanelMode(mode)
@@ -211,7 +217,7 @@ struct StatusMenuView: View {
                 AppModel.shared.openLiveNotes()
             } label: {
                 Label(
-                    "Open floating notes",
+                    "Open Floating Notes",
                     systemImage: "macwindow.on.rectangle"
                 )
             }

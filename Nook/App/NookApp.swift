@@ -121,7 +121,7 @@ private struct NookMenuBarLabel: View {
                         Text(elapsedLabel)
                             .font(.system(.caption, design: .monospaced))
                             .monospacedDigit()
-                            .frame(width: 38, alignment: .leading)
+                            .frame(width: elapsedWidth, alignment: .leading)
                     }
                 } else {
                     Image(systemName: menuBarSymbol)
@@ -181,6 +181,13 @@ private struct NookMenuBarLabel: View {
 
     private var elapsedLabel: String {
         NookElapsedTime.clock(meeting.elapsed)
+    }
+
+    /// Fixed so the clock does not shove the menu-bar item sideways once a
+    /// second, but sized to the format actually on screen. At an hour the
+    /// string grows to "1:05:23" and the old single width clipped it.
+    private var elapsedWidth: CGFloat {
+        meeting.elapsed >= 3_600 ? 56 : 38
     }
 
     private var elapsedSpokenLabel: String {

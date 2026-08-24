@@ -123,12 +123,6 @@ enum NookPalette {
         dark: NSColor(red: 1.00, green: 0.38, blue: 0.42, alpha: 1)
     )
 
-    static let waveform = LinearGradient(
-        colors: [accentHighlight, accent, accentHighlight],
-        startPoint: .leading,
-        endPoint: .trailing
-    )
-
     private static func adaptive(light: NSColor, dark: NSColor) -> Color {
         Color(
             nsColor: NSColor(name: nil) { appearance in
@@ -142,7 +136,6 @@ enum NookPalette {
 
 enum NookType {
     static let micro = Font.caption2
-    static let eyebrow = Font.caption2.bold()
     static let caption = Font.caption
     static let metadata = Font.caption.weight(.medium)
     static let control = Font.callout.weight(.semibold)
@@ -167,8 +160,6 @@ enum NookSpacing {
     static let small: CGFloat = 8
     static let medium: CGFloat = 12
     static let large: CGFloat = 18
-    static let xLarge: CGFloat = 24
-    static let section: CGFloat = 40
 }
 
 /// One elapsed-clock format for every surface. Each screen used to grow its
@@ -191,17 +182,67 @@ enum NookElapsedTime {
         )
     }
 
+    /// The zero-padded stamp written into a note's Markdown transcript.
+    ///
+    /// Deliberately not `clock`: every note already on disk carries a
+    /// two-digit hour, so the emitter has to keep producing exactly the shape
+    /// the parser and those files already agree on. One arithmetic, two
+    /// audiences.
+    static func stamp(_ interval: TimeInterval) -> String {
+        let total = max(0, Int(interval))
+        let hours = total / 3_600
+        guard hours > 0 else {
+            return String(format: "%02d:%02d", total / 60, total % 60)
+        }
+        return String(
+            format: "%02d:%02d:%02d",
+            hours,
+            (total / 60) % 60,
+            total % 60
+        )
+    }
+
+    /// A finished duration at minute granularity, for something that is over
+    /// and no longer counting. `atLeastAMinute` is for a saved note, where "0m"
+    /// would claim a meeting that never happened.
+    static func minutes(
+        _ interval: TimeInterval,
+        atLeastAMinute: Bool = false
+    ) -> String {
+        var total = max(0, Int(interval)) / 60
+        if atLeastAMinute {
+            total = max(1, total)
+        }
+        guard total >= 60 else { return "\(total)m" }
+        let remainder = total % 60
+        return remainder == 0
+            ? "\(total / 60)h"
+            : "\(total / 60)h \(remainder)m"
+    }
+
     /// The same clock written out for VoiceOver, where "01:05" is ambiguous.
+    ///
+    /// Hours are named rather than rolled into the minutes: a two-hour meeting
+    /// announced as "125 minutes" sounds like a long workshop is a long call.
     static func spoken(_ interval: TimeInterval) -> String {
         let total = max(0, Int(interval))
-        return "\(total / 60) minutes, \(total % 60) seconds"
+        let hours = total / 3_600
+        let minutes = (total / 60) % 60
+        let seconds = total % 60
+
+        var parts: [String] = []
+        if hours > 0 {
+            parts.append("\(hours) \(hours == 1 ? "hour" : "hours")")
+        }
+        parts.append("\(minutes) \(minutes == 1 ? "minute" : "minutes")")
+        parts.append("\(seconds) \(seconds == 1 ? "second" : "seconds")")
+        return parts.joined(separator: ", ")
     }
 }
 
 enum NookRadius {
     static let control: CGFloat = 8
     static let surface: CGFloat = 14
-    static let panel: CGFloat = 30
 }
 
 enum NookMotion {
@@ -213,13 +254,21 @@ enum NookMotion {
         1,
         duration: 0.40
     )
-    static let settle = Animation.timingCurve(
-        0.22,
-        1,
-        0.36,
-        1,
-        duration: 0.64
-    )
+
+    /// The two curves the top panel moves on, named here so a surface stops
+    /// retyping its own approximation of them. The shape is the token; the
+    /// duration stays at the call site because it depends on how far the thing
+    /// actually travels, and a 0.12s press wants the same easing as a 0.64s
+    /// reveal.
+    static func settle(over duration: Double) -> Animation {
+        .timingCurve(0.22, 1, 0.36, 1, duration: duration)
+    }
+
+    /// The shell curve: used where the panel itself changes size or state,
+    /// which needs to start faster than content settling inside it.
+    static func glide(over duration: Double) -> Animation {
+        .timingCurve(0.16, 1, 0.30, 1, duration: duration)
+    }
 }
 
 struct NookButtonStyle: ButtonStyle {
@@ -534,6 +583,24 @@ struct SoftDivider: View {
         Rectangle()
             .fill(.primary.opacity(0.09))
             .frame(height: 0.5)
+            .accessibilityHidden(true)
+    }
+}
+
+/// The marker for an unordered list of quoted lines: key points, prep
+/// highlights, anything lifted out of a note.
+///
+/// Deliberately not a number and not a check. Numbers implied a ranking the
+/// summary never claimed, and a check implied the line was something the user
+/// had completed, which is what the action-item boxes mean two sections lower.
+struct NookBullet: View {
+    var body: some View {
+        Circle()
+            .fill(NookPalette.accent)
+            .frame(width: 4, height: 4)
+            // Keeps the bullet on the first line's optical centre, close
+            // enough to its line to read as belonging to it.
+            .frame(width: 10, height: 14, alignment: .leading)
             .accessibilityHidden(true)
     }
 }

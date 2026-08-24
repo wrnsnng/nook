@@ -31,6 +31,46 @@ struct ReleaseSecurityTests {
         )
     }
 
+    /// About used to print "Developer ID signed · Common Tools Co." as a
+    /// constant, in green, on every build including local ones. The badge is
+    /// now read from the bundle's own signature.
+    @Test
+    func anUnsignedBuildDoesNotClaimToBeDeveloperIDSigned() {
+        #expect(NookCodeSignature.builtFromSource.label == "Built from source")
+        #expect(
+            !NookCodeSignature.builtFromSource.label.contains("Developer ID")
+        )
+        #expect(
+            NookCodeSignature.developerID(team: "Common Tools Co.").label
+                == "Developer ID signed · Common Tools Co."
+        )
+        #expect(
+            NookCodeSignature.developerID(team: "").label
+                == "Developer ID signed"
+        )
+    }
+
+    @Test
+    func theSigningTeamIsReadOutOfTheCertificateName() {
+        #expect(
+            NookCodeSignature.team(
+                fromCommonName: "Developer ID Application: Common Tools Co. (A1B2C3D4E5)"
+            ) == "Common Tools Co."
+        )
+        #expect(
+            NookCodeSignature.team(fromCommonName: "Apple Development: Someone")
+                == "Someone"
+        )
+        #expect(NookCodeSignature.team(fromCommonName: "") == "")
+    }
+
+    /// Tests run against an ad-hoc signed build, which is exactly the case the
+    /// old hardcoded badge got wrong.
+    @Test
+    func theRunningTestBundleReportsItsRealSignature() {
+        #expect(NookCodeSignature.current == .builtFromSource)
+    }
+
     @Test
     func contributorConfigurationIsUpdaterSafeByDefault() throws {
         let projectURL = URL(fileURLWithPath: #filePath)

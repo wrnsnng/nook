@@ -40,13 +40,7 @@ struct MeetingMoment: Hashable, Sendable {
     let offset: TimeInterval
 
     var timestamp: String {
-        let total = max(0, Int(offset))
-        let hours = total / 3_600
-        let minutes = (total % 3_600) / 60
-        let seconds = total % 60
-        return hours > 0
-            ? String(format: "%02d:%02d:%02d", hours, minutes, seconds)
-            : String(format: "%02d:%02d", minutes, seconds)
+        NookElapsedTime.stamp(offset)
     }
 }
 
@@ -210,12 +204,10 @@ struct MeetingNote: Identifiable, Hashable, Sendable {
         }
     }
 
+    /// Never "0m": a note exists because a conversation was recorded, and a
+    /// short one rounding to nothing reads as a failed recording.
     var durationLabel: String {
-        let minutes = max(1, Int(duration / 60))
-        if minutes >= 60 {
-            return "\(minutes / 60)h \(minutes % 60)m"
-        }
-        return "\(minutes)m"
+        NookElapsedTime.minutes(duration, atLeastAMinute: true)
     }
 
     var transcriptText: String {

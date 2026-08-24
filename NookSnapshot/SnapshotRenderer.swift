@@ -8,7 +8,7 @@ struct SnapshotRenderer {
         let arguments = CommandLine.arguments
         guard (2...3).contains(arguments.count) else {
             FileHandle.standardError.write(
-                Data("Usage: NookSnapshot <output.png> [library|library-light|library-compact|welcome-light|welcome-dark|welcome-permission-light|welcome-permission-dark|welcome-ready-light|welcome-ready-dark|welcome-microphone-light|welcome-microphone-dark|welcome-speech-light|welcome-speech-dark|welcome-calendar-light|welcome-calendar-dark|welcome-dictation-light|welcome-dictation-dark|detail-transcript-light|detail-transcript-dark|detail-markdown-light|detail-markdown-dark|detail-notes-light|detail-notes-dark|settings-about-light|settings-about-dark|settings-listening-light|settings-listening-dark|settings-dictation-light|settings-dictation-dark|settings-privacy-light|settings-privacy-dark|settings-updates-light|settings-updates-dark|quick-note-light|quick-note-dark|quick-note-filled-light|quick-note-filled-dark|prep-light|prep-dark|ask-light|ask-dark|palette-light|palette-dark|floating-notes-light|floating-notes-dark|library-recording-light|library-recording-dark|live|notch|external-panel|summary-light|summary-dark|notes-light|notes-dark|detected-light|detected-dark|processing-light|processing-dark|completed-light|completed-dark|failure-light|failure-dark]\n".utf8)
+                Data("Usage: NookSnapshot <output.png> [library|library-light|library-compact|welcome-light|welcome-dark|welcome-permission-light|welcome-permission-dark|welcome-ready-light|welcome-ready-dark|welcome-microphone-light|welcome-microphone-dark|welcome-speech-light|welcome-speech-dark|welcome-calendar-light|welcome-calendar-dark|welcome-dictation-light|welcome-dictation-dark|detail-transcript-light|detail-transcript-dark|detail-markdown-light|detail-markdown-dark|detail-notes-light|detail-notes-dark|settings-about-light|settings-about-dark|settings-general-light|settings-general-dark|settings-listening-light|settings-listening-dark|settings-dictation-light|settings-dictation-dark|settings-privacy-light|settings-privacy-dark|settings-updates-light|settings-updates-dark|quick-note-light|quick-note-dark|quick-note-filled-light|quick-note-filled-dark|prep-light|prep-dark|ask-light|ask-dark|palette-light|palette-dark|floating-notes-light|floating-notes-dark|library-recording-light|library-recording-dark|live|notch|external-panel|summary-light|summary-dark|notes-light|notes-dark|detected-light|detected-dark|detected-compact-light|detected-compact-dark|processing-light|processing-dark|completed-light|completed-dark|failure-light|failure-dark]\n".utf8)
             )
             Foundation.exit(64)
         }
@@ -60,6 +60,7 @@ struct SnapshotRenderer {
         let detector = MeetingDetector()
         let meeting = MeetingCoordinator(store: store, detector: detector)
         let markdownDraft = MarkdownDraftController()
+        let personalNotesDraft = PersonalNotesDraftController()
         let appearanceController = NookAppearanceController(
             initialSelection: snapshotColorScheme == .light ? .light : .dark,
             persistsSelection: false
@@ -133,6 +134,7 @@ struct SnapshotRenderer {
                 .environmentObject(store)
                 .environmentObject(meeting)
                 .environmentObject(markdownDraft)
+                .environmentObject(personalNotesDraft)
                 .frame(width: canvasSize.width, height: canvasSize.height)
                 .environment(\.colorScheme, snapshotColorScheme)
                 .transaction { $0.disablesAnimations = true }
@@ -144,7 +146,8 @@ struct SnapshotRenderer {
             else if mode.contains("dictation") { pane = .dictation }
             else if mode.contains("privacy") { pane = .privacy }
             else if mode.contains("updates") { pane = .updates }
-            else { pane = .listening }
+            else if mode.contains("listening") { pane = .listening }
+            else { pane = .general }
             meeting.setPreviewState(phase: .idle, elapsed: 0, liveTranscript: .empty, audioLevel: 0)
             content = AnyView(
                 SettingsView(initialPane: pane)
@@ -184,7 +187,11 @@ struct SnapshotRenderer {
             )
             guard let brief else { throw SnapshotError.fixtureValidationFailed }
             content = AnyView(
-                PrepBriefView(brief: brief, onSelectNote: { _ in })
+                PrepBriefView(
+                    brief: brief,
+                    onSelectNote: { _ in },
+                    onRecordSitting: {}
+                )
                     .frame(width: canvasSize.width, height: canvasSize.height)
                     .background(Color(nsColor: .windowBackgroundColor))
                     .environment(\.colorScheme, snapshotColorScheme)
@@ -208,13 +215,15 @@ struct SnapshotRenderer {
                         .environmentObject(store)
                         .environmentObject(meeting)
                         .environmentObject(markdownDraft)
+                        .environmentObject(personalNotesDraft)
                         .environmentObject(prep)
                     CommandPaletteView(
                         isPresented: .constant(true),
                         openActionEntries: [],
                         createNote: { _ in },
                         createWeeklyDigest: {},
-                        showAskSheet: {}
+                        showAskSheet: {},
+                        presentQuickNote: {}
                     )
                     .environmentObject(store)
                     .environmentObject(meeting)
@@ -252,6 +261,7 @@ struct SnapshotRenderer {
                     .environmentObject(store)
                     .environmentObject(meeting)
                     .environmentObject(markdownDraft)
+                    .environmentObject(personalNotesDraft)
                     .environmentObject(prep)
                     .frame(width: canvasSize.width, height: canvasSize.height)
                     .environment(\.colorScheme, snapshotColorScheme)
@@ -270,12 +280,16 @@ struct SnapshotRenderer {
              "summary-light", "summary-dark",
              "notes-light", "notes-dark",
              "detected-light", "detected-dark",
+             "detected-compact-light", "detected-compact-dark",
              "processing-light", "processing-dark",
              "completed-light", "completed-dark",
              "failure-light", "failure-dark":
             canvasSize = CGSize(width: 980, height: 380)
             let geometry = NotchPanelGeometry()
             geometry.topInset = mode == "notch" ? 32 : 28
+            // The prompt shrinks after it has been on screen a while rather
+            // than vanishing, so that second shape needs to be renderable too.
+            geometry.detectionPromptIsCompact = mode.hasPrefix("detected-compact")
             let panelColorScheme: ColorScheme = mode.hasSuffix("-light")
                 ? .light
                 : .dark
@@ -308,6 +322,7 @@ struct SnapshotRenderer {
                     .environmentObject(store)
                     .environmentObject(meeting)
                     .environmentObject(markdownDraft)
+                    .environmentObject(personalNotesDraft)
                     .environmentObject(prep)
                     .frame(width: canvasSize.width, height: canvasSize.height)
                     .environment(\.colorScheme, snapshotColorScheme)
@@ -315,11 +330,12 @@ struct SnapshotRenderer {
             )
         }
 
-        let notchModes: Set<String> = ["notch","external-panel","summary-light","summary-dark","notes-light","notes-dark","detected-light","detected-dark","processing-light","processing-dark","completed-light","completed-dark","failure-light","failure-dark","live"]
+        let notchModes: Set<String> = ["notch","external-panel","summary-light","summary-dark","notes-light","notes-dark","detected-light","detected-dark","detected-compact-light","detected-compact-dark","processing-light","processing-dark","completed-light","completed-dark","failure-light","failure-dark","live"]
         if notchModes.contains(mode) {
             meeting.showLiveCaptions = mode != "external-panel"
             switch mode {
-            case "detected-light", "detected-dark":
+            case "detected-light", "detected-dark",
+                 "detected-compact-light", "detected-compact-dark":
                 meeting.setPreviewState(
                     phase: .detected(
                         DetectedMeeting(

@@ -13,6 +13,44 @@ private struct LibraryNoteGroup: Identifiable {
     var id: String { title }
 }
 
+/// How much of the standing sidebar furniture is allowed to sit above the
+/// meetings.
+///
+/// At the window's minimum height, one prep card plus five open actions
+/// filled the sidebar and the first meeting note was below the fold, which
+/// made the library's own contents the least visible thing in it. Three
+/// actions leave room for meetings at 580 points; the rest are one click
+/// away rather than gone.
+enum LibrarySidebarPolicy {
+    static let collapsedOpenActionLimit = 3
+
+    static func visibleOpenActions(
+        _ entries: [OpenAction],
+        showingAll: Bool
+    ) -> [OpenAction] {
+        guard !showingAll else { return entries }
+        return Array(entries.prefix(collapsedOpenActionLimit))
+    }
+
+    /// The disclosure under the visible actions, or nil when there is nothing
+    /// left to reveal and nothing gained by folding what is already short.
+    static func disclosureLabel(
+        pool: Int,
+        visible: Int,
+        showingAll: Bool
+    ) -> String? {
+        if showingAll {
+            guard pool > collapsedOpenActionLimit else { return nil }
+            return "Show fewer"
+        }
+        // Everything past the pool is named separately, so the count here
+        // promises only what this disclosure will actually reveal.
+        let hidden = pool - visible
+        guard hidden > 0 else { return nil }
+        return "\(hidden) more"
+    }
+}
+
 struct LibraryView: View {
     @EnvironmentObject private var store: MarkdownStore
     @EnvironmentObject private var meeting: MeetingCoordinator
@@ -37,6 +75,17 @@ struct LibraryView: View {
     @State private var showsCommandPalette = false
     /// Sidebar scope: the whole library or just today's capture.
     @State private var todayOnly = false
+    /// Whether the two standing sections above the meetings are open, and
+    /// whether the open-actions list is showing past its cap.
+    ///
+    /// Remembered rather than reset per launch: at the window's minimum
+    /// height one prep card and five open actions pushed every meeting below
+    /// the fold, and a person who collapses them means it.
+    @AppStorage("library.prepExpanded") private var prepExpanded = true
+    @AppStorage("library.openActionsExpanded")
+    private var openActionsExpanded = true
+    @AppStorage("library.openActionsShowAll")
+    private var openActionsShowAll = false
 
     init(initialNoteID: MeetingNote.ID? = nil) {
         _selection = State(
@@ -112,7 +161,8 @@ struct LibraryView: View {
                         createNote(from: template)
                     },
                     createWeeklyDigest: { createWeeklyDigest() },
-                    showAskSheet: { showsAskSheet = true }
+                    showAskSheet: { showsAskSheet = true },
+                    presentQuickNote: { AppModel.shared.quickNote.present() }
                 )
             }
         }
@@ -232,7 +282,11 @@ struct LibraryView: View {
             withAnimation(reduceMotion ? nil : .smooth(duration: 0.34)) {
                 switch phase {
                 case .recording, .processing, .failed:
-                    selection = .live
+                    // Through the guard, not around it. A meeting starting by
+                    // itself used to move the pane while a half-typed
+                    // Markdown edit was still unsaved, which is exactly the
+                    // case the guard exists for.
+                    requestSelection(.live)
                 case .completed:
                     store.reload()
                     selection = restoredOrFirstSelection(in: store.notes)
@@ -310,8 +364,18 @@ struct LibraryView: View {
         }
     }
 
+    /// Selection as the `List` drives it, routed through the same guard a
+    /// click does. Without this the arrow keys could leave a pane holding
+    /// unsaved Markdown without ever asking.
+    private var listSelection: Binding<LibrarySelection?> {
+        Binding(
+            get: { selection },
+            set: { requestSelection($0) }
+        )
+    }
+
     private var sidebar: some View {
-        List {
+        List(selection: listSelection) {
             Section {
                 Picker("Range", selection: $todayOnly) {
                     Text("All").tag(false)
@@ -327,24 +391,17 @@ struct LibraryView: View {
 
             if presentsLiveActivity {
                 Section {
-                    Button {
-                        requestSelection(.live)
-                    } label: {
-                        LiveSidebarRow(
-                            phase: meeting.phase,
-                            elapsed: meeting.elapsed,
-                            isPaused: meeting.isPaused,
-                            isSelected: selection == .live
-                        )
-                    }
-                    .buttonStyle(.plain)
+                    LiveSidebarRow(
+                        phase: meeting.phase,
+                        elapsed: meeting.elapsed,
+                        isPaused: meeting.isPaused,
+                        isSelected: selection == .live
+                    )
+                    .tag(LibrarySelection.live)
                     .listRowBackground(
                         selection == .live
                             ? NookPalette.sidebarSelection
                             : Color.clear
-                    )
-                    .accessibilityAddTraits(
-                        selection == .live ? .isSelected : []
                     )
                 } header: {
                     sidebarSectionHeader("Now")
@@ -377,7 +434,7 @@ struct LibraryView: View {
                             Button("Retry") {
                                 store.reload()
                             }
-                            Button("Open Folder") {
+                            Button("Open notes folder") {
                                 store.openStorageDirectory()
                             }
                         }
@@ -404,24 +461,22 @@ struct LibraryView: View {
             ForEach(groupedNotes) { group in
                 Section {
                     ForEach(group.notes) { note in
-                        Button {
-                            requestSelection(.note(note.id))
-                        } label: {
-                            MeetingRow(
-                                note: note,
-                                isSelected: selection == .note(note.id)
-                            )
-                        }
-                        .buttonStyle(.plain)
+                        // Plain rows, not buttons: the List owns selection now,
+                        // so arrow keys and type-select reach these the way
+                        // they reach any other sidebar. A button in the row
+                        // would swallow the click before the List saw it.
+                        MeetingRow(
+                            note: note,
+                            isSelected: selection == .note(note.id)
+                        )
+                        .tag(LibrarySelection.note(note.id))
+                        // Nook's own selection fill rather than the system's:
+                        // it is a deeper blue chosen so white row text keeps
+                        // AA contrast in an inactive window too.
                         .listRowBackground(
                             selection == .note(note.id)
                                 ? NookPalette.sidebarSelection
                                 : Color.clear
-                        )
-                        .accessibilityAddTraits(
-                            selection == .note(note.id)
-                                ? .isSelected
-                                : []
                         )
                         .contextMenu {
                             Button("Show in Finder") {
@@ -453,7 +508,7 @@ struct LibraryView: View {
                                 .disabled(isProcessing)
                             }
                             Divider()
-                            Button("Delete", role: .destructive) {
+                            Button("Move to Trash", role: .destructive) {
                                 notePendingDeletion = note
                             }
                         }
@@ -490,85 +545,155 @@ struct LibraryView: View {
             .textCase(nil)
     }
 
+    /// A section header that folds its own section away.
+    ///
+    /// The disclosure is a real button rather than a tap on the label, so it
+    /// has a hit target, a focus ring, and something for VoiceOver to say.
+    private func collapsibleSectionHeader(
+        _ title: String,
+        isExpanded: Binding<Bool>
+    ) -> some View {
+        Button {
+            withAnimation(reduceMotion ? nil : NookMotion.quick) {
+                isExpanded.wrappedValue.toggle()
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .rotationEffect(
+                        .degrees(isExpanded.wrappedValue ? 90 : 0)
+                    )
+                    .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+                sidebarSectionHeader(title)
+                Spacer(minLength: 0)
+            }
+            .frame(minHeight: 28)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(isExpanded.wrappedValue ? "Hide \(title)" : "Show \(title)")
+        .accessibilityLabel(title)
+        .accessibilityValue(isExpanded.wrappedValue ? "Showing" : "Hidden")
+        .accessibilityHint("Shows or hides this section")
+    }
+
     /// A quiet pointer at the next sitting of a series with history. Time-
     /// sensitive, so it leads the sidebar; tapping opens the brief.
     @ViewBuilder
     private var prepSection: some View {
         if let brief = prep.current {
             Section {
-                PrepCard(
-                    brief: brief,
-                    isOpen: selection == .prep,
-                    onOpen: { requestSelection(.prep) }
-                )
+                if prepExpanded {
+                    PrepCard(
+                        brief: brief,
+                        isOpen: selection == .prep,
+                        onOpen: { requestSelection(.prep) }
+                    )
+                    .tag(LibrarySelection.prep)
+                }
             } header: {
-                sidebarSectionHeader("Prep")
+                collapsibleSectionHeader("Prep", isExpanded: $prepExpanded)
             }
         }
     }
 
     /// Unfinished action items across the library, closest first.
+    ///
+    /// Capped rather than listed in full. Five of these plus a prep card
+    /// filled the whole sidebar at the window's minimum height, so the notes
+    /// the library exists to show never appeared without scrolling.
     @ViewBuilder
     private var openActionsSection: some View {
-        let visible = openActions.entries.prefix(8)
-        if !visible.isEmpty {
+        let pool = Array(openActions.entries.prefix(8))
+        let visible = LibrarySidebarPolicy.visibleOpenActions(
+            pool,
+            showingAll: openActionsShowAll
+        )
+        if !pool.isEmpty {
             Section {
-                ForEach(Array(visible)) { entry in
-                    OpenActionRow(
-                        entry: entry,
-                        exported: openActions.exportedIDs.contains(entry.id),
-                        onToggle: {
-                            Task {
-                                await openActions.toggle(
-                                    entry,
-                                    store: store
-                                )
-                            }
-                        },
-                        onSelect: {
-                            requestSelection(.note(entry.noteID))
-                        },
-                        onSendToReminders: {
-                            Task {
-                                await openActions.sendToReminders(entry)
-                            }
-                        },
-                        onSetDue: { date in
-                            Task {
-                                await openActions.setDue(
-                                    entry,
-                                    on: date,
-                                    store: store
-                                )
-                            }
-                        },
-                        onClearDue: {
-                            Task {
-                                await openActions.setDue(
-                                    entry,
-                                    on: nil,
-                                    store: store
-                                )
-                            }
-                        }
-                    )
-                }
-                if openActions.entries.count > visible.count {
-                    Text("\(openActions.entries.count - visible.count) more in the notes")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                if let message = openActions.lastError {
-                    Label(message, systemImage: "exclamationmark.triangle")
-                        .font(.caption)
-                        .foregroundStyle(NookPalette.danger)
+                if openActionsExpanded {
+                    openActionRows(visible: visible, pool: pool)
                 }
             } header: {
-                sidebarSectionHeader("Open actions")
-            } footer: {
-                Text("Unfinished items from your meeting notes.")
-                    .font(.caption2)
+                collapsibleSectionHeader(
+                    "Open actions",
+                    isExpanded: $openActionsExpanded
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func openActionRows(
+        visible: [OpenAction],
+        pool: [OpenAction]
+    ) -> some View {
+        Group {
+            ForEach(visible) { entry in
+                OpenActionRow(
+                    entry: entry,
+                    exported: openActions.exportedIDs.contains(entry.id),
+                    onToggle: {
+                        Task {
+                            await openActions.toggle(entry, store: store)
+                        }
+                    },
+                    onSelect: {
+                        requestSelection(.note(entry.noteID))
+                    },
+                    onSendToReminders: {
+                        Task {
+                            await openActions.sendToReminders(entry)
+                        }
+                    },
+                    onSetDue: { date in
+                        Task {
+                            await openActions.setDue(
+                                entry,
+                                on: date,
+                                store: store
+                            )
+                        }
+                    },
+                    onClearDue: {
+                        Task {
+                            await openActions.setDue(
+                                entry,
+                                on: nil,
+                                store: store
+                            )
+                        }
+                    }
+                )
+            }
+            if let disclosure = LibrarySidebarPolicy.disclosureLabel(
+                pool: pool.count,
+                visible: visible.count,
+                showingAll: openActionsShowAll
+            ) {
+                Button(disclosure) {
+                    withAnimation(reduceMotion ? nil : NookMotion.quick) {
+                        openActionsShowAll.toggle()
+                    }
+                }
+                .buttonStyle(.plain)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(NookPalette.accent)
+                .frame(minHeight: 28)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            if openActionsShowAll,
+               openActions.entries.count > pool.count {
+                Text("\(openActions.entries.count - pool.count) more in the notes")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+            if let message = openActions.lastError {
+                Label(message, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(NookPalette.danger)
             }
         }
     }
@@ -578,9 +703,19 @@ struct LibraryView: View {
         if selection == .live {
             LiveMeetingView()
         } else if selection == .prep, let brief = prep.current {
-            PrepBriefView(brief: brief) { noteID in
-                requestSelection(.note(noteID))
-            }
+            PrepBriefView(
+                brief: brief,
+                onSelectNote: { noteID in
+                    requestSelection(.note(noteID))
+                },
+                // Named after the event so the note joins the rest of the
+                // series rather than arriving as an unrelated "Meeting
+                // Thu 7:34 PM". Withheld while a recording is already
+                // running, which is the one case the coordinator refuses.
+                onRecordSitting: canStartRecording
+                    ? { meeting.startCalendarMeeting(title: brief.eventTitle) }
+                    : nil
+            )
         } else if let selectedNote {
             MeetingDetailView(note: selectedNote)
                 .id(selectedNote.id)
@@ -626,6 +761,10 @@ struct LibraryView: View {
     private var isProcessing: Bool {
         if case .processing = meeting.phase { return true }
         return false
+    }
+
+    private var canStartRecording: Bool {
+        !meeting.phase.isRecording && !isProcessing
     }
 
     /// Changes what the detail pane shows, after settling what the pane it is
@@ -754,7 +893,7 @@ struct LibraryView: View {
             of: .weekOfYear,
             for: Date()
         ), currentWeek.contains(date) {
-            return "This Week"
+            return "This week"
         }
         return date.formatted(
             .dateTime
@@ -1071,7 +1210,7 @@ private struct EmptyLibraryView: View {
                 NookPresence(state: .resting, size: 68)
 
                 VStack(spacing: 9) {
-                    Text("A quiet place for every conversation")
+                    Text("Meetings, tucked away.")
                         .font(.title2.weight(.semibold))
                     Text("When a meeting begins, Nook keeps up with the words and tucks the useful parts into a local Markdown note.")
                         .font(.body)
@@ -1133,42 +1272,49 @@ private struct OpenActionRow: View {
             .help("Mark as done")
             .accessibilityLabel("Mark \(entry.displayText) as done")
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(entry.displayText)
-                    .font(.callout)
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                HStack(spacing: 6) {
-                    Text(entry.noteTitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    if !dueChip.text.isEmpty {
-                        Text(dueChip.text)
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(
-                                dueChip.isOverdue
-                                    ? NookPalette.danger : .secondary
-                            )
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(
-                                Capsule().fill(
-                                    (dueChip.isOverdue
-                                        ? NookPalette.danger
-                                        : Color.secondary).opacity(0.12)
+            // A real button, not a tap gesture on a stack. The gesture was
+            // invisible to VoiceOver and to the keyboard, so the only way to
+            // open the note from here was the pointer.
+            Button(action: onSelect) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(entry.displayText)
+                        .font(.callout)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    HStack(spacing: 6) {
+                        Text(entry.noteTitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        if !dueChip.text.isEmpty {
+                            Text(dueChip.text)
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(
+                                    dueChip.isOverdue
+                                        ? NookPalette.danger : .secondary
                                 )
-                            )
-                            .accessibilityLabel(
-                                dueChip.isOverdue
-                                    ? "Overdue: \(dueChip.text)"
-                                    : dueChip.text
-                            )
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(
+                                    Capsule().fill(
+                                        (dueChip.isOverdue
+                                            ? NookPalette.danger
+                                            : Color.secondary).opacity(0.12)
+                                    )
+                                )
+                                .accessibilityLabel(
+                                    dueChip.isOverdue
+                                        ? "Overdue: \(dueChip.text)"
+                                        : dueChip.text
+                                )
+                        }
                     }
                 }
+                .frame(minHeight: 28)
+                .contentShape(Rectangle())
             }
-            .contentShape(Rectangle())
-            .onTapGesture(perform: onSelect)
+            .buttonStyle(.plain)
+            .help("Open note")
         }
         .padding(.vertical, 3)
         .contextMenu {
@@ -1186,7 +1332,7 @@ private struct OpenActionRow: View {
             Divider()
             Button("Due today") { onSetDue(Calendar.current.startOfDay(for: Date())) }
             Button("Due tomorrow") { onSetDue(tomorrow()) }
-            Button("Next week") { onSetDue(nextWeek()) }
+            Button("Due next week") { onSetDue(nextWeek()) }
             Button("Choose date…") {
                 pickerDate = entry.dueDate ?? tomorrow()
                 showsDuePicker = true
@@ -1207,7 +1353,7 @@ private struct OpenActionRow: View {
                 HStack {
                     Spacer()
                     Button("Cancel") { showsDuePicker = false }
-                    Button("Set Due Date") {
+                    Button("Set due date") {
                         showsDuePicker = false
                         onSetDue(Calendar.current.startOfDay(for: pickerDate))
                     }
@@ -1219,8 +1365,10 @@ private struct OpenActionRow: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityHint("Opens the meeting note")
-        // The row reads as one element, so VoiceOver reaches the tick and
-        // export through actions instead of a flattened, unlabeled blob.
+        // The row reads as one element, so VoiceOver reaches the tick, the
+        // note, and the export through actions instead of a flattened,
+        // unlabeled blob.
+        .accessibilityAction(named: "Open note") { onSelect() }
         .accessibilityAction(named: "Mark as done") { onToggle() }
         .accessibilityAction(named: "Send to Reminders") {
             onSendToReminders()

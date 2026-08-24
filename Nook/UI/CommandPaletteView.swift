@@ -12,10 +12,41 @@ struct CommandPaletteItem: Identifiable, Equatable {
     let title: String
     let subtitle: String?
     let destination: Destination
+    /// The global shortcut that already runs this command, written the way
+    /// the menus write it. Only ever a shortcut that genuinely exists: a
+    /// hint for a key combination that does nothing is worse than no hint.
+    var shortcut: String?
     let perform: () -> Void
 
     static func == (lhs: CommandPaletteItem, rhs: CommandPaletteItem) -> Bool {
         lhs.id == rhs.id
+    }
+}
+
+/// A titled run of palette rows.
+///
+/// The palette used to be one flat list where a verb and a meeting looked
+/// identical, so the eye had to read every row to learn what kind of thing it
+/// was about to run.
+struct CommandPaletteSection: Identifiable {
+    let title: String
+    let items: [CommandPaletteItem]
+
+    var id: String { title }
+
+    /// Groups in a fixed order, dropping anything empty so the palette never
+    /// shows a heading with nothing under it.
+    static func grouped(
+        commands: [CommandPaletteItem],
+        notes: [CommandPaletteItem],
+        openActions: [CommandPaletteItem]
+    ) -> [CommandPaletteSection] {
+        [
+            CommandPaletteSection(title: "Commands", items: commands),
+            CommandPaletteSection(title: "Notes", items: notes),
+            CommandPaletteSection(title: "Open actions", items: openActions),
+        ]
+        .filter { !$0.items.isEmpty }
     }
 }
 
@@ -38,11 +69,34 @@ struct CommandPaletteView: View {
     let createNote: (NoteTemplate) -> Void
     let createWeeklyDigest: () -> Void
     let showAskSheet: () -> Void
+    let presentQuickNote: () -> Void
 
     @State private var query = ""
     @State private var selectedIndex = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        ZStack {
+            // A dim behind the panel, and a click anywhere on it closes.
+            // Without one the palette floated over a fully lit library and
+            // read as another pane rather than as the thing with focus.
+            Rectangle()
+                .fill(.black.opacity(0.18))
+                .contentShape(Rectangle())
+                .onTapGesture { isPresented = false }
+                .accessibilityHidden(true)
+
+            panel
+        }
+        .ignoresSafeArea()
+        .transition(
+            reduceMotion
+                ? .opacity
+                : .opacity.combined(with: .scale(scale: 0.98))
+        )
+    }
+
+    private var panel: some View {
         VStack(spacing: 0) {
             searchHeader
             SoftDivider()
@@ -125,13 +179,14 @@ struct CommandPaletteView: View {
     private var resultsList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(
-                        Array(items.enumerated()),
-                        id: \.element.id
-                    ) { index, item in
-                        row(item, isSelected: index == selectedIndex)
-                            .id(index)
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(sections) { section in
+                        sectionHeader(section.title)
+                        ForEach(section.items) { item in
+                            let index = items.firstIndex(of: item) ?? 0
+                            row(item, isSelected: index == selectedIndex)
+                                .id(index)
+                        }
                     }
                 }
                 .padding(.vertical, 4)
@@ -140,14 +195,33 @@ struct CommandPaletteView: View {
                 proxy.scrollTo(newIndex, anchor: .center)
             }
         }
-        .frame(maxHeight: 320)
+        // A ScrollView takes every point offered, which left a blank band
+        // under a short result list. Sized to its content first, then capped.
+        .frame(maxHeight: 420)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(NookType.micro.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 14)
+            .padding(.top, 10)
+            .padding(.bottom, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityAddTraits(.isHeader)
     }
 
     private func row(
         _ item: CommandPaletteItem,
         isSelected: Bool
     ) -> some View {
-        Button(action: runSelected) {
+        // Runs the row that was pressed. It used to run whichever row was
+        // highlighted, so clicking anything the pointer had not settled on
+        // ran a different command than the one under the cursor.
+        Button {
+            run(item)
+        } label: {
             HStack(spacing: NookSpacing.medium - 2) {
                 Image(systemName: item.symbol)
                     .font(NookType.bodyEmphasized)
@@ -173,7 +247,17 @@ struct CommandPaletteView: View {
                             .lineLimit(1)
                     }
                 }
-                Spacer()
+                Spacer(minLength: NookSpacing.small)
+                if let shortcut = item.shortcut {
+                    Text(shortcut)
+                        .font(NookType.micro.weight(.medium))
+                        .foregroundStyle(
+                            isSelected
+                                ? Color.white.opacity(0.72)
+                                : Color(nsColor: .tertiaryLabelColor)
+                        )
+                        .accessibilityLabel("Shortcut \(shortcut)")
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
@@ -206,63 +290,72 @@ struct CommandPaletteView: View {
 
     private func runSelected() {
         guard items.indices.contains(selectedIndex) else { return }
-        let item = items[selectedIndex]
+        run(items[selectedIndex])
+    }
+
+    private func run(_ item: CommandPaletteItem) {
         isPresented = false
         item.perform()
     }
 
     // MARK: - Items
 
-    private var items: [CommandPaletteItem] {
+    private var sections: [CommandPaletteSection] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
             .localizedLowercase
-        var result: [CommandPaletteItem] = verbs.filter {
+
+        let commands = verbs.filter {
             needle.isEmpty || $0.title.localizedLowercase.contains(needle)
         }
 
-        let notes = orderedNotes(matching: needle)
-        result.append(
-            contentsOf: notes.prefix(8).map { note in
+        let notes = orderedNotes(matching: needle).prefix(8).map { note in
+            CommandPaletteItem(
+                id: "note-\(note.id.uuidString)",
+                symbol: note.kind.symbol,
+                title: note.title,
+                subtitle: note.startedAt.formatted(
+                    date: .abbreviated,
+                    time: .shortened
+                ),
+                destination: .note(note.id),
+                perform: {
+                    NotificationCenter.default.post(
+                        name: .nookOpenMeetingNote,
+                        object: note.id
+                    )
+                }
+            )
+        }
+
+        var openActions: [CommandPaletteItem] = []
+        if needle.isEmpty || "actions".hasPrefix(needle) {
+            openActions = openActionEntries.prefix(3).map { entry in
                 CommandPaletteItem(
-                    id: "note-\(note.id.uuidString)",
-                    symbol: note.kind.symbol,
-                    title: note.title,
-                    subtitle: note.startedAt.formatted(
-                        date: .abbreviated,
-                        time: .shortened
-                    ),
-                    destination: .note(note.id),
+                    id: "action-\(entry.id)",
+                    symbol: "checklist",
+                    title: entry.displayText,
+                    subtitle: entry.noteTitle,
+                    destination: .note(entry.noteID),
                     perform: {
                         NotificationCenter.default.post(
                             name: .nookOpenMeetingNote,
-                            object: note.id
+                            object: entry.noteID
                         )
                     }
                 )
             }
-        )
-
-        if needle.isEmpty || "actions".hasPrefix(needle) {
-            for entry in openActionEntries.prefix(3) {
-                result.append(
-                    CommandPaletteItem(
-                        id: "action-\(entry.id)",
-                        symbol: "checklist",
-                        title: entry.displayText,
-                        subtitle: "Open action · \(entry.noteTitle)",
-                        destination: .note(entry.noteID),
-                        perform: {
-                            NotificationCenter.default.post(
-                                name: .nookOpenMeetingNote,
-                                object: entry.noteID
-                            )
-                        }
-                    )
-                )
-            }
         }
 
-        return result
+        return CommandPaletteSection.grouped(
+            commands: commands,
+            notes: Array(notes),
+            openActions: openActions
+        )
+    }
+
+    /// The sections flattened, which is what arrow keys move through.
+    private var items: [CommandPaletteItem] {
+        sections.flatMap(\.items)
     }
 
     /// Title matches lead, then content matches, mirroring how a person
@@ -294,6 +387,9 @@ struct CommandPaletteView: View {
                     title: "Finish meeting",
                     subtitle: nil,
                     destination: .verb,
+                    // Matches the Meeting menu, which is where this shortcut
+                    // is declared.
+                    shortcut: "⇧⌘.",
                     perform: { meeting.stopRecording() }
                 )
             )
@@ -305,6 +401,7 @@ struct CommandPaletteView: View {
                     title: "Start recording",
                     subtitle: nil,
                     destination: .verb,
+                    shortcut: "⇧⌘R",
                     perform: { meeting.startManualMeeting() }
                 )
             )
@@ -318,6 +415,14 @@ struct CommandPaletteView: View {
                     subtitle: nil,
                     destination: .verb,
                     perform: { createNote(.blank) }
+                ),
+                CommandPaletteItem(
+                    id: "verb-quick-note",
+                    symbol: "note.text",
+                    title: "Open quick note",
+                    subtitle: "A pad for a thought with nowhere to type it",
+                    destination: .verb,
+                    perform: { presentQuickNote() }
                 ),
                 CommandPaletteItem(
                     id: "verb-ask",

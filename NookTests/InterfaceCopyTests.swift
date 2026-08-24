@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 
@@ -88,6 +89,74 @@ struct InterfaceCopyTests {
             \(offenders.joined(separator: "\n"))
             """
         )
+    }
+
+    /// Every SF Symbol the interface asks for has to actually exist.
+    ///
+    /// A misremembered name is not a build error and not a crash: SwiftUI
+    /// draws nothing at all. Four had already reached the app this way,
+    /// including the header art of an entire onboarding step and the seal in
+    /// the update settings, and each one only shows up if somebody happens to
+    /// look at that exact screen.
+    @Test
+    func everySFSymbolNameInTheInterfaceResolves() throws {
+        var offenders: [String] = []
+
+        let files = try swiftFiles()
+        #expect(
+            files.count > 20,
+            "Only found \(files.count) Swift files to scan; the source root is probably wrong."
+        )
+
+        for file in files {
+            let contents = try String(contentsOf: file, encoding: .utf8)
+            for (lineNumber, name) in symbolNames(in: contents)
+            where NSImage(
+                systemSymbolName: name,
+                accessibilityDescription: nil
+            ) == nil {
+                offenders.append(
+                    "\(file.lastPathComponent):\(lineNumber): \(name)"
+                )
+            }
+        }
+
+        #expect(
+            offenders.isEmpty,
+            """
+            These SF Symbol names do not resolve on this system, so the \
+            controls using them draw no icon at all.
+
+            \(offenders.joined(separator: "\n"))
+            """
+        )
+    }
+
+    /// Symbol names passed to the arguments that actually render one, so an
+    /// ordinary dotted string such as a bundle identifier is not mistaken for
+    /// an icon.
+    private func symbolNames(in contents: String) -> [(Int, String)] {
+        let labels = ["systemName", "systemImage", "symbol"]
+        var found: [(Int, String)] = []
+
+        for (index, line) in contents.split(
+            separator: "\n",
+            omittingEmptySubsequences: false
+        ).enumerated() {
+            for label in labels {
+                var rest = Substring(line)
+                while let marker = rest.range(of: "\(label): \"") {
+                    rest = rest[marker.upperBound...]
+                    guard let close = rest.firstIndex(of: "\"") else { break }
+                    let name = String(rest[..<close])
+                    rest = rest[close...]
+                    // Skip interpolated names; they are not literals to check.
+                    guard !name.contains("\\") else { continue }
+                    found.append((index + 1, name))
+                }
+            }
+        }
+        return found
     }
 
     /// Line numbers whose string copy contains an em-dash.
