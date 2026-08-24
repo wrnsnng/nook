@@ -220,7 +220,10 @@ actor SummaryService {
         fallbackTitle: String,
         onProgress: SummaryProgressHandler?
     ) async throws -> MeetingInsights {
-        var plan = TranscriptReducePlan.standard
+        var plan = TranscriptReducePlan.standard(
+            forCharacters: text.count,
+            condensedPartCeiling: Self.condensedPartCharacterEstimate
+        )
         for attempt in 0..<Self.maximumPlanAttempts {
             let source = try await TranscriptReducer.reduce(
                 text,
@@ -456,6 +459,10 @@ actor SummaryService {
     private static let condenseResponseTokens = 600
     private static let minimumResponseTokens = 150
     private static let structuredResponseTokens = 900
+    /// The character length a condensing answer can reach, four characters to
+    /// a token on the generous side. The plan factory budgets rounds against
+    /// this ceiling, so the two numbers must move together.
+    static let condensedPartCharacterEstimate = condenseResponseTokens * 4
     private static let maximumSplitDepth = 2
     private static let maximumPlanAttempts = 3
 
@@ -884,11 +891,57 @@ struct TranscriptReducePlan: Equatable, Sendable {
     /// carrying names and timestamps runs closer to three characters a token
     /// than four, so the budgets leave room for the instructions and the
     /// answer rather than assuming the best case.
+    ///
+    /// The chunk budget must hold two ceiling-length answers side by side.
+    /// Condensed answers arrive as one unbreakable block, so once the
+    /// material consists only of those blocks a chunk that cannot pack two
+    /// means every later round maps N blocks to N blocks and the reduce never
+    /// shrinks again: a seventy minute meeting died exactly this way.
     static let standard = TranscriptReducePlan(
-        chunkBudget: 4_000,
+        chunkBudget: 5_000,
         finalBudget: 5_000,
         maximumRounds: 4
     )
+
+    /// A plan sized to this meeting, so length stops at the deadline rather
+    /// than at an arbitrary round count.
+    ///
+    /// Four rounds fit meetings whose prompt runs to roughly twenty thousand
+    /// characters. Past that, capped-length condensations stop shrinking the
+    /// material fast enough: a seventy minute meeting still sat above the
+    /// final budget when the last round ended, and the note said the meeting
+    /// was too long when the honest cause was running out of rounds. The
+    /// worst case is knowable in advance, every condensed part coming back at
+    /// its response ceiling, so the round count is computed from that rather
+    /// than guessed.
+    static func standard(
+        forCharacters characterCount: Int,
+        condensedPartCeiling: Int
+    ) -> TranscriptReducePlan {
+        var size = characterCount
+        var rounds = 0
+        while size > standard.finalBudget,
+              rounds < maximumPlannedRounds {
+            let parts = max(1, (size + standard.chunkBudget - 1) / standard.chunkBudget)
+            size = parts * condensedPartCeiling
+            rounds += 1
+        }
+        // Two spare rounds absorb uneven part sizes and a part or two that
+        // comes back longer than its neighbours. Never fewer than the fixed
+        // plan offered, so small meetings keep today's margin.
+        return TranscriptReducePlan(
+            chunkBudget: standard.chunkBudget,
+            finalBudget: standard.finalBudget,
+            maximumRounds: min(
+                maximumPlannedRounds,
+                max(standard.maximumRounds, rounds + 2)
+            )
+        )
+    }
+
+    /// Bounds pathological inputs; the reducer's own no-progress guard ends
+    /// most runs well before this.
+    private static let maximumPlannedRounds = 12
 
     /// Half the room, for a retry after the window rejected the plan anyway.
     var tightened: TranscriptReducePlan {

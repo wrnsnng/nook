@@ -164,6 +164,83 @@ struct TranscriptReduceTests {
         #expect(tightened.chunkBudget < TranscriptReducePlan.standard.chunkBudget)
         #expect(tightened.finalBudget < TranscriptReducePlan.standard.finalBudget)
     }
+
+    // MARK: Plans sized to the meeting
+
+    /// A short meeting keeps the fixed plan's margin.
+    @Test
+    func smallMeetingsKeepTheStandardRoundCount() {
+        let plan = TranscriptReducePlan.standard(
+            forCharacters: 8_000,
+            condensedPartCeiling: SummaryService.condensedPartCharacterEstimate
+        )
+        #expect(plan.maximumRounds == TranscriptReducePlan.standard.maximumRounds)
+    }
+
+    /// The copied-note case: a seventy minute meeting's prompt ran to about
+    /// seventy-eight thousand characters. Under a chunk budget that cannot
+    /// hold two ceiling-length answers side by side, every round maps twenty
+    /// blocks to twenty blocks and nothing shrinks; with answers able to
+    /// pack, the material converges inside the planned rounds.
+    @Test
+    func aSeventyMinuteMeetingConvergesWithinThePlannedRounds() async throws {
+        let source = transcript(characters: 77_556)
+
+        let plan = TranscriptReducePlan.standard(
+            forCharacters: source.count,
+            condensedPartCeiling: SummaryService.condensedPartCharacterEstimate
+        )
+        let reduced = try await TranscriptReducer.reduce(
+            source,
+            plan: plan,
+            condense: ceilingBoundCondense
+        )
+        #expect(plan.fits(reduced))
+    }
+
+    /// Three hours of speech: the fixed four-round plan runs out even once
+    /// answers pack, and the sized plan is what carries it home.
+    @Test
+    func anEnormousMeetingNeedsTheSizedPlan() async throws {
+        let source = transcript(characters: 200_000)
+
+        do {
+            _ = try await TranscriptReducer.reduce(
+                source,
+                plan: .standard,
+                condense: ceilingBoundCondense
+            )
+            Issue.record("the fixed four-round plan unexpectedly converged")
+        } catch {
+            #expect(error is TranscriptReduceError)
+        }
+
+        let plan = TranscriptReducePlan.standard(
+            forCharacters: source.count,
+            condensedPartCeiling: SummaryService.condensedPartCharacterEstimate
+        )
+        #expect(plan.maximumRounds > TranscriptReducePlan.standard.maximumRounds)
+        let reduced = try await TranscriptReducer.reduce(
+            source,
+            plan: plan,
+            condense: ceilingBoundCondense
+        )
+        #expect(plan.fits(reduced))
+    }
+}
+
+/// A condensing pass that always comes back at the response ceiling the
+/// plan factory budgets against, the worst case a real model can produce.
+private func ceilingBoundCondense(
+    _ part: String, _ index: Int, _ total: Int, _ round: Int
+) async throws -> String {
+    String(
+        repeating: "condensed material sentence. ",
+        count: max(
+            1,
+            min(SummaryService.condensedPartCharacterEstimate, part.count) / 29
+        )
+    )
 }
 
 private actor Rounds {
@@ -287,3 +364,4 @@ struct LiveSummaryTailTests {
         #expect(SummaryService.liveTail(of: long, maximumCharacters: 100).count == 1)
     }
 }
+
