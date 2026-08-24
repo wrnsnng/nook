@@ -4,6 +4,40 @@ Nook follows a user-facing release-note model. Each published version has a
 Markdown note in [`Releases/`](Releases/) and a matching `v<version>` release in
 the [binary releases repository](https://github.com/wrnsnng/nook-releases/releases).
 
+## 1.13.0
+
+- Drafts survive everything: My notes save on blur, navigation, and quit;
+  the quick note pad saves before quitting and keeps a failed save on
+  screen; live meeting notes persist to disk and return with a recovered
+  recording.
+- Merges keep typed titles, ticked and dated action items, and
+  hand-written sections from both notes, and always trash the absorbed
+  file rather than the combined one.
+- Whole-note saves stopped being lossy: completion state and unmodelled
+  sections round-trip; external edits are reloaded, not overwritten;
+  hands-free capture grows one file instead of several.
+- Summaries of long meetings condense hierarchically with progress and a
+  deadline; the live summary no longer cancels itself; failed
+  finalization saves the live captions instead of discarding them;
+  summary failures name their reason.
+- Quick note pad redesigned: one control row, Return always a newline,
+  Done, Discard, Esc, remembered frame, minimum size, honest hands-free
+  toggle, app accent asset.
+- Dictation refuses password fields on every path, re-checks delivery
+  focus, and bounds sessions and asset installs; the CLI bridge runs
+  Claude Code and Codex with tools and outside configuration disabled.
+- Detection prompt is non-activating and persistent, collapsing to a
+  compact Record affordance after a minute.
+- Library sidebar caps and collapses prep and open actions, gains arrow
+  key navigation; palette groups and hints; prep briefs speak plainly
+  with actions; ask sheet suggests questions and cancels cleanly.
+- Settings gains a General pane; the privacy pane names the CLI
+  exception; About derives its signing line from the real code
+  signature; onboarding shares one header treatment; every duration
+  formats through one authority.
+- Library and detail panes no longer re-render on audio meter ticks;
+  library answers chunk off the main thread with a pruned vector store.
+
 ## 1.12.1
 
 - Fix a crash when dictation opened the quick note pad: the pad's
@@ -236,10 +270,11 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Current release
 
-- [1.12.1](Releases/Nook-1.12.1.md), current stable release, build 26.
+- [1.13.0](Releases/Nook-1.13.0.md), current stable release, build 27.
 
 ## Previous releases
 
+- [1.12.1](Releases/Nook-1.12.1.md)
 - [1.12.0](Releases/Nook-1.12.0.md)
 - [1.11.0](Releases/Nook-1.11.0.md)
 - [1.10.2](Releases/Nook-1.10.2.md)
