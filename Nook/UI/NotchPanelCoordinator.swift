@@ -141,6 +141,7 @@ final class NotchPanelCoordinator {
         panel.isMovable = false
         panel.isReleasedWhenClosed = false
         panel.animationBehavior = .none
+        panel.identifier = NSUserInterfaceItemIdentifier("nook.notchPanel")
 
         // AppModel is first resolved while SwiftUI is constructing the menu-bar
         // scene. Resizing an NSHostingController-backed panel synchronously from

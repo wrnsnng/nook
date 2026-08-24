@@ -3,7 +3,10 @@ import SwiftUI
 struct FloatingNotesView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var meeting: MeetingCoordinator
-    @FocusState private var editorFocused: Bool
+    /// One focus request when the window opens. A polled focus state used
+    /// to sit here, and during a meeting this window re-renders with every
+    /// meter tick, which kept blurring the field it had just focused.
+    @State private var focusToken = 0
 
     var body: some View {
         ZStack {
@@ -17,13 +20,8 @@ struct FloatingNotesView: View {
 
                 SoftDivider()
 
-                LiveNotesEditor(
-                    isFocused: Binding(
-                        get: { editorFocused },
-                        set: { editorFocused = $0 }
-                    )
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                LiveNotesEditor(focusToken: focusToken)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .background(NookWindowBridge(role: .liveNotes, floats: true))
@@ -32,7 +30,7 @@ struct FloatingNotesView: View {
                 dismiss()
                 return
             }
-            editorFocused = true
+            focusToken += 1
         }
         .onChange(of: meeting.phase) { _, phase in
             guard !phase.isRecording else { return }
@@ -106,13 +104,13 @@ struct FloatingNotesView: View {
 /// audio-level or elapsed tick a no-op for the text view underneath this.
 private struct LiveNotesEditor: View {
     @EnvironmentObject private var meeting: MeetingCoordinator
-    var isFocused: Binding<Bool>
+    let focusToken: Int
 
     var body: some View {
         NookNotesEditor(
             text: $meeting.liveNotes,
             placeholder: "Capture a thought, question, or follow-up…",
-            isFocused: isFocused,
+            focusToken: focusToken,
             contentInsets: EdgeInsets(
                 top: 20,
                 leading: 23,

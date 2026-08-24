@@ -36,7 +36,21 @@ struct NookNotesEditor: View {
     @Environment(\.isEnabled) private var isEnabled
     @Binding var text: String
     let placeholder: String
+    /// Observed editing state, written by the text view's delegate as the
+    /// user moves between fields. Never drives focus back into the view;
+    /// see `focusToken`.
     var isFocused: Binding<Bool>?
+    /// Bump to give the field the keyboard.
+    ///
+    /// Focus used to be a polled boolean here, read back through a
+    /// `@FocusState` bridge on every SwiftUI update. That bridge propagates
+    /// asynchronously, and during a meeting these views re-render at the
+    /// audio meter's rate, so a stale read kept blurring a field the user
+    /// was typing in: the moment Nook picked up audio, the notes went dead.
+    /// A monotonic token is applied exactly once per change, so render
+    /// pressure cannot undo a focus request, and nothing here ever removes
+    /// focus from an editable field on its own.
+    var focusToken = 0
     var contentInsets = EdgeInsets(
         top: 10,
         leading: 11,
@@ -62,6 +76,7 @@ struct NookNotesEditor: View {
             PlainNotesTextView(
                 text: $text,
                 isFocused: isFocused,
+                focusToken: focusToken,
                 fontSize: fontSize,
                 lineSpacing: lineSpacing,
                 accessibilityLabel: accessibilityLabel,
@@ -94,6 +109,7 @@ private final class KeyActivatingTextView: NSTextView {
 private struct PlainNotesTextView: NSViewRepresentable {
     @Binding var text: String
     var isFocused: Binding<Bool>?
+    var focusToken: Int
     let fontSize: CGFloat
     let lineSpacing: CGFloat
     let accessibilityLabel: String
@@ -186,16 +202,18 @@ private struct PlainNotesTextView: NSViewRepresentable {
             return
         }
 
-        guard let isFocused else { return }
-        if isFocused.wrappedValue,
-           textView.window?.firstResponder !== textView {
+        // A changed token is the only thing that focuses the field. There is
+        // deliberately no blur path here: clicking elsewhere resigns the
+        // text view through AppKit, and a render-time blur is what broke
+        // typing during meetings.
+        if focusToken != context.coordinator.appliedFocusToken {
+            context.coordinator.appliedFocusToken = focusToken
             Task { @MainActor in
-                guard isFocused.wrappedValue else { return }
-                textView.window?.makeFirstResponder(textView)
+                guard textView.window != nil else { return }
+                if textView.window?.firstResponder !== textView {
+                    textView.window?.makeFirstResponder(textView)
+                }
             }
-        } else if !isFocused.wrappedValue,
-                  textView.window?.firstResponder === textView {
-            textView.window?.makeFirstResponder(nil)
         }
     }
 
@@ -233,6 +251,8 @@ private struct PlainNotesTextView: NSViewRepresentable {
         /// without re-applying attributes to find out. See `updateNSView`.
         var appliedFontSize: CGFloat?
         var appliedLineSpacing: CGFloat?
+        /// The focus token already honoured, so each request fires once.
+        var appliedFocusToken = 0
 
         init(parent: PlainNotesTextView) {
             self.parent = parent

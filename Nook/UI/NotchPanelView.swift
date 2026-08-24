@@ -6,7 +6,10 @@ struct NotchPanelView: View {
     @EnvironmentObject private var geometry: NotchPanelGeometry
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovering = false
-    @FocusState private var notesEditorFocused: Bool
+    /// Bumped when the user opens My notes, so the editor asks for the
+    /// keyboard exactly once per open rather than polling a focus state
+    /// that re-renders at the meter's rate.
+    @State private var notesFocusToken = 0
     /// Which consent action holds keyboard focus. Assigned explicitly because
     /// the panel takes key focus to answer with Return, and a keyboard user
     /// must be able to see what Return will do before pressing it.
@@ -491,7 +494,7 @@ struct NotchPanelView: View {
                     if mode == .notes {
                         Task { @MainActor in
                             await Task.yield()
-                            notesEditorFocused = true
+                            notesFocusToken += 1
                         }
                     }
                 }
@@ -517,10 +520,8 @@ struct NotchPanelView: View {
                         } else {
                             LiveNotesPanel(
                                 notes: $meeting.liveNotes,
-                                isFocused: $notesEditorFocused,
+                                focusToken: notesFocusToken,
                                 detach: {
-                                    guard !rendersForSnapshot else { return }
-                                    notesEditorFocused = false
                                     AppModel.shared.openLiveNotes()
                                 }
                             )
@@ -1305,7 +1306,7 @@ private struct LiveSummaryPanel: View {
 
 private struct LiveNotesPanel: View {
     @Binding var notes: String
-    var isFocused: FocusState<Bool>.Binding
+    let focusToken: Int
     let detach: () -> Void
 
     var body: some View {
@@ -1334,17 +1335,15 @@ private struct LiveNotesPanel: View {
             NookNotesEditor(
                 text: $notes,
                 placeholder: "Type a thought, a question, or something to remember…",
-                isFocused: Binding(
-                    get: { isFocused.wrappedValue },
-                    set: { isFocused.wrappedValue = $0 }
-                ),
+                focusToken: focusToken,
                 contentInsets: EdgeInsets(
                     top: 10,
                     leading: 11,
                     bottom: 10,
                     trailing: 11
                 ),
-                lineSpacing: 3
+                lineSpacing: 3,
+                accessibilityLabel: "My meeting notes"
             )
             .frame(minHeight: 132)
             .background(
