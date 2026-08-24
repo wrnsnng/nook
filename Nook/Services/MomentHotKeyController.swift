@@ -5,8 +5,8 @@ import Carbon.HIToolbox
 ///
 /// Carbon's `RegisterEventHotKey` for the same reasons dictation uses it: the
 /// keystroke is consumed globally, works in any app, and needs no
-/// Accessibility permission. The default is Option-Command-F, which does not
-/// collide with dictation's hold-to-talk modifiers.
+/// Accessibility permission. The combination comes from `ShortcutStore`, so a
+/// rebind in Settings takes effect here without restarting anything.
 @MainActor
 final class MomentHotKeyController {
     var onFlag: (() -> Void)?
@@ -14,12 +14,25 @@ final class MomentHotKeyController {
     private var hotKeyRef: EventHotKeyRef?
     private var eventHandler: EventHandlerRef?
     private static let signature: OSType = 0x6E6B666C // 'nkfl'
+    private var shortcut: RecordedShortcut
 
-    private static let keyCode: UInt32 = UInt32(kVK_ANSI_F)
-    private static let modifiers: UInt32 = UInt32(cmdKey | optionKey)
+    init(shortcut: RecordedShortcut) {
+        self.shortcut = shortcut
+    }
+
+    /// Swaps the registered combination, keeping the registration alive when
+    /// one already exists so mid-meeting rebinds work.
+    func apply(_ newShortcut: RecordedShortcut) {
+        guard newShortcut != shortcut else { return }
+        let wasRegistered = hotKeyRef != nil
+        stop()
+        shortcut = newShortcut
+        if wasRegistered { start() }
+    }
 
     func start() {
         guard hotKeyRef == nil else { return }
+        guard shortcut.isValid, !shortcut.isModifierOnly else { return }
         installHandlerIfNeeded()
 
         let eventID = EventHotKeyID(
@@ -27,8 +40,8 @@ final class MomentHotKeyController {
             id: 1
         )
         let status = RegisterEventHotKey(
-            Self.keyCode,
-            Self.modifiers,
+            shortcut.keyCode,
+            shortcut.carbonModifiers,
             eventID,
             GetApplicationEventTarget(),
             0,

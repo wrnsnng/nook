@@ -174,6 +174,7 @@ struct SnapshotRenderer {
                 QuickNoteView()
                     .environmentObject(quickNote)
                     .environmentObject(dictation)
+                    .environmentObject(ShortcutStore.shared)
                     .frame(width: canvasSize.width, height: canvasSize.height)
                     .environment(\.colorScheme, snapshotColorScheme)
                     .transaction { $0.disablesAnimations = true }
@@ -272,6 +273,7 @@ struct SnapshotRenderer {
             content = AnyView(
                 LiveMeetingView(rendersForSnapshot: true)
                     .environmentObject(meeting)
+                    .environmentObject(ShortcutStore.shared)
                     .frame(width: canvasSize.width, height: canvasSize.height)
                     .environment(\.colorScheme, .dark)
                     .transaction { $0.disablesAnimations = true }

@@ -3,6 +3,7 @@ import SwiftUI
 
 struct LiveMeetingView: View {
     @EnvironmentObject private var meeting: MeetingCoordinator
+    @EnvironmentObject private var shortcuts: ShortcutStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let rendersForSnapshot: Bool
 
@@ -326,7 +327,10 @@ struct LiveMeetingView: View {
             .disabled(meeting.pauseTransitionInFlight)
             .help("Finish meeting")
             .accessibilityLabel("Finish meeting")
-            .keyboardShortcut(".", modifiers: [.command, .shift])
+            .keyboardShortcut(
+                shortcuts.binding(for: .finishMeeting).keyEquivalent,
+                modifiers: shortcuts.binding(for: .finishMeeting).eventModifiers
+            )
         }
     }
 
@@ -384,7 +388,10 @@ struct LiveMeetingView: View {
             )
         )
         .disabled(meeting.pauseTransitionInFlight)
-        .keyboardShortcut(".", modifiers: [.command, .shift])
+        .keyboardShortcut(
+            shortcuts.binding(for: .finishMeeting).keyEquivalent,
+            modifiers: shortcuts.binding(for: .finishMeeting).eventModifiers
+        )
     }
 
     private var staticControlShelf: some View {

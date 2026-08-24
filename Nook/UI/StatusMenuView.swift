@@ -10,6 +10,7 @@ import SwiftUI
 /// written two ways depending on which menu the user opened it from.
 struct StatusMenuView: View {
     @EnvironmentObject private var updater: NookUpdateController
+    @EnvironmentObject private var shortcuts: ShortcutStore
     @Environment(\.openSettings) private var openSettings
     @StateObject private var state = StatusMenuState()
 
@@ -129,7 +130,11 @@ struct StatusMenuView: View {
             } label: {
                 Label("Start Recording", systemImage: "waveform.badge.mic")
             }
-            .keyboardShortcut("r", modifiers: [.command, .shift])
+            .keyboardShortcut(
+                shortcuts.binding(for: .startRecording).keyEquivalent,
+                modifiers: shortcuts.binding(for: .startRecording)
+                    .eventModifiers
+            )
         }
     }
 
@@ -140,7 +145,10 @@ struct StatusMenuView: View {
             } label: {
                 Label("Flag This Moment", systemImage: "flag")
             }
-            .keyboardShortcut("f", modifiers: [.command, .option])
+            .keyboardShortcut(
+                shortcuts.binding(for: .flagMoment).keyEquivalent,
+                modifiers: shortcuts.binding(for: .flagMoment).eventModifiers
+            )
 
             Button {
                 AppModel.shared.meeting.togglePause()
@@ -152,7 +160,11 @@ struct StatusMenuView: View {
                         : "pause.circle"
                 )
             }
-            .keyboardShortcut("p", modifiers: [.command, .shift])
+            .keyboardShortcut(
+                shortcuts.binding(for: .pauseResumeRecording).keyEquivalent,
+                modifiers: shortcuts.binding(for: .pauseResumeRecording)
+                    .eventModifiers
+            )
             .disabled(state.pauseTransitionInFlight)
 
             Button {
@@ -160,7 +172,11 @@ struct StatusMenuView: View {
             } label: {
                 Label("Finish Meeting", systemImage: "stop.circle.fill")
             }
-            .keyboardShortcut(".", modifiers: [.command, .shift])
+            .keyboardShortcut(
+                shortcuts.binding(for: .finishMeeting).keyEquivalent,
+                modifiers: shortcuts.binding(for: .finishMeeting)
+                    .eventModifiers
+            )
             .disabled(state.pauseTransitionInFlight)
 
             Divider()

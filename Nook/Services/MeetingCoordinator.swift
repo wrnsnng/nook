@@ -192,7 +192,9 @@ final class MeetingCoordinator: ObservableObject {
     private let detector: MeetingDetector
     private let capture = CaptureService()
     /// Global flag hotkey, registered only while a recording is running.
-    private let momentHotKeys = MomentHotKeyController()
+    private let momentHotKeys = MomentHotKeyController(
+        shortcut: ShortcutStore.shared.binding(for: .flagMoment)
+    )
     private let transcriber = TranscriptionService()
     private let liveTranscriber = LiveTranscriptionService()
     private let summarizer = SummaryService()
@@ -623,6 +625,14 @@ final class MeetingCoordinator: ObservableObject {
 
     func refreshLiveSummary() {
         scheduleLiveSummary(force: true)
+    }
+
+    /// Re-reads the flag-moment hotkey after a rebind in Settings, keeping
+    /// the registration live when a meeting is already recording.
+    func refreshMomentHotKey() {
+        momentHotKeys.apply(
+            ShortcutStore.shared.binding(for: .flagMoment)
+        )
     }
 
     func revealPermissions() {

@@ -20,6 +20,7 @@
 		1057F566FC726DB9FAD1A7C2 /* TranscriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 493BD99F4073897EF877E6B2 /* TranscriptionService.swift */; };
 		1059013167E7B7AFAABCE5BB /* NookDesign.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEA407B4708D8AD7F0B06502 /* NookDesign.swift */; };
 		108C84CBB417186D3963CEE3 /* DigestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FBF23AE1122A2E12B8EE118 /* DigestTests.swift */; };
+		10987819D5C8966D964521DD /* ShortcutStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A7DA9CAAF9000EEBF8659B5 /* ShortcutStore.swift */; };
 		11FE5A8F5F6B8B42CBDCFBA4 /* StatusMenuView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77437DEB25AC4ECE82644D22 /* StatusMenuView.swift */; };
 		1478E8EB0F7B98D770E0FCF5 /* PrivacyStorageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40C568E6906587FA1D689E5F /* PrivacyStorageTests.swift */; };
 		15185F5438EF0E9DC3095001 /* LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DEAE8AD6B91E1D69E8EDA41 /* LibraryView.swift */; };
@@ -51,6 +52,7 @@
 		408E7914D251C42840E49C05 /* QuickNotePadLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DD3BC0B20F3ADD764D42B31 /* QuickNotePadLayoutTests.swift */; };
 		40BFD6BCAB1A1E74EC952472 /* NookIconSource-Cobalt.png in Resources */ = {isa = PBXBuildFile; fileRef = 2B35E9D093EB220A65D04B90 /* NookIconSource-Cobalt.png */; };
 		40E8A120A8B3A409F01BCCFA /* MeetingCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04DB60A1C42F72E177BB9160 /* MeetingCoordinator.swift */; };
+		4115C2BF7345E97692845B0F /* ShortcutStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A7DA9CAAF9000EEBF8659B5 /* ShortcutStore.swift */; };
 		426867718A3BE32CF3E90A7C /* DictationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FA4268191B8994F04391D35 /* DictationCoordinator.swift */; };
 		4374C287B03A461C71BE2C48 /* MeetingDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1162CB8F3088E4EA4EDAEC43 /* MeetingDetector.swift */; };
 		4466A37E4B613A0EA146AE14 /* DictationFormatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC23868A31B76A95FC6688E6 /* DictationFormatting.swift */; };
@@ -121,6 +123,7 @@
 		9EF0C1E27492EEA9136CDB21 /* FloatingNotesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D5C59EC69ED9C02DCECCCA7 /* FloatingNotesView.swift */; };
 		A015883073883AB5C82C34AA /* TextInsertionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B298E8C21A364A8857152A57 /* TextInsertionService.swift */; };
 		A03C6BE04EABA3041CAA06E6 /* SummaryRegenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = E15F65EA6B77F2A746907A35 /* SummaryRegenerator.swift */; };
+		A257A9607A47A76485FBA71D /* ShortcutStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD64CFC3319FBA0B31EE238D /* ShortcutStoreTests.swift */; };
 		A4A0E1DA0DDA1431733498E3 /* NookApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E12DEFF243E7B4B84A7A135 /* NookApp.swift */; };
 		A7825C444D696A2890C5B3BF /* NookAppIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A382566BB5A6E90AEF09EC0 /* NookAppIntents.swift */; };
 		A7FA2EA66B8F436D849ACAEB /* DictationAudioSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 474FCF7E641790A7A9CF100C /* DictationAudioSource.swift */; };
@@ -256,6 +259,7 @@
 		69EEF566A22CAC8C8A35BD84 /* RecordingRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingRecoveryTests.swift; sourceTree = "<group>"; };
 		6A3FB7F59FFAEBB639390737 /* OpenActionsController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenActionsController.swift; sourceTree = "<group>"; };
 		6A751CEC0EB19CB25ED5FEA7 /* NoteCombinerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteCombinerTests.swift; sourceTree = "<group>"; };
+		6A7DA9CAAF9000EEBF8659B5 /* ShortcutStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutStore.swift; sourceTree = "<group>"; };
 		6AF31C476DBDFF1170647A72 /* Nook.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Nook.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		6B742437E025D0BAB1C7C0BA /* CaptureService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureService.swift; sourceTree = "<group>"; };
 		6C5A0DD6E3695CE90FD0CA1C /* DictationRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationRecognizer.swift; sourceTree = "<group>"; };
@@ -297,6 +301,7 @@
 		B7B3DAE041B75121309D9055 /* ReleaseSecurityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReleaseSecurityTests.swift; sourceTree = "<group>"; };
 		B9895DFC913D1E5471937874 /* CommandPaletteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandPaletteView.swift; sourceTree = "<group>"; };
 		BB3F2235F8F2341049C2F52C /* TranscriptSegmentIdentityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptSegmentIdentityTests.swift; sourceTree = "<group>"; };
+		BD64CFC3319FBA0B31EE238D /* ShortcutStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutStoreTests.swift; sourceTree = "<group>"; };
 		C009372948CAC8A07E9237DF /* MultiSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultiSessionTests.swift; sourceTree = "<group>"; };
 		C10C52E64E22A80179251010 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		C690709E84082D9FB8F49E55 /* PrepBriefView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrepBriefView.swift; sourceTree = "<group>"; };
@@ -378,6 +383,7 @@
 				83A5502CE70F9EA4C3BE8F69 /* PermissionSetupController.swift */,
 				744F6F3EA5D041A1C1669B43 /* PersonalNotesDraft.swift */,
 				1B53F5A5FD8D01402F7613E2 /* PrepBrief.swift */,
+				6A7DA9CAAF9000EEBF8659B5 /* ShortcutStore.swift */,
 				D588A6E65FB7C05B912F3220 /* SpeechAssets.swift */,
 				E15F65EA6B77F2A746907A35 /* SummaryRegenerator.swift */,
 				2579421D921587B2DB226192 /* SummaryService.swift */,
@@ -543,6 +549,7 @@
 				B45B67065E78F2C7EF8F403B /* RecordingLifecycleTests.swift */,
 				69EEF566A22CAC8C8A35BD84 /* RecordingRecoveryTests.swift */,
 				B7B3DAE041B75121309D9055 /* ReleaseSecurityTests.swift */,
+				BD64CFC3319FBA0B31EE238D /* ShortcutStoreTests.swift */,
 				7CE7A4727C693BB0BDAED00D /* ShowcaseSnapshotTests.swift */,
 				109A234757DF010C3ABD7735 /* SpokenNoteTests.swift */,
 				1AD6A1AE21557C51C678FD67 /* SummaryRegeneratorTests.swift */,
@@ -778,6 +785,7 @@
 				0ADB67F317BA07AC2DB93C9F /* RecordingRecovery.swift in Sources */,
 				B01B73D6C92F79AC5556F004 /* SettingsView.swift in Sources */,
 				15E244E9782298B52E9E6DB6 /* ShortcutRecorderView.swift in Sources */,
+				4115C2BF7345E97692845B0F /* ShortcutStore.swift in Sources */,
 				0DE20A116EF0802BACEE8BAC /* SpeechAssets.swift in Sources */,
 				11FE5A8F5F6B8B42CBDCFBA4 /* StatusMenuView.swift in Sources */,
 				A03C6BE04EABA3041CAA06E6 /* SummaryRegenerator.swift in Sources */,
@@ -856,6 +864,7 @@
 				2975F188D341272B55A0F5C5 /* RecordingRecovery.swift in Sources */,
 				1697FF15C2FE7F3425EAF7A0 /* SettingsView.swift in Sources */,
 				570ABE50DDCC6103608C52F0 /* ShortcutRecorderView.swift in Sources */,
+				10987819D5C8966D964521DD /* ShortcutStore.swift in Sources */,
 				8D65B14D1E3F0D8DB95C455D /* SnapshotRenderer.swift in Sources */,
 				79583555C5F3300FD3FED7F6 /* SpeechAssets.swift in Sources */,
 				581A5C583F700F10916ACAE1 /* StatusMenuView.swift in Sources */,
@@ -902,6 +911,7 @@
 				57437246B9E90D1A4BDE1082 /* RecordingLifecycleTests.swift in Sources */,
 				508CAAC62D35513D76C05F84 /* RecordingRecoveryTests.swift in Sources */,
 				56689ABB89EBBED8F8569572 /* ReleaseSecurityTests.swift in Sources */,
+				A257A9607A47A76485FBA71D /* ShortcutStoreTests.swift in Sources */,
 				C78A280ADF06F6B2BDBE927D /* ShowcaseSnapshotTests.swift in Sources */,
 				8F9675D805A7E24CA288D4EC /* SpokenNoteTests.swift in Sources */,
 				635B7A882012DCAC6E7EB161 /* SummaryRegeneratorTests.swift in Sources */,

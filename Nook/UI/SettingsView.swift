@@ -11,6 +11,7 @@ enum SettingsPane: Hashable {
     case general
     case listening
     case dictation
+    case keyboard
     case privacy
     case updates
     case about
@@ -26,6 +27,7 @@ struct SettingsView: View {
     @EnvironmentObject private var quickNote: QuickNoteController
     @EnvironmentObject private var recovery: RecordingRecovery
     @EnvironmentObject private var calendar: CalendarContextService
+    @EnvironmentObject private var shortcuts: ShortcutStore
     @State private var pendingStorageURL: URL?
     @State private var storageMessage: String?
     @State private var orphanPendingDeletion: OrphanedRecording?
@@ -58,6 +60,12 @@ struct SettingsView: View {
                     Label("Dictation", systemImage: "mic.and.signal.meter")
                 }
                 .tag(SettingsPane.dictation)
+
+            keyboardPane
+                .tabItem {
+                    Label("Keyboard", systemImage: "command")
+                }
+                .tag(SettingsPane.keyboard)
 
             privacyPane
                 .tabItem {
@@ -246,11 +254,13 @@ struct SettingsView: View {
                 Toggle("Dictate into any text field", isOn: $dictation.isEnabled)
 
                 if dictation.isEnabled {
-                    LabeledContent("Shortcut") {
-                        ShortcutRecorderView(shortcut: dictation.shortcut) {
-                            dictation.setShortcut($0)
-                        }
-                    }
+                LabeledContent("Shortcut") {
+                    ShortcutRecorderView(
+                        shortcut: dictation.shortcut,
+                        onChange: { dictation.setShortcut($0) },
+                        accessibilityLabel: "Dictation shortcut"
+                    )
+                }
 
                     Picker("Behaviour", selection: $dictation.activation) {
                         ForEach(DictationActivation.allCases) { option in
@@ -438,6 +448,102 @@ struct SettingsView: View {
 
     private var isAppleIntelligenceAvailable: Bool {
         DictationRefiner.isModelAvailable
+    }
+
+    /// Every Nook shortcut in one pane, each recorded the same way dictation
+    /// is: press the combination you want.
+    private var keyboardPane: some View {
+        Form {
+            Section {
+                ForEach(NookShortcutID.allCases) { id in
+                    LabeledContent(id.title) {
+                        HStack(spacing: NookSpacing.small) {
+                            if shortcuts.isOverridden(id) {
+                                Button {
+                                    shortcuts.set(nil, for: id)
+                                } label: {
+                                    Image(systemName: "arrow.counterclockwise")
+                                        .font(NookType.caption)
+                                }
+                                .buttonStyle(.borderless)
+                                .help("Restore the default, "
+                                    + id.defaultShortcut.spokenDescription + ".")
+                                .accessibilityLabel(
+                                    "Reset \(id.title) to default"
+                                )
+                            }
+                            ShortcutRecorderView(
+                                shortcut: shortcuts.binding(for: id),
+                                onChange: { shortcuts.set($0, for: id) },
+                                accessibilityLabel: "\(id.title) shortcut"
+                            )
+                        }
+                    }
+                }
+            } header: {
+                Label("Shortcuts", systemImage: "command")
+            } footer: {
+                Text(shortcutsFooter)
+            }
+
+            if !shortcuts.conflicts().isEmpty || hasDictationConflict {
+                Section {
+                    ForEach(shortcutConflictLines(), id: \.self) { line in
+                        Label(line, systemImage: "exclamationmark.triangle")
+                            .font(NookType.caption)
+                            .foregroundStyle(NookPalette.warning)
+                    }
+                } header: {
+                    Label("Shared combinations", systemImage: "square.on.square")
+                } footer: {
+                    Text(
+                        "Two actions sharing a combination means only one of them can respond to it."
+                    )
+                }
+            }
+        }
+    }
+
+    /// The dictation shortcut participates in conflict detection too: it is
+    /// registered globally like Flag This Moment, so sharing with anything
+    /// here would swallow the other action.
+    private var hasDictationConflict: Bool {
+        NookShortcutID.allCases.contains {
+            shortcuts.binding(for: $0) == dictation.shortcut
+        }
+    }
+
+    private func shortcutConflictLines() -> [String] {
+        var lines = shortcuts.conflicts().map { group in
+            group.map(\.title).joined(separator: " and ")
+                + " share "
+                + shortcuts.binding(for: group[0]).spokenDescription
+                + "."
+        }
+        if hasDictationConflict {
+            let shared = NookShortcutID.allCases.first {
+                shortcuts.binding(for: $0) == dictation.shortcut
+            }
+            if let shared {
+                lines.append(
+                    "Dictation and \(shared.title) share "
+                        + dictation.shortcut.spokenDescription + "."
+                )
+            }
+        }
+        return lines
+    }
+
+    private var shortcutsFooter: String {
+        let globals = NookShortcutID.allCases
+            .filter(\.isGlobal)
+            .map(\.title)
+            .joined(separator: " and ")
+        return """
+        Click a combination, then press the new keys. Escape cancels. \
+        \(globals) works while any application is frontmost; the rest \
+        work inside Nook's windows.
+        """
     }
 
     /// Routed through `selectEngine` so choosing an off-device engine here asks

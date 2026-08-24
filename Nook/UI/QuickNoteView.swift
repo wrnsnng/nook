@@ -4,6 +4,7 @@ import SwiftUI
 struct QuickNoteView: View {
     @EnvironmentObject private var note: QuickNoteController
     @EnvironmentObject private var dictation: DictationCoordinator
+    @EnvironmentObject private var shortcuts: ShortcutStore
     /// The paragraph the user declined; it stays declined until the words
     /// change.
     @State private var dismissedSuggestion: String?
@@ -463,8 +464,16 @@ struct QuickNoteView: View {
                 .frame(height: Self.controlLabelHeight)
         }
         .buttonStyle(.bordered)
-        .keyboardShortcut("l", modifiers: [.command, .shift])
-        .help("Start a checklist line. Shift-Command-L.")
+        .keyboardShortcut(
+            shortcuts.binding(for: .quickNoteChecklist).keyEquivalent,
+            modifiers: shortcuts.binding(for: .quickNoteChecklist)
+                .eventModifiers
+        )
+        .help(
+            "Start a checklist line. "
+                + shortcuts.binding(for: .quickNoteChecklist).spokenDescription
+                + "."
+        )
         .accessibilityLabel("Start a checklist line")
     }
 
@@ -513,9 +522,16 @@ struct QuickNoteView: View {
                 .frame(height: Self.controlLabelHeight)
         }
         .buttonStyle(.bordered)
-        .keyboardShortcut(.delete, modifiers: .command)
+        .keyboardShortcut(
+            shortcuts.binding(for: .quickNoteDiscard).keyEquivalent,
+            modifiers: shortcuts.binding(for: .quickNoteDiscard).eventModifiers
+        )
         .disabled(note.text.isEmpty)
-        .help("Discard this note. Command-Delete.")
+        .help(
+            "Discard this note. "
+                + shortcuts.binding(for: .quickNoteDiscard).spokenDescription
+                + "."
+        )
         .accessibilityLabel("Discard this note")
     }
 

@@ -101,6 +101,18 @@ final class AppModel: ObservableObject {
             }
             .store(in: &cancellables)
 
+        // A rebind in Settings reaches the live hotkey registration the same
+        // moment it reaches every menu and button. Reading inside the task
+        // rather than the closure is what sees the new value, since this
+        // publisher fires just before the store's own change lands.
+        ShortcutStore.shared.objectWillChange
+            .sink { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.meeting.refreshMomentHotKey()
+                }
+            }
+            .store(in: &cancellables)
+
         meeting.onPresentationRequested = { [weak panel] in
             panel?.show()
         }

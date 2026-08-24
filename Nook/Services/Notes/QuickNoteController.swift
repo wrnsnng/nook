@@ -584,6 +584,7 @@ final class QuickNoteController: ObservableObject {
             rootView: QuickNoteView()
                 .environmentObject(self)
                 .environmentObject(AppModel.shared.dictation)
+                .environmentObject(ShortcutStore.shared)
         )
         // Where the pad was left is where the next thought should land. The
         // window is rebuilt on every present, so without an autosaved frame it

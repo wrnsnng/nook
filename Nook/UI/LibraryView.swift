@@ -200,6 +200,7 @@ struct LibraryView: View {
     @EnvironmentObject private var markdownDraft: MarkdownDraftController
     @EnvironmentObject private var personalNotesDraft: PersonalNotesDraftController
     @EnvironmentObject private var prep: PrepBriefController
+    @EnvironmentObject private var shortcuts: ShortcutStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var searchController = LibrarySearchController()
@@ -309,10 +310,14 @@ struct LibraryView: View {
             // that subscribes to the coordinator, so meter ticks land here
             // instead of on the sidebar's grouping and filtering.
             MeetingPhaseObserver(phase: $currentPhase)
-            // A hidden accelerator so ⌘K reaches the palette from anywhere in
+            // A hidden accelerator so the palette reaches from anywhere in
             // the window, toolbar focus included.
             Button("Command Palette") { showsCommandPalette = true }
-                .keyboardShortcut("k", modifiers: .command)
+                .keyboardShortcut(
+                    shortcuts.binding(for: .commandPalette).keyEquivalent,
+                    modifiers: shortcuts.binding(for: .commandPalette)
+                        .eventModifiers
+                )
                 .opacity(0)
                 .accessibilityHidden(true)
         }
@@ -1167,6 +1172,7 @@ private struct MeetingPhaseObserver: View {
 /// `MeetingPhaseObserver`).
 private struct LibraryRecordingToolbar: View {
     @EnvironmentObject private var meeting: MeetingCoordinator
+    @EnvironmentObject private var shortcuts: ShortcutStore
     let createNote: (NoteTemplate) -> Void
 
     var body: some View {
@@ -1202,7 +1208,10 @@ private struct LibraryRecordingToolbar: View {
                 Label("New note", systemImage: "square.and.pencil")
             }
             .disabled(isProcessing)
-            .keyboardShortcut("n", modifiers: .command)
+            .keyboardShortcut(
+                shortcuts.binding(for: .newNote).keyEquivalent,
+                modifiers: shortcuts.binding(for: .newNote).eventModifiers
+            )
             .help("Create a local note from a starting point")
         }
     }

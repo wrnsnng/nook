@@ -2,7 +2,7 @@ import AppKit
 import Carbon.HIToolbox
 import SwiftUI
 
-/// Lets the user record the dictation shortcut by pressing it.
+/// Lets the user record a shortcut by pressing it.
 ///
 /// While recording, a *local* event monitor takes key presses out of Nook's own
 /// Settings window. A local monitor needs no permission and cannot see anything
@@ -10,6 +10,9 @@ import SwiftUI
 struct ShortcutRecorderView: View {
     let shortcut: DictationShortcut
     let onChange: (DictationShortcut) -> Void
+    /// Names the control for assistive tech, since "the dictation shortcut"
+    /// would be wrong on every other row of the shortcuts pane.
+    var accessibilityLabel = "Keyboard shortcut"
 
     @State private var isRecording = false
     @State private var monitor: Any?
@@ -33,7 +36,7 @@ struct ShortcutRecorderView: View {
                     ? "Press a combination, or hold modifiers alone and release them. Escape cancels."
                     : "Click to record a new shortcut."
             )
-            .accessibilityLabel("Dictation shortcut")
+            .accessibilityLabel(accessibilityLabel)
             .accessibilityValue(
                 isRecording ? "Recording a new shortcut" : shortcut.displayString
             )

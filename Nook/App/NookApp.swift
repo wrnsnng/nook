@@ -5,11 +5,13 @@ struct NookApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var appModel = AppModel.shared
     @StateObject private var updater = NookUpdateController()
+    @StateObject private var shortcuts = ShortcutStore.shared
 
     var body: some Scene {
         MenuBarExtra {
             StatusMenuView()
                 .environmentObject(updater)
+                .environmentObject(shortcuts)
         } label: {
             NookMenuBarLabel()
                 .environmentObject(appModel.meeting)
@@ -24,6 +26,7 @@ struct NookApp: App {
                 .environmentObject(appModel.markdownDraft)
                 .environmentObject(appModel.personalNotesDraft)
                 .environmentObject(appModel.prep)
+                .environmentObject(shortcuts)
                 .frame(minWidth: 900, minHeight: 580)
                 .background(NookWindowBridge(role: .library))
         }
@@ -42,19 +45,32 @@ struct NookApp: App {
                     ) {
                         appModel.meeting.togglePause()
                     }
-                    .keyboardShortcut("p", modifiers: [.command, .shift])
+                    .keyboardShortcut(
+                        shortcuts.binding(for: .pauseResumeRecording)
+                            .keyEquivalent,
+                        modifiers: shortcuts.binding(for: .pauseResumeRecording)
+                            .eventModifiers
+                    )
                     .disabled(appModel.meeting.pauseTransitionInFlight)
 
                     Button("Finish Meeting") {
                         appModel.meeting.stopRecording()
                     }
-                    .keyboardShortcut(".", modifiers: [.command, .shift])
+                    .keyboardShortcut(
+                        shortcuts.binding(for: .finishMeeting).keyEquivalent,
+                        modifiers: shortcuts.binding(for: .finishMeeting)
+                            .eventModifiers
+                    )
                     .disabled(appModel.meeting.pauseTransitionInFlight)
                 } else {
                     Button("Start Recording") {
                         appModel.meeting.startManualMeeting()
                     }
-                    .keyboardShortcut("r", modifiers: [.command, .shift])
+                    .keyboardShortcut(
+                        shortcuts.binding(for: .startRecording).keyEquivalent,
+                        modifiers: shortcuts.binding(for: .startRecording)
+                            .eventModifiers
+                    )
                 }
             }
 
@@ -81,6 +97,7 @@ struct NookApp: App {
         Window("My Notes", id: "live-notes") {
             FloatingNotesView()
                 .environmentObject(appModel.meeting)
+                .environmentObject(shortcuts)
                 .frame(minWidth: 360, minHeight: 320)
         }
         .defaultSize(width: 440, height: 500)
@@ -98,6 +115,7 @@ struct NookApp: App {
                 .environmentObject(appModel.recovery)
                 .environmentObject(appModel.calendar)
                 .environmentObject(updater)
+                .environmentObject(shortcuts)
                 .frame(width: 620, height: 540)
         }
     }

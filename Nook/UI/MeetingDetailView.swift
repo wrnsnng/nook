@@ -21,6 +21,7 @@ struct MeetingDetailView: View {
     @EnvironmentObject private var store: MarkdownStore
     @EnvironmentObject private var markdownDraft: MarkdownDraftController
     @EnvironmentObject private var personalNotes: PersonalNotesDraftController
+    @EnvironmentObject private var shortcuts: ShortcutStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let note: MeetingNote
 
@@ -589,7 +590,11 @@ struct MeetingDetailView: View {
                         !personalNotes.hasChanges
                             || markdownDraft.hasChanges
                     )
-                    .keyboardShortcut("s", modifiers: .command)
+                    .keyboardShortcut(
+                        shortcuts.binding(for: .saveNote).keyEquivalent,
+                        modifiers: shortcuts.binding(for: .saveNote)
+                            .eventModifiers
+                    )
                 }
                 .padding(.horizontal, 14)
                 .frame(minHeight: 42)
@@ -899,7 +904,10 @@ struct MeetingDetailView: View {
                     )
                 )
                 .disabled(!hasMarkdownChanges)
-                .keyboardShortcut("s", modifiers: .command)
+                .keyboardShortcut(
+                    shortcuts.binding(for: .saveNote).keyEquivalent,
+                    modifiers: shortcuts.binding(for: .saveNote).eventModifiers
+                )
             }
             .padding(.horizontal, 28)
             .padding(.vertical, 13)
