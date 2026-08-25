@@ -365,3 +365,69 @@ struct LiveSummaryTailTests {
     }
 }
 
+
+/// A two hour meeting was written up as two thin sentences with no key
+/// points: the summary ceiling never moved with meeting length, and the
+/// final pass had no idea how much conversation its condensed source stood
+/// in for. These pin the calibration pieces.
+struct SummaryQualityTests {
+
+    private func transcript(charactersPerSegment: Int, segments: Int) -> [TranscriptSegment] {
+        (0..<segments).map { index in
+            TranscriptSegment(
+                startTime: Double(index) * 30,
+                duration: 25,
+                text: String(repeating: "w", count: charactersPerSegment),
+                source: .mixed
+            )
+        }
+    }
+
+    @Test
+    func longMeetingsMayWriteLongerSummaries() {
+        let longTranscript = transcript(
+            charactersPerSegment: 120,
+            segments: 300
+        )
+        let summary = String(repeating: "sentence one. ", count: 140)
+        let proposed = MeetingInsights(
+            title: "Planning",
+            summary: summary,
+            keyPoints: [],
+            decisions: [],
+            actionItems: []
+        )
+
+        // 2,100 characters: over the short-meeting ceiling, under the
+        // long-meeting one, and far below the echo ratio.
+        #expect(summary.count > 1_600)
+        #expect(summary.count <= 2_400)
+        #expect(MeetingInsightValidator.validate(proposed, against: longTranscript) != nil)
+
+        let shortTranscript = transcript(
+            charactersPerSegment: 60,
+            segments: 5
+        )
+        #expect(MeetingInsightValidator.validate(proposed, against: shortTranscript) == nil)
+    }
+
+    @Test
+    func coverageDescribesTheConversationAtHumanScale() {
+        // Segments land every thirty seconds; 265 of them span two hours
+        // and change, which is what the note should say rather than a
+        // number nobody said out loud.
+        let coverage = SummaryService.TranscriptCoverage.forTranscript(
+            transcript(charactersPerSegment: 10, segments: 265)
+        )
+        #expect(coverage.durationSentence == "about 2 hours 12 minutes")
+        #expect(coverage.spokenWords == 265)
+    }
+
+    @Test
+    func anHourReadsAsAnHourNotSixtyMinutes() {
+        let coverage = SummaryService.TranscriptCoverage.forTranscript(
+            transcript(charactersPerSegment: 10, segments: 121)
+        )
+        #expect(coverage.durationSentence == "about 1 hour")
+    }
+}
