@@ -4,6 +4,15 @@ Nook follows a user-facing release-note model. Each published version has a
 Markdown note in [`Releases/`](Releases/) and a matching `v<version>` release in
 the [binary releases repository](https://github.com/wrnsnng/nook-releases/releases).
 
+## 1.18.0
+
+- Fixed: profanity in a transcript tripped Apple's input screening and
+  blocked summaries outright. Model input is now masked through a fixed
+  word list; stored transcripts keep every original word.
+- Regeneration progress labels its passes, so shrinking totals between
+  condensing rounds no longer read as broken arithmetic.
+- Live captions in the meeting panel are left aligned.
+
 ## 1.17.0
 
 - Regenerate summary shows live progress in place of the gist prose:
