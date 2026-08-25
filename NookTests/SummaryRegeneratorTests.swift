@@ -28,9 +28,12 @@ struct SummaryRegeneratorTests {
 
         func summarizeReportingFailure(
             transcript: [TranscriptSegment],
-            fallbackTitle: String
+            fallbackTitle: String,
+            onStage: SummaryStageHandler?
         ) async -> SummaryResult {
             recorder.record(fallbackTitle: fallbackTitle)
+            await onStage?(.condensing(part: 2, total: 5))
+            await onStage?(.writingUp)
             return result
         }
     }
@@ -232,4 +235,83 @@ struct SummaryRegeneratorTests {
         #expect(outcome == .retained(reason: nil))
         #expect(recorder.calls == 0)
     }
+}
+
+
+/// Regeneration reports where it is, and the wording a waiting surface
+/// shows is decided once rather than improvised per surface.
+struct RegenerationStageTests {
+
+    @Test
+    func stagesReachTheHandlerInOrder() async {
+        var note = MeetingNote(
+            title: "Planning sync",
+            startedAt: Date(timeIntervalSince1970: 0),
+            endedAt: Date(timeIntervalSince1970: 300),
+            sourceApp: "Manual",
+            summary: "",
+            transcript: [
+                TranscriptSegment(startTime: 0, duration: 4, text: "We agreed.")
+            ]
+        )
+        note.kind = .meeting
+
+        let collected = StageCollector()
+        let outcome = await SummaryRegenerator.regenerate(
+            note,
+            using: FailingStubWithStages()
+        ) { stage in
+            await collected.append(stage)
+        }
+        let stages = await collected.stages
+
+        if case .retained = outcome {
+            // A failure still reports the stages it reached; either outcome
+            // satisfies this test, which only watches the handler.
+        }
+        #expect(stages == [.condensing(part: 2, total: 5), .writingUp])
+    }
+
+    private struct FailingStubWithStages: FailureReportingSummarizing {
+        func summarizeReportingFailure(
+            transcript: [TranscriptSegment],
+            fallbackTitle: String,
+            onStage: SummaryStageHandler?
+        ) async -> SummaryResult {
+            await onStage?(.condensing(part: 2, total: 5))
+            await onStage?(.writingUp)
+            return SummaryResult(
+                insights: MeetingInsights(
+                    title: "", summary: "", keyPoints: [], decisions: [], actionItems: []
+                ),
+                failure: .modelBusy
+            )
+        }
+    }
+
+    @Test
+    func copyNamesEachStageForSomeoneWaiting() {
+        #expect(
+            RegenerationCopy.headline(for: .condensing(part: 3, total: 21))
+                == "Re-reading this conversation"
+        )
+        #expect(
+            RegenerationCopy.detail(for: .condensing(part: 3, total: 21))
+                == "Part 3 of 21"
+        )
+        #expect(
+            RegenerationCopy.detail(for: .condensing(part: 0, total: 0))
+                == "Reading your transcript"
+        )
+        #expect(
+            RegenerationCopy.headline(for: .writingUp) == "Writing up what it heard"
+        )
+        #expect(RegenerationCopy.detail(for: .writingUp) == "Nearly there")
+    }
+}
+
+
+private actor StageCollector {
+    private(set) var stages: [SummaryStage] = []
+    func append(_ stage: SummaryStage) { stages.append(stage) }
 }

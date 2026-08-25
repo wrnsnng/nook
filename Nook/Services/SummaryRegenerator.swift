@@ -1,5 +1,42 @@
 import Foundation
 
+/// Where a summarization stands, in terms a waiting surface can show.
+///
+/// Condensing reports its parts because that is where minutes go past;
+/// writing up is quick but is the moment the answer actually forms, which
+/// reads differently to someone watching.
+enum SummaryStage: Sendable, Equatable {
+    /// A part counter of zero means the first pass has yet to report.
+    case condensing(part: Int, total: Int)
+    case writingUp
+}
+
+typealias SummaryStageHandler = @Sendable (SummaryStage) async -> Void
+
+/// What each stage says to someone waiting.
+///
+/// Pure so the wording is testable without Apple Intelligence, and shared
+/// so every surface describing regeneration says the same thing.
+enum RegenerationCopy {
+    static func headline(for stage: SummaryStage) -> String {
+        switch stage {
+        case .condensing: "Re-reading this conversation"
+        case .writingUp: "Writing up what it heard"
+        }
+    }
+
+    static func detail(for stage: SummaryStage) -> String {
+        switch stage {
+        case .condensing(let part, let total) where part == 0 || total == 0:
+            "Reading your transcript"
+        case .condensing(let part, let total):
+            "Part \(part) of \(total)"
+        case .writingUp:
+            "Nearly there"
+        }
+    }
+}
+
 /// What regenerating a note's summary needs from a summarizer.
 ///
 /// `NoteSummarizing` hides why a summary failed, which a merge does not need
@@ -8,22 +45,25 @@ import Foundation
 protocol FailureReportingSummarizing: Sendable {
     func summarizeReportingFailure(
         transcript: [TranscriptSegment],
-        fallbackTitle: String
+        fallbackTitle: String,
+        onStage: SummaryStageHandler?
     ) async -> SummaryResult
 }
 
 extension SummaryService: FailureReportingSummarizing {
-    /// The coordinator-facing method carries a progress callback with a
-    /// default, and a defaulted parameter cannot witness a protocol
+    /// The coordinator-facing method carries progress callbacks with
+    /// defaults, and a defaulted parameter cannot witness a protocol
     /// requirement, so the plain shape is spelled out here.
     func summarizeReportingFailure(
         transcript: [TranscriptSegment],
-        fallbackTitle: String
+        fallbackTitle: String,
+        onStage: SummaryStageHandler?
     ) async -> SummaryResult {
         await self.summarizeReportingFailure(
             transcript: transcript,
             fallbackTitle: fallbackTitle,
-            onProgress: nil
+            onProgress: nil,
+            onStage: onStage
         )
     }
 }
@@ -61,14 +101,16 @@ enum SummaryRegenerator {
     /// note.
     static func regenerate(
         _ note: MeetingNote,
-        using summarizer: some FailureReportingSummarizing
+        using summarizer: some FailureReportingSummarizing,
+        onStage: SummaryStageHandler? = nil
     ) async -> Outcome {
         guard isAvailable(for: note) else { return .retained(reason: nil) }
         let result = await summarizer.summarizeReportingFailure(
             transcript: note.transcript,
             // The current title is the fallback, so a model that cannot find
             // a subject leaves the note named the way the user knows it.
-            fallbackTitle: note.title
+            fallbackTitle: note.title,
+            onStage: onStage
         )
         guard result.failure == nil else {
             return .retained(reason: result.failure)

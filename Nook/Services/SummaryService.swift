@@ -206,14 +206,16 @@ actor SummaryService {
     func summarizeReportingFailure(
         transcript: [TranscriptSegment],
         fallbackTitle: String,
-        onProgress: SummaryProgressHandler? = nil
+        onProgress: SummaryProgressHandler? = nil,
+        onStage: SummaryStageHandler? = nil
     ) async -> SummaryResult {
         await produce(
             source: Self.promptText(for: transcript),
             grounding: transcript,
             previous: nil,
             fallbackTitle: fallbackTitle,
-            onProgress: onProgress
+            onProgress: onProgress,
+            onStage: onStage
         )
     }
 
@@ -243,7 +245,8 @@ actor SummaryService {
         grounding transcript: [TranscriptSegment],
         previous: MeetingInsights?,
         fallbackTitle: String,
-        onProgress: SummaryProgressHandler?
+        onProgress: SummaryProgressHandler?,
+        onStage: SummaryStageHandler? = nil
     ) async -> SummaryResult {
         guard !text.isEmpty else {
             return SummaryResult(
@@ -275,7 +278,8 @@ actor SummaryService {
                 coverage: coverage,
                 previous: previous,
                 fallbackTitle: fallbackTitle,
-                onProgress: onProgress
+                onProgress: onProgress,
+                onStage: onStage
             )
             if let insights = finalized(
                 proposed,
@@ -311,7 +315,8 @@ actor SummaryService {
         coverage: TranscriptCoverage,
         previous: MeetingInsights?,
         fallbackTitle: String,
-        onProgress: SummaryProgressHandler?
+        onProgress: SummaryProgressHandler?,
+        onStage: SummaryStageHandler?
     ) async throws -> MeetingInsights {
         var plan = TranscriptReducePlan.standard(
             forCharacters: text.count,
@@ -328,6 +333,9 @@ actor SummaryService {
                 plan: plan,
                 onProgress: onProgress,
                 condense: { [self] part, index, total, round in
+                    // The reducer has already reported raw progress; the
+                    // stage is what regeneration surfaces add.
+                    await onStage?(.condensing(part: index + 1, total: total))
                     if round == 1 {
                         let (rendered, notes) = try await structuredPart(
                             part,
@@ -350,6 +358,7 @@ actor SummaryService {
                 }
             )
             try Task.checkCancellation()
+            await onStage?(.writingUp)
             do {
                 return try await structuredInsights(
                     from: source,

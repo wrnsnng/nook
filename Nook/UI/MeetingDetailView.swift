@@ -51,8 +51,10 @@ struct MeetingDetailView: View {
     /// says: an accented or emoji-bearing note would otherwise report a
     /// number larger than anything a person could count in it.
     @State private var markdownCharacterCount = 0
-    /// Whether the regeneration pass over this note's transcript is running.
-    @State private var isRegeneratingSummary = false
+    /// Whether the regeneration pass over this note's transcript is running,
+    /// and which stage it has reached, so waiting reads as progress instead
+    /// of a dead button.
+    @State private var regenerationStage: SummaryStage?
     /// The note's checkbox lines as they exist on disk right now. Checkbox
     /// state is deliberately absent from the decoded model, so ticking from
     /// here needs the file's own truth to stay aligned with the sidebar.
@@ -192,9 +194,12 @@ struct MeetingDetailView: View {
                 Button {
                     regenerateSummary()
                 } label: {
-                    Label("Regenerate summary", systemImage: "arrow.clockwise")
+                    Label(
+                    isRegenerating ? "Regenerating summary…" : "Regenerate summary",
+                    systemImage: "arrow.clockwise"
+                )
                 }
-                .disabled(markdownDraft.hasChanges || isRegeneratingSummary)
+                .disabled(markdownDraft.hasChanges || isRegenerating)
                 .help(
                     markdownDraft.hasChanges
                         ? "Save or revert Markdown edits before regenerating"
@@ -640,11 +645,15 @@ struct MeetingDetailView: View {
                 tint: NookPalette.accent
             )
 
-            Text(displaySummary)
-                .font(NookType.editorialSummary)
-                .lineSpacing(7)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if isRegenerating {
+                regenerationStatusCard
+            } else {
+                Text(displaySummary)
+                    .font(NookType.editorialSummary)
+                    .lineSpacing(7)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
     }
 
@@ -975,7 +984,7 @@ struct MeetingDetailView: View {
     private func regenerateSummary() {
         guard SummaryRegenerator.isAvailable(for: note),
               !markdownDraft.hasChanges,
-              !isRegeneratingSummary
+              regenerationStage == nil
         else { return }
 
         // The save below rewrites the whole file from the store's freshest
@@ -999,20 +1008,75 @@ struct MeetingDetailView: View {
             return
         }
 
-        isRegeneratingSummary = true
+        // Something visible before the first part reports, which on a long
+        // meeting takes a model round-trip.
+        regenerationStage = .condensing(part: 0, total: 0)
         Task {
+            // A struct view outlives its own body captures badly under
+            // weak; MainActor.run keeps ordering, and a stage landing after
+            // navigation simply writes an unused field.
+            let stageHandler: SummaryStageHandler = { stage in
+                await MainActor.run { regenerationStage = stage }
+            }
             let outcome = await SummaryRegenerator.regenerate(
                 current,
-                using: SummaryService()
+                using: SummaryService(),
+                onStage: stageHandler
             )
             finishSummaryRegeneration(outcome)
+        }
+    }
+
+    private var isRegenerating: Bool { regenerationStage != nil }
+
+    /// The gist prose steps aside while the write-up runs; the lists below
+    /// stay, so what the user had remains readable until the new one lands.
+    @ViewBuilder
+    private var regenerationStatusCard: some View {
+        if let stage = regenerationStage {
+            HStack(spacing: 14) {
+                NookPresence(state: .thinking, size: 30)
+                    .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(RegenerationCopy.headline(for: stage))
+                        .font(NookType.bodyEmphasized)
+                    Text(RegenerationCopy.detail(for: stage))
+                        .font(NookType.caption)
+                        .foregroundStyle(.secondary)
+                        .contentTransition(.numericText())
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                NookPalette.accent.opacity(0.07),
+                in: RoundedRectangle(
+                    cornerRadius: NookRadius.surface,
+                    style: .continuous
+                )
+            )
+            .overlay {
+                RoundedRectangle(
+                    cornerRadius: NookRadius.surface,
+                    style: .continuous
+                )
+                .stroke(NookPalette.accent.opacity(0.16), lineWidth: 0.7)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(
+                RegenerationCopy.headline(for: stage) + ", "
+                    + RegenerationCopy.detail(for: stage)
+            )
         }
     }
 
     private func finishSummaryRegeneration(
         _ outcome: SummaryRegenerator.Outcome
     ) {
-        isRegeneratingSummary = false
+        regenerationStage = nil
         switch outcome {
         case .regenerated(let updated):
             do {
