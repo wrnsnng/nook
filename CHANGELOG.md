@@ -4,6 +4,17 @@ Nook follows a user-facing release-note model. Each published version has a
 Markdown note in [`Releases/`](Releases/) and a matching `v<version>` release in
 the [binary releases repository](https://github.com/wrnsnng/nook-releases/releases).
 
+## 1.17.0
+
+- Regenerate summary shows live progress in place of the gist prose:
+  stage wording and the part counter while condensing runs, then the
+  write-up phase, dissolving into the new summary when it lands.
+- Fixed: coarse language in a transcript could make Apple Intelligence
+  decline a chunk and abort the whole summary. Instructions now keep
+  specifics exact while paraphrasing coarse language, and a declined
+  chunk retries once neutrally then steps aside instead of failing the
+  meeting.
+
 ## 1.16.0
 
 - Long meetings summarize with their specifics intact: condensing keeps
