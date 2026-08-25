@@ -505,3 +505,43 @@ struct CandidateLedgerTests {
         #expect(empty)
     }
 }
+
+/// FoundationModels screens its input: raw profanity made it refuse a whole
+/// transcript outright. Masking is deliberately dumb, fixed-list and word-
+/// bounded, so it can never invent or remove anything else.
+struct TranscriptProfanityMaskTests {
+
+    @Test
+    func coarseWordsAreMaskedCaseInsensitively() {
+        #expect(SummaryService.masked("we were going cap in hand") == "we were going cap in hand")
+        #expect(
+            SummaryService.masked("that's Fucking beautiful")
+                == "that's F****** beautiful"
+        )
+        #expect(SummaryService.masked("SHIT experience") == "S*** experience")
+    }
+
+    @Test
+    func wordsThatMerelyContainCoarseLettersStayUntouched() {
+        #expect(SummaryService.masked("let's assess the class") == "let's assess the class")
+        #expect(SummaryService.masked("analysis of Casserly") == "analysis of Casserly")
+    }
+
+    @Test
+    func numbersAndNamesPassThroughByteForByte() {
+        let line = "modelled at 1.9%, Mcoin, Luke Trickett, $1,000,000 TIV"
+        #expect(SummaryService.masked(line) == line)
+    }
+
+    @Test
+    func promptTextMasksEverySegment() {
+        let segments = [
+            TranscriptSegment(startTime: 0, duration: 2, text: "fuck off", source: .system),
+            TranscriptSegment(startTime: 3, duration: 2, text: "clean line", source: .mixed),
+        ]
+        let prompt = SummaryService.promptText(for: segments)
+        #expect(prompt.contains("f*** off"))
+        #expect(prompt.contains("clean line"))
+        #expect(!prompt.contains("fuck off"))
+    }
+}

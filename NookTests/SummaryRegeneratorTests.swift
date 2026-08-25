@@ -32,7 +32,7 @@ struct SummaryRegeneratorTests {
             onStage: SummaryStageHandler?
         ) async -> SummaryResult {
             recorder.record(fallbackTitle: fallbackTitle)
-            await onStage?(.condensing(part: 2, total: 5))
+            await onStage?(.condensing(pass: 1, part: 2, total: 5))
             await onStage?(.writingUp)
             return result
         }
@@ -269,7 +269,7 @@ struct RegenerationStageTests {
             // A failure still reports the stages it reached; either outcome
             // satisfies this test, which only watches the handler.
         }
-        #expect(stages == [.condensing(part: 2, total: 5), .writingUp])
+        #expect(stages == [.condensing(pass: 1, part: 2, total: 5), .writingUp])
     }
 
     private struct FailingStubWithStages: FailureReportingSummarizing {
@@ -278,7 +278,7 @@ struct RegenerationStageTests {
             fallbackTitle: String,
             onStage: SummaryStageHandler?
         ) async -> SummaryResult {
-            await onStage?(.condensing(part: 2, total: 5))
+            await onStage?(.condensing(pass: 1, part: 2, total: 5))
             await onStage?(.writingUp)
             return SummaryResult(
                 insights: MeetingInsights(
@@ -292,15 +292,19 @@ struct RegenerationStageTests {
     @Test
     func copyNamesEachStageForSomeoneWaiting() {
         #expect(
-            RegenerationCopy.headline(for: .condensing(part: 3, total: 21))
+            RegenerationCopy.headline(for: .condensing(pass: 1, part: 3, total: 21))
                 == "Re-reading this conversation"
         )
         #expect(
-            RegenerationCopy.detail(for: .condensing(part: 3, total: 21))
+            RegenerationCopy.detail(for: .condensing(pass: 1, part: 3, total: 21))
                 == "Part 3 of 21"
         )
         #expect(
-            RegenerationCopy.detail(for: .condensing(part: 0, total: 0))
+            RegenerationCopy.detail(for: .condensing(pass: 2, part: 3, total: 4))
+                == "Pass 2, part 3 of 4"
+        )
+        #expect(
+            RegenerationCopy.detail(for: .condensing(pass: 1, part: 0, total: 0))
                 == "Reading your transcript"
         )
         #expect(

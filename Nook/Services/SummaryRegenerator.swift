@@ -6,8 +6,11 @@ import Foundation
 /// writing up is quick but is the moment the answer actually forms, which
 /// reads differently to someone watching.
 enum SummaryStage: Sendable, Equatable {
-    /// A part counter of zero means the first pass has yet to report.
-    case condensing(part: Int, total: Int)
+    /// A part counter of zero means the first pass has yet to report. The
+    /// pass matters because each one re-chunks whatever is left, so totals
+    /// shrink between passes: without it, "part 3 of 4" after "part 21 of
+    /// 21" reads as broken arithmetic rather than convergence.
+    case condensing(pass: Int, part: Int, total: Int)
     case writingUp
 }
 
@@ -27,13 +30,19 @@ enum RegenerationCopy {
 
     static func detail(for stage: SummaryStage) -> String {
         switch stage {
-        case .condensing(let part, let total) where part == 0 || total == 0:
-            "Reading your transcript"
-        case .condensing(let part, let total):
-            "Part \(part) of \(total)"
+        case .condensing(let pass, let part, let total):
+            return Self.condensingDetail(pass: pass, part: part, total: total)
         case .writingUp:
-            "Nearly there"
+            return "Nearly there"
         }
+    }
+
+    static func condensingDetail(pass: Int, part: Int, total: Int) -> String {
+        guard part > 0, total > 0 else { return "Reading your transcript" }
+        if pass <= 1 {
+            return "Part \(part) of \(total)"
+        }
+        return "Pass \(pass), part \(part) of \(total)"
     }
 }
 

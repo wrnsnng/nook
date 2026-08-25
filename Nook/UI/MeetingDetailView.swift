@@ -1010,7 +1010,7 @@ struct MeetingDetailView: View {
 
         // Something visible before the first part reports, which on a long
         // meeting takes a model round-trip.
-        regenerationStage = .condensing(part: 0, total: 0)
+        regenerationStage = .condensing(pass: 1, part: 0, total: 0)
         Task {
             // A struct view outlives its own body captures badly under
             // weak; MainActor.run keeps ordering, and a stage landing after

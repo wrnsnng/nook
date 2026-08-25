@@ -335,7 +335,11 @@ actor SummaryService {
                 condense: { [self] part, index, total, round in
                     // The reducer has already reported raw progress; the
                     // stage is what regeneration surfaces add.
-                    await onStage?(.condensing(part: index + 1, total: total))
+                    await onStage?(.condensing(
+                        pass: round,
+                        part: index + 1,
+                        total: total
+                    ))
                     if round == 1 {
                         let (rendered, notes) = try await structuredPart(
                             part,
@@ -670,9 +674,61 @@ actor SummaryService {
 
     static func promptText(for transcript: [TranscriptSegment]) -> String {
         transcript.map {
-            "[\($0.timestamp)] \($0.source.label): \($0.text)"
+            "[\($0.timestamp)] \($0.source.label): \(Self.masked($0.text))"
         }.joined(separator: "\n")
     }
+
+    /// Coarse words are masked before transcript text reaches the model.
+    ///
+    /// FoundationModels screens its input: raw profanity made the model
+    /// refuse outright with "may contain sensitive content", and no
+    /// instruction can fix a prompt that never gets read. A fixed word list
+    /// with word-boundary matching keeps this deterministic - the same
+    /// discipline DisfluencyFilter follows, because a mask that had to
+    /// understand the sentence could invent what it replaced. Numbers,
+    /// names, and everything else pass through byte for byte; the stored
+    /// transcript is untouched, only model input is masked.
+    static func masked(_ text: String) -> String {
+        let pattern = "\\b(" + maskedWords.joined(separator: "|") + ")\\b"
+        guard
+            let regex = try? NSRegularExpression(
+                pattern: pattern,
+                options: [.caseInsensitive]
+            )
+        else { return text }
+        // Replacements go back to front so earlier ranges stay valid, and
+        // each match masks itself, preserving its own initial capital.
+        var result = text
+        for match in regex.matches(
+            in: text,
+            range: NSRange(result.startIndex..., in: result)
+        ).reversed() {
+            guard let range = Range(match.range, in: result) else { continue }
+            result.replaceSubrange(range, with: maskedForm(String(result[range])))
+        }
+        return result
+    }
+
+    /// First letter plus asterisks, so "f***ing" stays recognisable to a
+    /// reader comparing against the transcript.
+    private static func maskedForm(_ word: String) -> String {
+        guard let first = word.first else { return word }
+        return String(first) + String(repeating: "*", count: word.count - 1)
+    }
+
+    private static let maskedWords = [
+        "arseholes", "arsehole", "assholes", "asshole",
+        "bastards", "bastard", "bitches", "bitching", "bitch",
+        "bullshit", "bullshitting",
+        "cunts", "cunt",
+        "dickheads", "dickhead", "dicks", "dick",
+        "dumbass",
+        "fucked", "fuckers", "fucker", "fucking", "fucks", "fuck",
+        "horseshit",
+        "jackasses", "jackass",
+        "shits", "shitty", "shit",
+        "wankers", "wanker",
+    ]
 
     /// The most recent stretch of a live meeting, bounded by characters.
     ///
