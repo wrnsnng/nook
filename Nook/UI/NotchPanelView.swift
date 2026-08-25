@@ -1411,7 +1411,7 @@ private struct NotchCaptionStream: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        VStack(alignment: .center, spacing: 6) {
+        VStack(alignment: .leading, spacing: 6) {
             if lines.isEmpty {
                 HStack(spacing: 9) {
                     Image(systemName: "ear")
@@ -1422,8 +1422,7 @@ private struct NotchCaptionStream: View {
                         .font(NookType.transcriptEmphasized)
                         .foregroundStyle(.secondary)
                 }
-                .frame(maxWidth: .infinity, minHeight: 100)
-                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity, minHeight: 100, alignment: .leading)
                 .transition(.opacity)
                 .accessibilityElement(children: .combine)
             } else {
@@ -1503,14 +1502,14 @@ private struct NotchCaptionRow: View {
                 .foregroundStyle(.primary)
                 .lineLimit(line.isPartial ? 2 : 1)
                 .truncationMode(line.isPartial ? .head : .tail)
-                .multilineTextAlignment(.center)
+                .multilineTextAlignment(.leading)
                 .contentTransition(.interpolate)
 
             if line.isPartial {
                 ListeningCaret(tint: line.source.nookTint)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .center)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .opacity(prominence)
         .scaleEffect(
             reduceMotion ? 1 : 0.985 + (0.015 * prominence),
