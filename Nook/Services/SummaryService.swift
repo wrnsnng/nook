@@ -23,6 +23,95 @@ private struct GeneratedMeetingInsights {
     var actionItems: [String]
 }
 
+/// What one raw chunk yields when the first condensing round runs over a
+/// schema. The four sections are rendered into the material later rounds
+/// recondense; the same items also land in a ledger that reaches the final
+/// pass untouched by every round in between.
+@Generable(description: "Faithful working notes for part of a meeting transcript")
+private struct PartNotes {
+    @Guide(description: "Concrete facts, figures, names, dates, and product words, one short line each, close to the speakers' own wording")
+    var facts: [String]
+    @Guide(description: "Things settled or agreed, worded closely to the conversation")
+    var decisions: [String]
+    @Guide(description: "Commitments or follow-ups, each naming whoever owns it when stated")
+    var actions: [String]
+    @Guide(description: "Threads left unresolved or questions to return to")
+    var questions: [String]
+}
+
+/// Candidates harvested from the raw transcript, before any condensing.
+///
+/// Narrative rounds trade specifics for brevity; that is their job. The
+/// ledger is where the specifics wait out those rounds and reach the
+/// structured pass as the most reliable record of what was said. An actor
+/// because the condensing closures that feed it run as `@Sendable` work.
+actor CandidateLedger {
+    private(set) var keyPoints: [String] = []
+    private(set) var decisions: [String] = []
+    private(set) var actions: [String] = []
+
+    /// Bounds the block appended to the final pass's prompt: prompt and
+    /// answer share one on-device window.
+    static let maximumItemsPerList = 25
+
+    private static func normalized(_ value: String) -> String {
+        value.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .joined()
+    }
+
+    /// Adds candidates, keeping first occurrences only.
+    ///
+    /// Chunks overlap in topic, so the same commitment phrased twice must
+    /// not read as two. Normalization ignores case and punctuation: a model
+    /// restating "1.9%!" as "1.9%" is a duplicate, not news.
+    func add(
+        facts: [String], decisions: [String], actions: [String]
+    ) {
+        keyPoints = Self.merging(keyPoints, incoming: facts)
+        self.decisions = Self.merging(self.decisions, incoming: decisions)
+        self.actions = Self.merging(self.actions, incoming: actions)
+    }
+
+    private static func merging(
+        _ current: [String], incoming: [String]
+    ) -> [String] {
+        guard current.count < maximumItemsPerList else { return current }
+        var seen = Set(current.map(normalized))
+        var result = current
+        for item in incoming {
+            let trimmed = item.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let key = normalized(trimmed)
+            guard !key.isEmpty, !seen.contains(key) else { continue }
+            seen.insert(key)
+            result.append(String(trimmed.prefix(200)))
+            if result.count == maximumItemsPerList { break }
+        }
+        return result
+    }
+
+    var isEmpty: Bool {
+        keyPoints.isEmpty && decisions.isEmpty && actions.isEmpty
+    }
+
+    /// The labelled block handed to the structured pass alongside the
+    /// condensed narrative.
+    func rendered() -> String {
+        func section(_ title: String, _ items: [String]) -> String {
+            guard !items.isEmpty else { return "" }
+            return title + "\n" + items.map { "- " + $0 }.joined(separator: "\n")
+        }
+        return [
+            section("KEY FACTS", keyPoints),
+            section("DECISIONS", decisions),
+            section("ACTIONS", actions),
+        ]
+        .filter { !$0.isEmpty }
+        .joined(separator: "\n\n")
+    }
+}
+
 /// Reports how far a long summary has got, as one part of a total.
 ///
 /// Condensing a ninety minute meeting is minutes of work with nothing to look
@@ -228,13 +317,31 @@ actor SummaryService {
             forCharacters: text.count,
             condensedPartCeiling: Self.condensedPartCharacterEstimate
         )
+        // Harvested from the raw transcript during the first round, so the
+        // candidates never pass through a narrative round. The actor sits
+        // behind a constant because the condensing closures are @Sendable
+        // and run sequentially on this actor regardless.
+        let ledger = CandidateLedger()
         for attempt in 0..<Self.maximumPlanAttempts {
             let source = try await TranscriptReducer.reduce(
                 text,
                 plan: plan,
                 onProgress: onProgress,
-                condense: { [self] part, index, total, _ in
-                    try await condensedPart(
+                condense: { [self] part, index, total, round in
+                    if round == 1 {
+                        let (rendered, notes) = try await structuredPart(
+                            part,
+                            label: "part \(index) of \(total)",
+                            responseTokens: Self.condenseResponseTokens
+                        )
+                        await ledger.add(
+                            facts: notes.facts,
+                            decisions: notes.decisions,
+                            actions: notes.actions
+                        )
+                        return rendered
+                    }
+                    return try await condensedPart(
                         part,
                         label: "part \(index) of \(total)",
                         responseTokens: Self.condenseResponseTokens,
@@ -247,6 +354,7 @@ actor SummaryService {
                 return try await structuredInsights(
                     from: source,
                     coverage: coverage,
+                    candidates: await ledger.rendered(),
                     previous: previous,
                     fallbackTitle: fallbackTitle
                 )
@@ -264,6 +372,80 @@ actor SummaryService {
             }
         }
         throw TranscriptReduceError.didNotFit
+    }
+
+    /// Condenses one raw chunk through the typed schema, so the same answer
+    /// both renders into the narrative material and lands its items in the
+    /// ledger. One call, not two: round one already spends the largest share
+    /// of the summary's budget.
+    ///
+    /// A schema the model or OS cannot honour must not lose the summary, so
+    /// decoding failures fall back to the plain-text pass; that chunk then
+    /// contributes nothing to the ledger, which is a smaller loss than no
+    /// write-up at all.
+    private func structuredPart(
+        _ part: String,
+        label: String,
+        responseTokens: Int
+    ) async throws -> (rendered: String, notes: PartNotes) {
+        do {
+            let session = LanguageModelSession(
+                instructions: Self.condenseInstructions
+            )
+            let response = try await session.respond(
+                to: Self.partPrompt(label: label, part: part),
+                generating: PartNotes.self,
+                options: GenerationOptions(
+                    maximumResponseTokens: responseTokens
+                )
+            )
+            let notes = response.content
+            return (Self.rendered(notes), notes)
+        } catch let error as LanguageModelSession.GenerationError {
+            guard case .decodingFailure = error else { throw error }
+            let rendered = try await condensedPart(
+                part,
+                label: label,
+                responseTokens: responseTokens,
+                splitDepth: 0
+            )
+            return (
+                rendered,
+                PartNotes(facts: [], decisions: [], actions: [], questions: [])
+            )
+        }
+    }
+
+    /// Renders schema notes as the labelled text later rounds recondense.
+    ///
+    /// The heading words match what `condenseInstructions` asks for, so
+    /// material from either path reads identically to the next pass.
+    private static func rendered(_ notes: PartNotes) -> String {
+        func section(_ title: String, _ items: [String]) -> String {
+            guard !items.isEmpty else { return "" }
+            return title + "\n" + items.map { "- " + $0 }.joined(separator: "\n")
+        }
+        return [
+            section("FACTS", notes.facts),
+            section("DECISIONS", notes.decisions),
+            section("ACTIONS", notes.actions),
+            section("QUESTIONS", notes.questions),
+        ]
+        .filter { !$0.isEmpty }
+        .joined(separator: "\n\n")
+    }
+
+    /// The one prompt both condensing paths share, so a chunk reads the same
+    /// way whether the answer comes back as text or as the typed schema.
+    private static func partPrompt(label: String, part: String) -> String {
+        """
+        Condense \(label) of a meeting transcript under those headings.
+        Later passes recondense your headings, so keep every concrete
+        detail you can within the space allowed.
+
+        TRANSCRIPT:
+        \(part)
+        """
     }
 
     /// Condenses one part, shrinking the request when the window rejects it.
@@ -284,14 +466,7 @@ actor SummaryService {
                 instructions: Self.condenseInstructions
             )
             let response = try await session.respond(
-                to: """
-                Condense \(label) of a meeting transcript under those headings.
-                Later passes recondense your headings, so keep every concrete
-                detail you can within the space allowed.
-
-                TRANSCRIPT:
-                \(part)
-                """,
+                to: Self.partPrompt(label: label, part: part),
                 options: GenerationOptions(
                     maximumResponseTokens: responseTokens
                 )
@@ -366,7 +541,8 @@ actor SummaryService {
 
     private func structuredInsights(
         from source: String,
-        coverage: TranscriptCoverage?,
+        coverage: TranscriptCoverage,
+        candidates: String,
         previous: MeetingInsights?,
         fallbackTitle: String
     ) async throws -> MeetingInsights {
@@ -374,22 +550,32 @@ actor SummaryService {
             instructions: Self.structuredInstructions
         )
         var prompt = """
-            Create the final structured meeting note from the source below.
+            Create the final structured meeting note from the sources below.
             """
-        if let coverage {
-            prompt += """
+        prompt += """
 
-                The source condenses \(coverage.durationSentence) of \
-                conversation, roughly \(coverage.spokenWords) spoken words. \
-                Give the note enough substance to reflect that scale, and \
-                prefer the specific over the general.
-                """
-        }
+            The source condenses \(coverage.durationSentence) of \
+            conversation, roughly \(coverage.spokenWords) spoken words. \
+            Give the note enough substance to reflect that scale, and \
+            prefer the specific over the general.
+            """
         prompt += """
 
             Use "\(fallbackTitle)" only when the source truly has no
             identifiable subject.
             """
+        if !candidates.isEmpty {
+            prompt += """
+
+
+                CANDIDATES, harvested directly from the full transcript \
+                before it was condensed, so they are the most reliable \
+                record of specifics. Weave them in; do not pad the note to \
+                include weak ones.
+
+                \(candidates)
+                """
+        }
         if let previous, !previous.summary.isEmpty {
             prompt += """
 
@@ -401,7 +587,7 @@ actor SummaryService {
         prompt += """
 
 
-            SOURCE:
+            CONDENSED SOURCE:
             \(source)
             """
         let response = try await session.respond(

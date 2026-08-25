@@ -431,3 +431,77 @@ struct SummaryQualityTests {
         #expect(coverage.durationSentence == "about 1 hour")
     }
 }
+
+/// The candidate ledger is the guarantee that specifics harvested from the
+/// raw transcript reach the structured pass untouched by narrative rounds:
+/// first occurrence wins, near-duplicates collapse, and the block it renders
+/// stays inside the window budget.
+struct CandidateLedgerTests {
+
+    @Test
+    func harvestKeepsConcreteItemsUnderTheirHeadings() async {
+        let ledger = CandidateLedger()
+        await ledger.add(
+            facts: ["Modelled at 1.9%"],
+            decisions: ["Ship in October"],
+            actions: ["Ana drafts the rollout plan"]
+        )
+        let rendered = await ledger.rendered()
+
+        #expect(rendered.contains("KEY FACTS\n- Modelled at 1.9%"))
+        #expect(rendered.contains("DECISIONS\n- Ship in October"))
+        #expect(rendered.contains("ACTIONS\n- Ana drafts the rollout plan"))
+    }
+
+    @Test
+    func restatementsCollapseIntoTheFirstWording() async {
+        let ledger = CandidateLedger()
+        await ledger.add(
+            facts: ["Modelled at 1.9%!"],
+            decisions: [],
+            actions: []
+        )
+        await ledger.add(
+            facts: ["modelled at 1.9%"],
+            decisions: [],
+            actions: []
+        )
+
+        let facts = await ledger.keyPoints
+        #expect(facts == ["Modelled at 1.9%!"])
+    }
+
+    @Test
+    func emptyAndBlankCandidatesAreDropped() async {
+        let ledger = CandidateLedger()
+        await ledger.add(facts: ["  ", "", "Real fact"], decisions: [], actions: [])
+
+        let facts = await ledger.keyPoints
+        #expect(facts == ["Real fact"])
+    }
+
+    @Test
+    func aFullListStopsGrowingAtTheWindowBound() async {
+        let ledger = CandidateLedger()
+        for index in 0..<40 {
+            await ledger.add(
+                facts: ["Fact number \(index) about pricing"],
+                decisions: [],
+                actions: []
+            )
+        }
+
+        let facts = await ledger.keyPoints
+        #expect(facts.count == CandidateLedger.maximumItemsPerList)
+        #expect(facts.first == "Fact number 0 about pricing")
+    }
+
+    @Test
+    func anEmptyLedgerRendersNothing() async {
+        let ledger = CandidateLedger()
+        let rendered = await ledger.rendered()
+        #expect(rendered.isEmpty)
+        let empty = await ledger.isEmpty
+        #expect(empty)
+    }
+}
