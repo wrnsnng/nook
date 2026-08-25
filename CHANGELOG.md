@@ -4,6 +4,16 @@ Nook follows a user-facing release-note model. Each published version has a
 Markdown note in [`Releases/`](Releases/) and a matching `v<version>` release in
 the [binary releases repository](https://github.com/wrnsnng/nook-releases/releases).
 
+## 1.16.0
+
+- Long meetings summarize with their specifics intact: condensing keeps
+  labelled facts, decisions, actions, and questions in close-to-spoken
+  wording, and a candidate ledger harvested from the raw transcript
+  reaches the write-up without passing through any narrative round.
+- The final pass knows the meeting's duration and word count, prefers
+  the specific over the general, and may write proportionally longer
+  summaries for longer meetings.
+
 ## 1.15.1
 
 - Fixed: My notes stopped accepting typing the moment a recording
