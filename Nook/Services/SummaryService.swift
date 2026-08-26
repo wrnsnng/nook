@@ -1078,8 +1078,8 @@ actor SummaryService {
     static func classify(_ error: Error) -> GenerationFailure {
         if Self.isSensitiveContentRejection(error) { return .screened }
         if Self.isUnparsableAnswer(error) { return .unparsable }
-        if let old = error as? LanguageModelSession.GenerationError {
-            switch old {
+        if let generation = error as? LanguageModelSession.GenerationError {
+            switch generation {
             case .exceededContextWindowSize: return .overflow
             case .guardrailViolation, .refusal: return .refused
             case .rateLimited, .concurrentRequests: return .busy
@@ -1089,22 +1089,19 @@ actor SummaryService {
             default: break
             }
         }
-        if #available(macOS 27.0, *) {
-            if let modern = error as? LanguageModelError {
-                switch modern {
-                case .contextSizeExceeded: return .overflow
-                case .guardrailViolation, .refusal,
-                     .unsupportedTranscriptContent:
-                    return .refused
-                case .rateLimited: return .busy
-                case .unsupportedGenerationGuide, .unsupportedCapability:
-                    return .schemaUnsupported
-                case .unsupportedLanguageOrLocale:
-                    return .languageUnsupported
-                case .timeout: return .timedOut
-                @unknown default: break
-                }
-            }
+        // Newer runtimes moved these failures into types this build cannot
+        // name: the renames shipped in an SDK newer than the one releases
+        // are required to build with, and naming them breaks the stable
+        // toolchain. Their descriptions are stable where their type names
+        // are not, and every sighting so far has carried one. An unlisted
+        // shape lands on .other and takes the generic path rather than a
+        // guessed one; when one appears, add its phrase here.
+        let description = (error as NSError).localizedDescription
+        if description.range(
+            of: "refused to answer",
+            options: .caseInsensitive
+        ) != nil {
+            return .refused
         }
         return .other
     }
@@ -1201,21 +1198,20 @@ actor SummaryService {
 
     /// Whether this error is the model's typed answer arriving unreadable.
     ///
-    /// One failure, two names: `GenerationError.decodingFailure` on older
-    /// runtimes, `GeneratedContent.ParsingError` from 27.0 onward, where the
-    /// old case is deprecated. Both are matched so behaviour cannot depend
-    /// on which OS a build happens to run on; the availability check gates
-    /// only a type that does not exist on older systems, and selects the
-    /// same handling either way.
+    /// One failure, two shapes: `GenerationError.decodingFailure` on older
+    /// runtimes, and on newer ones a parse error whose type ships in an SDK
+    /// newer than releases are built with, so it is recognised by its
+    /// description instead. Both spellings select the same handling, and
+    /// neither can depend on which toolchain compiled the app.
     static func isUnparsableAnswer(_ error: Error) -> Bool {
         if let generation = error as? LanguageModelSession.GenerationError,
            case .decodingFailure = generation {
             return true
         }
-        if #available(macOS 27.0, *) {
-            if error is GeneratedContent.ParsingError { return true }
-        }
-        return false
+        return (error as NSError).localizedDescription.range(
+            of: "failed to parse generated content",
+            options: .caseInsensitive
+        ) != nil
     }
 
     /// Whether this error is input screening rejecting the prompt itself.

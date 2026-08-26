@@ -1,5 +1,4 @@
 import Foundation
-import FoundationModels
 import Testing
 @testable import Nook
 
@@ -666,66 +665,41 @@ struct SensitiveContentRejectionTests {
         #expect(salvaged == nil)
     }
 
-    /// Guided generation renamed its parse failure in newer runtimes. Both
-    /// names must read as one malformed answer, or the typed pipeline dies
-    /// the way an 85k character meeting did.
+    /// Guided generation renamed its parse failure in newer runtimes, and
+    /// the new type cannot be named by a build targeting the stable SDK.
+    /// The description is what both spellings share.
+    private struct RenamedParseFailure: LocalizedError {
+        var errorDescription: String? {
+            "Failed to parse generated content."
+        }
+    }
+
+    /// The renamed refusal, matched the same way.
+    private struct RenamedRefusal: LocalizedError {
+        var errorDescription: String? { "The model refused to answer." }
+    }
+
     @Test
     func aParsingErrorIsAnUnreadableAnswer() {
+        #expect(
+            SummaryService.isUnparsableAnswer(RenamedParseFailure())
+        )
         struct Unrelated: Error {}
         #expect(!SummaryService.isUnparsableAnswer(Unrelated()))
         #expect(
-            SummaryService.isUnparsableAnswer(
-                TranscriptReduceError.didNotFit
-            ) == false
+            SummaryService.failureReason(for: RenamedParseFailure())
+                == .malformedAnswer
         )
-        guard #available(macOS 27.0, *) else { return }
-        let parsingError = GeneratedContent.ParsingError(
-            rawContent: "partial",
-            debugDescription: "Failed to parse generated content."
-        )
-        #expect(SummaryService.isUnparsableAnswer(parsingError))
     }
 
-    /// The same refusal has two runtime names across the OS rename. A
+    /// The same refusal has two runtime shapes across the OS rename. A
     /// meeting died because only the old one was tolerated, so the
     /// classifier must speak both.
     @Test
     func refusalsAreRecognisedUnderBothNames() {
-        guard #available(macOS 27.0, *) else { return }
-        let modern = LanguageModelError.refusal(
-            .init(explanation: "declined", debugDescription: "refused")
-        )
-
-        #expect(SummaryService.classify(modern) == .refused)
-        #expect(SummaryService.failureReason(for: modern) == .declined)
-    }
-
-    @Test
-    func overflowIsRecognisedUnderBothNames() {
-        guard #available(macOS 27.0, *) else { return }
-        let modern = LanguageModelError.contextSizeExceeded(
-            .init(contextSize: 4_096, tokenCount: 5_000, debugDescription: "")
-        )
-
-        #expect(SummaryService.classify(modern) == .overflow)
+        #expect(SummaryService.classify(RenamedRefusal()) == .refused)
         #expect(
-            SummaryService.failureReason(for: modern) == .transcriptTooLong
-        )
-    }
-
-    @Test
-    func theModernTimeoutAndSchemaCasesLandOnTheirOwnReasons() {
-        guard #available(macOS 27.0, *) else { return }
-        let timedOut = LanguageModelError.timeout(
-            .init(debugDescription: "")
-        )
-        #expect(SummaryService.failureReason(for: timedOut) == .timedOut)
-
-        let schema = LanguageModelError.unsupportedGenerationGuide(
-            .init(schemaName: nil, debugDescription: "")
-        )
-        #expect(
-            SummaryService.failureReason(for: schema) == .schemaUnsupported
+            SummaryService.failureReason(for: RenamedRefusal()) == .declined
         )
     }
 }
