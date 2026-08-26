@@ -198,6 +198,141 @@ struct DictationLifecycleTests {
             return
         }
     }
+
+    @Test
+    func cancellingPreparationCannotFailANewerDictation() async {
+        let audio = TestDictationAudioSource()
+        let recognizer = BlockingDictationRecognizer()
+        let insertion = TestDictationInsertion(
+            capabilities: [.noTextField, .noTextField]
+        )
+        let coordinator = DictationCoordinator(
+            localeIdentifier: "en_AU",
+            audio: audio,
+            recognizer: recognizer,
+            insertion: insertion,
+            registersShortcut: false
+        )
+        coordinator.style = .verbatim
+        coordinator.isEnabled = true
+        defer { coordinator.cancel() }
+
+        coordinator.startContinuousSession()
+        for _ in 0..<100 where recognizer.startCount < 1 {
+            await Task.yield()
+        }
+        #expect(recognizer.startCount == 1)
+
+        // Finish begins waiting for the first recognizer start. Cancelling
+        // while that wait is pending must invalidate the old session rather
+        // than turn cancellation into a startup failure.
+        coordinator.stopContinuousSession()
+        coordinator.cancel()
+        let endRunsAfterCancellation = insertion.endRunCount
+
+        // Start again before the cancelled finisher has a chance to resume.
+        // Releasing the old start now exercises its stale-session cleanup,
+        // while the second start remains the one the coordinator owns.
+        coordinator.startContinuousSession()
+        for _ in 0..<100 where recognizer.startCount < 2 {
+            await Task.yield()
+        }
+        #expect(recognizer.startCount == 2)
+
+        // Keep the newer session in its own finishing window while the stale
+        // finisher unwinds. It must not clear the newer session's flag.
+        recognizer.emitFinalized("words for the next dictation")
+        coordinator.stopContinuousSession()
+        recognizer.releaseNextStart()
+        for _ in 0..<100 {
+            await Task.yield()
+        }
+        #expect(coordinator.isFinishingForTesting)
+        #expect(insertion.endRunCount == endRunsAfterCancellation)
+        recognizer.releaseNextStart()
+
+        for _ in 0..<100 where coordinator.isFinishingForTesting {
+            await Task.yield()
+        }
+        #expect(coordinator.phase == .idle)
+    }
+
+    @Test
+    func secondLookPasteKeepsItsInsertionTargetUntilPasteCompletes() async {
+        let audio = TestDictationAudioSource()
+        let recognizer = TestDictationRecognizer()
+        let insertion = TestDictationInsertion(
+            capabilities: [.noTextField, .pasteOnly]
+        )
+        let coordinator = DictationCoordinator(
+            localeIdentifier: "en_AU",
+            audio: audio,
+            recognizer: recognizer,
+            insertion: insertion,
+            registersShortcut: false
+        )
+        coordinator.style = .verbatim
+        coordinator.isEnabled = true
+        defer { coordinator.cancel() }
+
+        coordinator.startContinuousSession()
+        for _ in 0..<100 where recognizer.startCount < 1 {
+            await Task.yield()
+        }
+        recognizer.emitFinalized("words for the focused field")
+        coordinator.stopContinuousSession()
+
+        for _ in 0..<100 where !insertion.pasteStarted {
+            await Task.yield()
+        }
+        #expect(insertion.pasteStarted)
+        #expect(insertion.endRunCount == 0)
+
+        insertion.completePaste(.pasted)
+        for _ in 0..<100 where insertion.endRunCount == 0 {
+            await Task.yield()
+        }
+        #expect(insertion.endRunCount == 1)
+        #expect(coordinator.phase == .idle)
+    }
+
+    @Test
+    func audioCaptureWaitsForTheInputCheckTeardownBarrier() async {
+        let audio = TestDictationAudioSource()
+        let recognizer = TestDictationRecognizer()
+        let insertion = TestDictationInsertion(capabilities: [.noTextField])
+        let barrier = TestAudioCaptureBarrier()
+        let coordinator = DictationCoordinator(
+            localeIdentifier: "en_AU",
+            audio: audio,
+            recognizer: recognizer,
+            insertion: insertion,
+            registersShortcut: false,
+            prepareForAudioCapture: {
+                await barrier.wait()
+            }
+        )
+        coordinator.style = .verbatim
+        coordinator.isEnabled = true
+        defer { coordinator.cancel() }
+
+        coordinator.startContinuousSession()
+        for _ in 0..<100 where !barrier.didEnter {
+            await Task.yield()
+        }
+
+        #expect(barrier.didEnter)
+        #expect(audio.startCount == 0)
+        #expect(coordinator.phase == .preparing)
+
+        barrier.release()
+        for _ in 0..<100 where audio.startCount == 0 {
+            await Task.yield()
+        }
+
+        #expect(audio.startCount == 1)
+        #expect(coordinator.phase == .listening)
+    }
 }
 
 /// Where a finished dictation is allowed to land.
@@ -374,16 +509,37 @@ struct DictationSessionCeilingTests {
 @MainActor
 private final class TestDictationAudioSource: DictationAudioCapturing {
     var onLevel: (@MainActor (Float) -> Void)?
+    private(set) var startCount = 0
     private(set) var stopCount = 0
 
     func start(
         onBuffer: @escaping @MainActor (AVAudioPCMBuffer) -> Void
-    ) throws {}
+    ) throws {
+        startCount += 1
+    }
 
     func finishCapturing() async {}
 
     func stop() {
         stopCount += 1
+    }
+}
+
+@MainActor
+private final class TestAudioCaptureBarrier {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var didEnter = false
+
+    func wait() async {
+        didEnter = true
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func release() {
+        continuation?.resume()
+        continuation = nil
     }
 }
 
@@ -409,6 +565,87 @@ private final class TestDictationRecognizer: DictationRecognizing {
 
     func cancel() {
         cancelCount += 1
+    }
+
+    func emitFinalized(_ text: String) {
+        onFinalized?(text)
+    }
+}
+
+@MainActor
+private final class BlockingDictationRecognizer: DictationRecognizing {
+    var onVolatile: (@MainActor (String) -> Void)?
+    var onFinalized: (@MainActor (String) -> Void)?
+    var onError: (@MainActor (String) -> Void)?
+    var onEnded: (@MainActor () -> Void)?
+    private(set) var startCount = 0
+    private var startContinuations: [CheckedContinuation<Void, Never>] = []
+
+    func start(localeIdentifier: String) async throws {
+        startCount += 1
+        await withCheckedContinuation { continuation in
+            startContinuations.append(continuation)
+        }
+    }
+
+    func ingest(_ buffer: AVAudioPCMBuffer) {}
+
+    func finish() async {}
+
+    func cancel() {}
+
+    func releaseNextStart() {
+        guard !startContinuations.isEmpty else {
+            Issue.record("Expected a blocked recognizer start")
+            return
+        }
+        startContinuations.removeFirst().resume()
+    }
+
+    func emitFinalized(_ text: String) {
+        onFinalized?(text)
+    }
+}
+
+@MainActor
+private final class TestDictationInsertion: DictationTextInserting {
+    private var capabilities: [TextInsertionService.Capability]
+    private var pasteContinuation:
+        CheckedContinuation<TextInsertionService.PasteOutcome, Never>?
+    private(set) var pasteStarted = false
+    private(set) var endRunCount = 0
+    var lastInspection = "test"
+
+    init(capabilities: [TextInsertionService.Capability]) {
+        self.capabilities = capabilities
+    }
+
+    func beginRun() -> TextInsertionService.Capability {
+        capabilities.isEmpty ? .noTextField : capabilities.removeFirst()
+    }
+
+    func append(_ text: String) -> Bool { true }
+
+    func replaceRun(with text: String) -> Bool { true }
+
+    func pasteOnce(_ text: String) async -> TextInsertionService.PasteOutcome {
+        pasteStarted = true
+        return await withCheckedContinuation { continuation in
+            pasteContinuation = continuation
+        }
+    }
+
+    func endRun() {
+        endRunCount += 1
+    }
+
+    func completePaste(_ outcome: TextInsertionService.PasteOutcome) {
+        guard let pasteContinuation else {
+            Issue.record("Expected a paste to be waiting before completing it")
+            return
+        }
+        self.pasteContinuation = nil
+        pasteContinuation.resume(returning: outcome)
     }
 }
 

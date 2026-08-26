@@ -116,6 +116,34 @@ struct TranscriptReduceTests {
         #expect(seen.allSatisfy { $0.part <= $0.total })
     }
 
+    /// The condense callback and progress callback use the same one-based
+    /// numbering. The stage reporter consumes the former directly, so making
+    /// it zero-based or incrementing it again produces "part 2" first and a
+    /// final part larger than the total.
+    @Test
+    func condenseReceivesOneBasedPartNumbers() async throws {
+        let plan = TranscriptReducePlan(
+            chunkBudget: 2_000,
+            finalBudget: 3_000,
+            maximumRounds: 3
+        )
+        let reports = Reports()
+
+        _ = try await TranscriptReducer.reduce(
+            transcript(characters: 12_000),
+            plan: plan,
+            condense: { part, index, total, _ in
+                await reports.record(index, total)
+                return String(part.prefix(max(1, part.count / 5)))
+            }
+        )
+
+        let seen = await reports.all
+        #expect(seen.first?.part == 1)
+        #expect(seen.allSatisfy { $0.part >= 1 && $0.part <= $0.total })
+        #expect(seen.contains(where: { $0.part == $0.total }))
+    }
+
     @Test
     func cancellingStopsTheReduceBetweenParts() async {
         let task = Task {
@@ -365,6 +393,141 @@ struct LiveSummaryTailTests {
     }
 }
 
+/// Attention is deliberately a small projection of the note, not another
+/// transcript-sized input. These tests keep the prompt contract deterministic
+/// without requiring Apple Intelligence to be enabled on the test machine.
+struct SummaryAttentionTests {
+    @Test
+    func notesAndFlaggedContextsStayBounded() {
+        let transcript = (0..<12).map { index in
+            TranscriptSegment(
+                startTime: Double(index) * 20,
+                duration: 8,
+                text: "Transcript segment \(index) with enough context to inspect."
+            )
+        }
+        let moments = (0..<12).map { index in
+            MeetingMoment(offset: Double(index) * 20)
+        }
+        let attention = SummaryAttention(
+            myNotes: String(repeating: "My note. ", count: 400),
+            moments: moments,
+            transcript: transcript
+        )
+
+        #expect(
+            attention.myNotes.count <= SummaryAttention.maximumMyNotesCharacters
+        )
+        #expect(
+            attention.flaggedMoments.count
+                <= SummaryAttention.maximumFlaggedMoments
+        )
+        #expect(
+            attention.flaggedMoments.allSatisfy {
+                $0.segments.count <= SummaryAttention.maximumSegmentsPerMoment
+            }
+        )
+        #expect(
+            attention.rendered.count <= SummaryAttention.maximumRenderedCharacters
+        )
+    }
+
+    @Test
+    func flaggedMomentUsesOnlyNearbyTranscriptSegments() {
+        let transcript = [
+            TranscriptSegment(
+                startTime: 0,
+                duration: 5,
+                text: "Far before the flagged moment."
+            ),
+            TranscriptSegment(
+                startTime: 50,
+                duration: 5,
+                text: "Nearest transcript context."
+            ),
+            TranscriptSegment(
+                startTime: 100,
+                duration: 5,
+                text: "Far after the flagged moment."
+            )
+        ]
+        let attention = SummaryAttention(
+            moments: [MeetingMoment(offset: 52)],
+            transcript: transcript
+        )
+
+        #expect(attention.flaggedMoments.count == 1)
+        #expect(
+            attention.flaggedMoments.first?.segments.map(\.text)
+                == ["Nearest transcript context."]
+        )
+    }
+
+    @Test
+    func renderedAttentionAppearsAsGuidanceAndRealFlaggedContext() {
+        let attention = SummaryAttention(
+            myNotes: "Emphasize the budget decision.",
+            moments: [MeetingMoment(offset: 52)],
+            transcript: [
+                TranscriptSegment(
+                    startTime: 50,
+                    duration: 5,
+                    text: "The team approved the revised budget."
+                )
+            ]
+        )
+        let prompt = SummaryService.insightsPrompt(
+            source: "[00:50] The team approved the revised budget.",
+            coverage: SummaryService.TranscriptCoverage(
+                spokenWords: 8,
+                durationSentence: "about 1 minute"
+            ),
+            candidates: "",
+            previous: nil,
+            fallbackTitle: "Planning",
+            attention: attention
+        )
+
+        #expect(prompt.contains("USER GUIDANCE ONLY, FROM MY NOTES"))
+        #expect(prompt.contains("BEGIN MY NOTES"))
+        #expect(prompt.contains("Emphasize the budget decision."))
+        #expect(prompt.contains("FLAGGED TRANSCRIPT CONTEXT"))
+        #expect(prompt.contains("The team approved the revised budget."))
+        #expect(!prompt.contains("(attention.rendered)"))
+    }
+
+    @Test
+    func emptyAttentionPreservesTheExistingPrompt() {
+        let arguments = (
+            source: "[00:01] We reviewed the plan.",
+            coverage: SummaryService.TranscriptCoverage(
+                spokenWords: 5,
+                durationSentence: "about 1 minute"
+            ),
+            candidates: "",
+            previous: Optional<MeetingInsights>.none,
+            fallbackTitle: "Planning"
+        )
+        let withoutAttention = SummaryService.insightsPrompt(
+            source: arguments.source,
+            coverage: arguments.coverage,
+            candidates: arguments.candidates,
+            previous: arguments.previous,
+            fallbackTitle: arguments.fallbackTitle
+        )
+        let withEmptyAttention = SummaryService.insightsPrompt(
+            source: arguments.source,
+            coverage: arguments.coverage,
+            candidates: arguments.candidates,
+            previous: arguments.previous,
+            fallbackTitle: arguments.fallbackTitle,
+            attention: .empty
+        )
+
+        #expect(withEmptyAttention == withoutAttention)
+    }
+}
+
 
 /// A two hour meeting was written up as two thin sentences with no key
 /// points: the summary ceiling never moved with meeting length, and the
@@ -472,6 +635,19 @@ struct CandidateLedgerTests {
     }
 
     @Test
+    func decimalPercentagesDoNotCollapseIntoWholePercentages() async {
+        let ledger = CandidateLedger()
+        await ledger.add(
+            facts: ["Modelled at 1.9%", "Modelled at 19%"],
+            decisions: [],
+            actions: []
+        )
+
+        let facts = await ledger.keyPoints
+        #expect(facts == ["Modelled at 1.9%", "Modelled at 19%"])
+    }
+
+    @Test
     func emptyAndBlankCandidatesAreDropped() async {
         let ledger = CandidateLedger()
         await ledger.add(facts: ["  ", "", "Real fact"], decisions: [], actions: [])
@@ -485,7 +661,7 @@ struct CandidateLedgerTests {
         let ledger = CandidateLedger()
         for index in 0..<40 {
             await ledger.add(
-                facts: ["Fact number \(index) about pricing"],
+                facts: ["Fact \(index)"],
                 decisions: [],
                 actions: []
             )
@@ -493,7 +669,26 @@ struct CandidateLedgerTests {
 
         let facts = await ledger.keyPoints
         #expect(facts.count == CandidateLedger.maximumItemsPerList)
-        #expect(facts.first == "Fact number 0 about pricing")
+        #expect(facts.first == "Fact 0")
+    }
+
+    @Test
+    func renderedLedgerStaysInsideItsSharedPromptBudget() async {
+        let ledger = CandidateLedger()
+        let longTail = String(repeating: " detailed evidence", count: 20)
+        for index in 0..<40 {
+            await ledger.add(
+                facts: ["Fact \(index)\(longTail)"],
+                decisions: ["Decision \(index)\(longTail)"],
+                actions: ["Action \(index)\(longTail)"]
+            )
+        }
+
+        let rendered = await ledger.rendered()
+        #expect(rendered.count <= CandidateLedger.maximumRenderedCharacters)
+        #expect(rendered.contains("KEY FACTS"))
+        #expect(rendered.contains("DECISIONS"))
+        #expect(rendered.contains("ACTIONS"))
     }
 
     @Test
@@ -531,6 +726,13 @@ struct TranscriptProfanityMaskTests {
     func numbersAndNamesPassThroughByteForByte() {
         let line = "modelled at 1.9%, Mcoin, Luke Trickett, $1,000,000 TIV"
         #expect(SummaryService.masked(line) == line)
+    }
+
+    @Test
+    func peopleNamedDickAndTheSportingGoodsBrandStayExact() {
+        let line = "Dick Costolo met the team at Dick's Sporting Goods."
+        #expect(SummaryService.masked(line) == line)
+        #expect(SummaryService.masked("those dicks") == "those d****")
     }
 
     @Test
@@ -701,6 +903,33 @@ struct SensitiveContentRejectionTests {
         #expect(
             SummaryService.failureReason(for: RenamedRefusal()) == .declined
         )
+    }
+
+    /// macOS 27 bridges the renamed enum through this domain and case-order
+    /// code when the concrete Swift error has already been erased. Every case
+    /// that changes a recovery path must survive that bridge.
+    @Test
+    func modernGenerationFailuresKeepTheirRecoveryPathsAfterBridging() {
+        let cases: [(Int, SummaryService.GenerationFailure)] = [
+            (0, .overflow),
+            (1, .busy),
+            (2, .refused),
+            (3, .refused),
+            (4, .schemaUnsupported),
+            (5, .refused),
+            (6, .schemaUnsupported),
+            (7, .languageUnsupported),
+            (8, .timedOut),
+        ]
+
+        for (code, expected) in cases {
+            let error = NSError(
+                domain: "FoundationModels.LanguageModelError",
+                code: code,
+                userInfo: [NSLocalizedDescriptionKey: "Opaque framework error"]
+            )
+            #expect(SummaryService.classify(error) == expected)
+        }
     }
 }
 

@@ -55,6 +55,7 @@ protocol FailureReportingSummarizing: Sendable {
     func summarizeReportingFailure(
         transcript: [TranscriptSegment],
         fallbackTitle: String,
+        attention: SummaryAttention?,
         onStage: SummaryStageHandler?
     ) async -> SummaryResult
 }
@@ -66,11 +67,13 @@ extension SummaryService: FailureReportingSummarizing {
     func summarizeReportingFailure(
         transcript: [TranscriptSegment],
         fallbackTitle: String,
+        attention: SummaryAttention?,
         onStage: SummaryStageHandler?
     ) async -> SummaryResult {
         await self.summarizeReportingFailure(
             transcript: transcript,
             fallbackTitle: fallbackTitle,
+            attention: attention,
             onProgress: nil,
             onStage: onStage
         )
@@ -114,11 +117,13 @@ enum SummaryRegenerator {
         onStage: SummaryStageHandler? = nil
     ) async -> Outcome {
         guard isAvailable(for: note) else { return .retained(reason: nil) }
+        let attention = SummaryAttention(note: note)
         let result = await summarizer.summarizeReportingFailure(
             transcript: note.transcript,
             // The current title is the fallback, so a model that cannot find
             // a subject leaves the note named the way the user knows it.
             fallbackTitle: note.title,
+            attention: attention.isEmpty ? nil : attention,
             onStage: onStage
         )
         guard result.failure == nil else {
@@ -139,5 +144,61 @@ enum SummaryRegenerator {
             updated.actionItems.contains($0)
         }
         return .regenerated(updated)
+    }
+
+    /// Applies only fields that remained unchanged since generation started.
+    ///
+    /// Regeneration can take minutes on a long transcript. My notes, moments,
+    /// sessions, checkbox state, and file metadata may all change while it is
+    /// running, so saving the value captured at the start would silently put
+    /// those fields back in time. Comparing each model-owned field with the
+    /// starting snapshot makes a concurrent user edit win, while still
+    /// allowing an untouched field to receive the fresh model result.
+    static func mergingGeneratedFields(
+        from regenerated: MeetingNote,
+        startingFrom starting: MeetingNote,
+        into latest: MeetingNote
+    ) -> MeetingNote {
+        guard regenerated.id == starting.id,
+              latest.id == starting.id
+        else { return latest }
+
+        var merged = latest
+        if latest.title == starting.title {
+            merged.title = regenerated.title
+        }
+        if latest.summary == starting.summary {
+            merged.summary = regenerated.summary
+        }
+        if latest.keyPoints == starting.keyPoints {
+            merged.keyPoints = regenerated.keyPoints
+        }
+        if latest.decisions == starting.decisions {
+            merged.decisions = regenerated.decisions
+        }
+        if latest.actionItems == starting.actionItems {
+            merged.actionItems = regenerated.actionItems
+        }
+        // Checkbox state is user-owned rather than model-owned. Keep the
+        // freshest ticks, dropping only items that the accepted action-item
+        // rewrite no longer contains.
+        merged.completedActionItems = latest.completedActionItems.filter {
+            merged.actionItems.contains($0)
+        }
+        return merged
+    }
+
+    /// Compatibility overload for callers that already have a freshest note
+    /// but no separate starting snapshot. New regeneration flows should use
+    /// the optimistic three-note form above.
+    static func mergingGeneratedFields(
+        from regenerated: MeetingNote,
+        into latest: MeetingNote
+    ) -> MeetingNote {
+        mergingGeneratedFields(
+            from: regenerated,
+            startingFrom: latest,
+            into: latest
+        )
     }
 }

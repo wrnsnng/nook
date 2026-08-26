@@ -25,6 +25,10 @@ final class MarkdownDraftController: ObservableObject {
     }
 
     func refresh(for note: MeetingNote, store: MarkdownStore) {
+        // `prepare` is the only operation allowed to switch notes. A save or
+        // model callback from a view that just disappeared must not redirect
+        // the shared editor underneath the newly selected note.
+        guard noteID == note.id else { return }
         guard !hasChanges else {
             statusMessage = "Save or revert Markdown edits before refreshing this source."
             return
@@ -46,6 +50,10 @@ final class MarkdownDraftController: ObservableObject {
     }
 
     func save(note: MeetingNote, store: MarkdownStore) throws {
+        guard noteID == note.id else {
+            statusMessage = "This Markdown draft belongs to a different note and was not saved."
+            throw MarkdownDraftError.wrongNote
+        }
         // Nook is not the only writer of these files, and this editor can sit
         // open while another app changes the one on disk. Saving would then
         // overwrite edits nobody in this window has seen, so it stops and
@@ -75,5 +83,13 @@ final class MarkdownDraftController: ObservableObject {
             return nil
         }
         return attributes[.modificationDate] as? Date
+    }
+}
+
+enum MarkdownDraftError: LocalizedError, Equatable {
+    case wrongNote
+
+    var errorDescription: String? {
+        "This Markdown draft belongs to a different note and was not saved."
     }
 }

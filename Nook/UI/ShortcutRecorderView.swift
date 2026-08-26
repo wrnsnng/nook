@@ -10,6 +10,9 @@ import SwiftUI
 struct ShortcutRecorderView: View {
     let shortcut: DictationShortcut
     let onChange: (DictationShortcut) -> Void
+    /// Dictation can watch modifiers by themselves. Nook's action shortcuts
+    /// are menu or Carbon bindings and always need an actual key.
+    var allowsModifierOnly = true
     /// Names the control for assistive tech, since "the dictation shortcut"
     /// would be wrong on every other row of the shortcuts pane.
     var accessibilityLabel = "Keyboard shortcut"
@@ -19,6 +22,11 @@ struct ShortcutRecorderView: View {
     @State private var rejection: String?
     @State private var heldModifiers: NSEvent.ModifierFlags = []
 
+    /// Keep the control column stable while the button changes from a short
+    /// shortcut glyph to its recording prompt, and while a validation message
+    /// appears below it.
+    private static let controlWidth: CGFloat = 148
+
     var body: some View {
         VStack(alignment: .trailing, spacing: NookSpacing.xSmall) {
             Button {
@@ -27,26 +35,33 @@ struct ShortcutRecorderView: View {
                 Text(isRecording ? "Press or hold keys…" : shortcut.displayString)
                     .font(NookType.control.monospaced())
                     .foregroundStyle(isRecording ? .secondary : .primary)
-                    .frame(minWidth: 92)
+                    .frame(width: Self.controlWidth)
                     .contentShape(.rect)
             }
             .buttonStyle(.bordered)
             .help(
                 isRecording
-                    ? "Press a combination, or hold modifiers alone and release them. Escape cancels."
+                    ? recordingHelp
                     : "Click to record a new shortcut."
             )
             .accessibilityLabel(accessibilityLabel)
             .accessibilityValue(
                 isRecording ? "Recording a new shortcut" : shortcut.displayString
             )
+            .accessibilityHint(
+                isRecording ? recordingHelp : "Click to record a new shortcut."
+            )
 
             if let rejection {
                 Text(rejection)
                     .font(NookType.micro)
                     .foregroundStyle(NookPalette.warning)
+                    .multilineTextAlignment(.trailing)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .frame(width: Self.controlWidth, alignment: .trailing)
         .onDisappear(perform: stopRecording)
     }
 
@@ -85,9 +100,20 @@ struct ShortcutRecorderView: View {
         guard let recorded = DictationShortcut(modifiers: heldModifiers) else {
             return
         }
+        guard allowsModifierOnly else {
+            rejection = "Add a key to those modifiers."
+            return
+        }
         stopRecording()
         rejection = nil
         onChange(recorded)
+    }
+
+    private var recordingHelp: String {
+        if allowsModifierOnly {
+            return "Press a combination, or hold modifiers alone and release them. Escape cancels."
+        }
+        return "Press a key with one or more modifiers. Escape cancels."
     }
 
     private func stopRecording() {

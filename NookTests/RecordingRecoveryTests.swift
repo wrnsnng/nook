@@ -29,6 +29,40 @@ struct RecordingRecoveryTests {
         return store
     }
 
+    @Test
+    func recoveryScanFollowsTheNotesPublishedByAnAsyncReload() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let id = UUID()
+        let note = MeetingNote(
+            id: id,
+            title: "Reloaded note",
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            endedAt: Date(timeIntervalSince1970: 1_700_000_060),
+            sourceApp: "Manual",
+            summary: "The note arrives after the folder scan."
+        )
+        let store = MarkdownStore(noteLoader: { url, _ in
+            let notes = url.standardizedFileURL
+                == directory.standardizedFileURL ? [note] : []
+            return .success((notes: notes, issues: []))
+        })
+        store.storageURL = directory
+        let recovery = RecordingRecovery(store: store)
+        try writeRecording(id, extensionName: "mp4", in: store.recordingsDirectory())
+
+        recovery.scan()
+        #expect(recovery.orphans.map(\.id) == [id])
+
+        store.reload()
+        for _ in 0..<100 where store.isLoading {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(store.notes.map(\.id) == [id])
+        #expect(recovery.orphans.isEmpty)
+    }
+
     @discardableResult
     private func writeRecording(
         _ id: UUID,
@@ -79,7 +113,11 @@ struct RecordingRecoveryTests {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = store(in: directory)
-        let recovery = RecordingRecovery(store: store)
+        var trashedURLs: [URL] = []
+        let recovery = RecordingRecovery(store: store) { url in
+            trashedURLs.append(url)
+            try FileManager.default.removeItem(at: url)
+        }
 
         let id = UUID()
         let capture = try writeRecording(
@@ -92,11 +130,41 @@ struct RecordingRecoveryTests {
 
         recovery.delete(orphan)
 
-        // Trashed on a volume with a Trash, unlinked on one without: either
-        // way it has left the recordings folder and nothing went wrong.
+        // This injected Trash receipt represents a successful reversible
+        // move. Compare the unique filename because the file is already gone
+        // when macOS exposes the temp root as `/var` or `/private/var`.
+        #expect(trashedURLs.count == 1)
+        #expect(trashedURLs.first?.lastPathComponent == capture.lastPathComponent)
         #expect(!FileManager.default.fileExists(atPath: capture.path))
         #expect(recovery.orphans.isEmpty)
         #expect(recovery.message == nil)
+    }
+
+    @Test
+    func deletionRefusesToUnlinkWhenTrashIsUnavailable() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        struct TrashUnavailable: Error {}
+        let recovery = RecordingRecovery(store: store) { _ in
+            throw TrashUnavailable()
+        }
+
+        let id = UUID()
+        let capture = try writeRecording(
+            id,
+            extensionName: "mp4",
+            in: store.recordingsDirectory()
+        )
+        recovery.scan()
+        let orphan = try #require(recovery.orphans.first)
+
+        recovery.delete(orphan)
+
+        #expect(FileManager.default.fileExists(atPath: capture.path))
+        #expect(recovery.orphans.map(\.id) == [id])
+        #expect(recovery.message?.contains("Trash") == true)
+        #expect(recovery.message?.contains("left in place") == true)
     }
 
     @Test
@@ -284,5 +352,65 @@ struct RecordingRecoveryTests {
                     .standardizedFileURL
             )
         )
+    }
+
+    @Test
+    func aSavedNoteDoesNotHideAFileWhoseRecoveryCleanupFailed() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        let recovery = RecordingRecovery(store: store)
+        let id = UUID()
+        let note = MeetingNote(
+            id: id,
+            title: "Recovered note",
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            endedAt: Date(timeIntervalSince1970: 1_700_000_060),
+            sourceApp: "Recovered",
+            summary: "The note was saved, but cleanup failed."
+        )
+        _ = try store.save(note)
+        let leftover = try writeRecording(
+            id,
+            extensionName: "mp4",
+            in: store.recordingsDirectory()
+        )
+
+        recovery.retainCleanupFailure(
+            for: note,
+            recordedAt: note.startedAt,
+            urls: [leftover]
+        )
+        recovery.scan()
+
+        #expect(recovery.orphans.isEmpty)
+        #expect(recovery.cleanupFailures.map(\.urls) == [[leftover]])
+        #expect(recovery.message?.contains("could not remove") == true)
+    }
+
+    @Test
+    func failedRecoveryCleanupReturnsTheFilesThatMustRemainVisible() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = directory.appendingPathComponent("first.mp4")
+        let second = directory.appendingPathComponent("second.mp4")
+        try Data("first".utf8).write(to: first)
+        try Data("second".utf8).write(to: second)
+        struct CleanupFailed: Error {}
+
+        let failures = RecordingRecovery.cleanupFiles(
+            [first, second],
+            fileExists: { FileManager.default.fileExists(atPath: $0.path) },
+            remove: { url in
+                if url == second {
+                    throw CleanupFailed()
+                }
+                try FileManager.default.removeItem(at: url)
+            }
+        )
+
+        #expect(failures == [second])
+        #expect(!FileManager.default.fileExists(atPath: first.path))
+        #expect(FileManager.default.fileExists(atPath: second.path))
     }
 }

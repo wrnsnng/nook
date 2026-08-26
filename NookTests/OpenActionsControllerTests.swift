@@ -157,4 +157,44 @@ struct OpenActionsControllerTests {
         await controller.refresh(store: store)
         #expect(controller.entries.count == 1)
     }
+
+    @Test
+    func templatePromptsStayVisibleWithoutBecomingOpenActions() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "NookTemplateOpenActionsTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = await makeStore(in: directory)
+        let templateNote = try store.createTemplatedNote(from: .standup)
+        let realNote = try store.save(
+            MeetingNote(
+                title: "Real follow-up",
+                startedAt: Date(timeIntervalSince1970: 1_755_678_000),
+                endedAt: Date(timeIntervalSince1970: 1_755_678_060),
+                sourceApp: "Personal",
+                summary: "A user-created action.",
+                actionItems: ["Send the recap"]
+            )
+        )
+        let controller = OpenActionsController()
+
+        await controller.refresh(store: store)
+
+        #expect(controller.entries.count == 1)
+        #expect(controller.entries.first?.noteID == realNote.id)
+        #expect(controller.entries.first?.displayText == "Send the recap")
+
+        let templateURL = try #require(templateNote.fileURL)
+        let markdown = try String(contentsOf: templateURL, encoding: .utf8)
+        #expect(markdown.contains("- [x] Yesterday"))
+        #expect(markdown.contains("- [x] Today"))
+        #expect(markdown.contains("- [x] Blockers"))
+    }
 }

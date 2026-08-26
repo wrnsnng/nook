@@ -481,6 +481,143 @@ struct NoteDestinationTests {
         #expect(second.fileURL == third.fileURL)
         #expect(files.count == 1)
     }
+
+    @Test
+    @MainActor
+    func explicitlyRenamingAFileUsesTheCurrentTitleAndPreservesItsContent() throws {
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = MarkdownStore(noteLoader: { _, _ in
+            .success((notes: [], issues: []))
+        })
+        store.storageURL = directory
+
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let original = try store.save(
+            MeetingNote(
+                title: "Planning",
+                startedAt: start,
+                endedAt: start.addingTimeInterval(60),
+                sourceApp: "Manual",
+                summary: "Keep this content.",
+                actionItems: ["Send the recap"]
+            )
+        )
+        let source = try #require(original.fileURL)
+        let before = try String(contentsOf: source, encoding: .utf8)
+        var titled = original
+        titled.title = "Planning / Final"
+
+        let renamed = try store.renameManagedFile(for: titled)
+        let destination = try #require(renamed.fileURL)
+
+        #expect(destination != source)
+        #expect(destination.lastPathComponent.hasSuffix("-planning-final.md"))
+        #expect(!FileManager.default.fileExists(atPath: source.path))
+        #expect(FileManager.default.fileExists(atPath: destination.path))
+        #expect(try String(contentsOf: destination, encoding: .utf8) == before)
+        #expect(renamed.id == original.id)
+        #expect(renamed.title == titled.title)
+        #expect(store.notes.first(where: { $0.id == original.id })?.fileURL == destination)
+
+        // A second explicit request is a no-op at the same destination.
+        let repeated = try store.renameManagedFile(for: renamed)
+        #expect(repeated.fileURL == destination)
+        #expect(try Self.markdownFiles(in: directory).count == 1)
+    }
+
+    @Test
+    @MainActor
+    func explicitlyRenamingAroundAnOccupiedNameNeverOverwritesTheOtherFile() throws {
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = MarkdownStore(noteLoader: { _, _ in
+            .success((notes: [], issues: []))
+        })
+        store.storageURL = directory
+
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let original = try store.save(
+            MeetingNote(
+                title: "Planning",
+                startedAt: start,
+                endedAt: start.addingTimeInterval(60),
+                sourceApp: "Manual",
+                summary: "Original content."
+            )
+        )
+        let occupied = try store.save(
+            MeetingNote(
+                title: "Planning Final",
+                startedAt: start,
+                endedAt: start.addingTimeInterval(60),
+                sourceApp: "Manual",
+                summary: "Keep the other note here."
+            )
+        )
+        let occupiedURL = try #require(occupied.fileURL)
+        let occupiedBefore = try String(contentsOf: occupiedURL, encoding: .utf8)
+        var titled = original
+        titled.title = "Planning Final"
+
+        let renamed = try store.renameManagedFile(for: titled)
+        let destination = try #require(renamed.fileURL)
+
+        #expect(destination != occupiedURL)
+        #expect(destination.lastPathComponent.contains(
+            String(original.id.uuidString.prefix(8)).lowercased()
+        ))
+        #expect(FileManager.default.fileExists(atPath: occupiedURL.path))
+        #expect(try String(contentsOf: occupiedURL, encoding: .utf8) == occupiedBefore)
+        #expect(try String(contentsOf: destination, encoding: .utf8).contains("Original content."))
+    }
+
+    @Test
+    @MainActor
+    func explicitlyRenamingAnExternallyChangedFileLeavesItInPlace() throws {
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = MarkdownStore(noteLoader: { _, _ in
+            .success((notes: [], issues: []))
+        })
+        store.storageURL = directory
+
+        let original = try store.save(
+            MeetingNote(
+                title: "Pricing",
+                startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                endedAt: Date(timeIntervalSince1970: 1_700_000_060),
+                sourceApp: "Manual",
+                summary: "Nook wrote this."
+            )
+        )
+        let source = try #require(original.fileURL)
+        let elsewhere = try String(contentsOf: source, encoding: .utf8)
+            .replacingOccurrences(
+                of: "Nook wrote this.",
+                with: "A person wrote this instead."
+            )
+        try elsewhere.write(to: source, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(120)],
+            ofItemAtPath: source.path
+        )
+
+        var titled = original
+        titled.title = "Pricing, revisited"
+        var thrown: Error?
+        do {
+            _ = try store.renameManagedFile(for: titled)
+        } catch {
+            thrown = error
+        }
+
+        #expect(thrown as? MarkdownStoreError == .fileChangedElsewhere)
+        #expect(FileManager.default.fileExists(atPath: source.path))
+        #expect(try String(contentsOf: source, encoding: .utf8).contains("A person wrote this instead."))
+        #expect(try Self.markdownFiles(in: directory).count == 1)
+        #expect(store.notes.first(where: { $0.id == original.id })?.fileURL == source)
+    }
 }
 
 /// Nook is not the only writer of these files, and a whole-note save replaces
@@ -644,5 +781,112 @@ struct SaveFailureCopyTests {
             MarkdownStoreError.saveReadBackFailed.errorDescription?
                 .contains("untouched") == false
         )
+    }
+}
+
+private final class TrashRejectingFileManager: FileManager {
+    struct TrashUnavailable: Error {}
+
+    override func trashItem(
+        at url: URL,
+        resultingItemURL: AutoreleasingUnsafeMutablePointer<NSURL?>?
+    ) throws {
+        throw TrashUnavailable()
+    }
+}
+
+private final class TrashRecordingFileManager: FileManager {
+    private(set) var trashedURLs: [URL] = []
+
+    override func trashItem(
+        at url: URL,
+        resultingItemURL: AutoreleasingUnsafeMutablePointer<NSURL?>?
+    ) throws {
+        trashedURLs.append(url)
+        // Tests model a successful reversible move without touching the
+        // developer's real Trash.
+        try removeItem(at: url)
+    }
+}
+
+struct NoteDeletionSafetyTests {
+    @Test
+    @MainActor
+    func deletingUsesTrashBeforeRemovingTheLibraryEntry() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "NookDeleteSuccess-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let fileManager = TrashRecordingFileManager()
+        let store = MarkdownStore(
+            fileManager: fileManager,
+            noteLoader: { _, _ in
+                .success((notes: [], issues: []))
+            }
+        )
+        store.storageURL = directory
+        let note = try store.save(
+            MeetingNote(
+                title: "Trash this note",
+                startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                endedAt: Date(timeIntervalSince1970: 1_700_000_060),
+                sourceApp: "Manual",
+                summary: "This deletion is reversible in production."
+            )
+        )
+        let file = try #require(note.fileURL)
+
+        #expect(store.delete(note))
+        #expect(fileManager.trashedURLs == [file])
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        #expect(!store.notes.contains { $0.id == note.id })
+        #expect(store.lastError == nil)
+    }
+
+    @Test
+    @MainActor
+    func deletingWithNoTrashLeavesTheFileAndLibraryEntryIntact() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "NookDeleteSafety-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = MarkdownStore(
+            fileManager: TrashRejectingFileManager(),
+            noteLoader: { _, _ in
+                .success((notes: [], issues: []))
+            }
+        )
+        store.storageURL = directory
+        let note = try store.save(
+            MeetingNote(
+                title: "Keep this note",
+                startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                endedAt: Date(timeIntervalSince1970: 1_700_000_060),
+                sourceApp: "Manual",
+                summary: "The file must remain recoverable."
+            )
+        )
+        let file = try #require(note.fileURL)
+        let before = try Data(contentsOf: file)
+
+        #expect(!store.delete(note))
+        #expect(store.notes.contains { $0.id == note.id })
+        #expect(FileManager.default.fileExists(atPath: file.path))
+        #expect(try Data(contentsOf: file) == before)
+        #expect(store.lastError?.contains("Trash") == true)
     }
 }

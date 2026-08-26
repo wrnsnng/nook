@@ -15,6 +15,9 @@ final class MomentHotKeyController {
     private var eventHandler: EventHandlerRef?
     private static let signature: OSType = 0x6E6B666C // 'nkfl'
     private var shortcut: RecordedShortcut
+    /// Activity is meeting lifecycle state, not registration success. Carbon
+    /// can refuse one combination; a later valid rebind must still retry.
+    private var isActive = false
 
     init(shortcut: RecordedShortcut) {
         self.shortcut = shortcut
@@ -24,13 +27,22 @@ final class MomentHotKeyController {
     /// one already exists so mid-meeting rebinds work.
     func apply(_ newShortcut: RecordedShortcut) {
         guard newShortcut != shortcut else { return }
-        let wasRegistered = hotKeyRef != nil
-        stop()
+        unregister()
         shortcut = newShortcut
-        if wasRegistered { start() }
+        if isActive { register() }
     }
 
     func start() {
+        isActive = true
+        register()
+    }
+
+    func stop() {
+        isActive = false
+        unregister()
+    }
+
+    private func register() {
         guard hotKeyRef == nil else { return }
         guard shortcut.isValid, !shortcut.isModifierOnly else { return }
         installHandlerIfNeeded()
@@ -53,7 +65,7 @@ final class MomentHotKeyController {
         }
     }
 
-    func stop() {
+    private func unregister() {
         if let hotKeyRef {
             UnregisterEventHotKey(hotKeyRef)
             self.hotKeyRef = nil

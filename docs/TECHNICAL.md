@@ -23,6 +23,7 @@ flowchart TD
     Model --> Detector["MeetingDetector"]
     Model --> Panel["NotchPanelCoordinator"]
     Model --> Updates["NookUpdateController"]
+    Model --> InputCheck["AudioInputCheckService"]
 
     Detector --> Meeting
     Meeting --> Capture["CaptureService"]
@@ -60,6 +61,21 @@ API; Nook does not retain useful screen video.
 Temporary capture containers are deleted after processing. Extracted audio is
 also removed unless the user enables **Keep extracted meeting audio**. Failure
 cleanup reports any artifact that could not be removed.
+
+### `AudioInputCheckService`
+
+Owns the explicit Listening-pane input check. It creates a short-lived,
+audio-only `SCStream` with `.audio` and `.microphone` outputs. It does not add
+a recording output, set a file URL, or connect speech recognition, summaries,
+recovery, event logging, or sleep assertions. Callback threads write the
+latest bounded levels and monotonic timestamps under one mutex; one
+main-actor polling task applies stale-level decay for the Settings meters.
+
+`AppModel` rejects a start while a meeting or dictation capture is active and
+stops the check when either feature becomes active. Stop owns a teardown
+barrier, so a new check cannot start while ScreenCaptureKit is still winding
+down. Input permission failures are shown in Settings and no sample leaves
+the process.
 
 ### `LiveTranscriptionService`
 

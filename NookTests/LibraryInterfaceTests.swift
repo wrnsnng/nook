@@ -428,4 +428,175 @@ struct LibraryInterfaceTests {
         // look like a change, or every reload would defeat the cache.
         #expect(forward == reversed)
     }
+
+    // MARK: - Detail presentation
+
+    @Test
+    func longSummaryParagraphsKeepExactTextAndUseSentenceBoundaries() {
+        let summary = (1...18)
+            .map { "Sentence \($0) has useful detail." }
+            .joined(separator: " ")
+
+        let paragraphs = DetailSummaryParagraphPolicy.paragraphs(for: summary)
+
+        #expect(paragraphs.count == 2)
+        #expect(paragraphs.joined() == summary)
+        #expect(
+            paragraphs.allSatisfy {
+                $0.split(whereSeparator: \.isWhitespace).count
+                    >= DetailSummaryParagraphPolicy.minimumWordsPerParagraph
+            }
+        )
+    }
+
+    @Test
+    func veryLongSummaryUsesThreeBalancedParagraphsWithoutRewriting() {
+        let summary = (1...36)
+            .map { "Sentence \($0) has useful detail." }
+            .joined(separator: " ")
+
+        let paragraphs = DetailSummaryParagraphPolicy.paragraphs(for: summary)
+
+        #expect(paragraphs.count == 3)
+        #expect(paragraphs.joined() == summary)
+        #expect(
+            paragraphs.map {
+                $0.split(whereSeparator: \.isWhitespace).count
+            } == [60, 60, 60]
+        )
+    }
+
+    @Test
+    func shortSummaryParagraphsStayOneExactSelectionValue() {
+        let summary = "A short summary stays intact.\n"
+
+        #expect(DetailSummaryParagraphPolicy.paragraphs(for: summary) == [summary])
+    }
+
+    @Test
+    func longSemicolonSummaryUsesClauseBoundariesWithoutRewriting() {
+        let summary = (1...20)
+            .map { "Clause \($0) records useful detail" }
+            .joined(separator: "; ") + "."
+
+        let paragraphs = DetailSummaryParagraphPolicy.paragraphs(for: summary)
+
+        #expect(paragraphs.count == 2)
+        #expect(paragraphs.joined() == summary)
+        #expect(
+            paragraphs.allSatisfy {
+                $0.split(whereSeparator: \.isWhitespace).count
+                    >= DetailSummaryParagraphPolicy.minimumWordsPerParagraph
+            }
+        )
+    }
+
+    @Test
+    func realWorldSemicolonSummaryGetsAReadableBreak() {
+        let summary = """
+            The discussion covered conversion barriers for Pop and Podcast customers, including a three-step onboarding process requiring supplier agreement, accounting connection, and KYC documentation; approximately 100–200 customers have meaningful M-coin balances but do not convert, with 40% of entities having opted in since January; KYC requirements must be defined per entity, documentation is required before fund payouts, and the process must be streamlined to avoid blocking onboarding; risk management considerations include stolen data, stolen IDs, and the need for secured products with PPSR registration, while customer data must be returned and ABM pre-populated; a $1,000,000 pool is available, LTI plans last 3 years, and early payment incentives include 6% fee instead of 3.45% and double M-coin for on-time or early payment
+            """
+
+        let paragraphs = DetailSummaryParagraphPolicy.paragraphs(for: summary)
+
+        #expect(paragraphs.count == 2)
+        #expect(paragraphs.joined() == summary)
+    }
+
+    @Test
+    func shortSemicolonSummaryStaysOneExactSelectionValue() {
+        let summary = "First clause stays concise; second clause is still short."
+
+        #expect(DetailSummaryParagraphPolicy.paragraphs(for: summary) == [summary])
+    }
+
+    @Test
+    func renameActionsRequireCleanMarkdownDrafts() {
+        #expect(!DetailRenamePolicy.allowsTitleRename(hasMarkdownChanges: true))
+        #expect(
+            !DetailRenamePolicy.allowsFileRename(
+                hasMarkdownChanges: true,
+                hasManagedFile: true
+            )
+        )
+        #expect(
+            DetailRenamePolicy.allowsFileRename(
+                hasMarkdownChanges: false,
+                hasManagedFile: true
+            )
+        )
+    }
+
+    @Test
+    func transcriptGroupingShowsChangedSourcesGapsAndTheFirstFilteredRow() {
+        let first = TranscriptSegment(
+            startTime: 0,
+            duration: 3,
+            text: "First line",
+            source: .microphone
+        )
+        let nearby = TranscriptSegment(
+            startTime: 8,
+            duration: 3,
+            text: "Nearby line",
+            source: .microphone
+        )
+        let afterPause = TranscriptSegment(
+            startTime: 40,
+            duration: 3,
+            text: "After the pause",
+            source: .microphone
+        )
+        let changedSource = TranscriptSegment(
+            startTime: 44,
+            duration: 3,
+            text: "Other source",
+            source: .system
+        )
+
+        let visible = TranscriptBadgeGroupingPolicy.visibleBadgeIDs(
+            in: [first, nearby, afterPause, changedSource]
+        )
+        #expect(visible == [first.id, afterPause.id, changedSource.id])
+
+        // Filtering removes the predecessor, so the first result must regain
+        // its source context even if it was grouped in the full transcript.
+        let filtered = TranscriptBadgeGroupingPolicy.visibleBadgeIDs(
+            in: [nearby]
+        )
+        #expect(filtered == [nearby.id])
+    }
+
+    @Test
+    func transcriptGroupingRestoresTheBadgeAtASessionBoundary() {
+        let first = TranscriptSegment(
+            startTime: 0,
+            duration: 3,
+            text: "First sitting",
+            source: .microphone
+        )
+        let next = TranscriptSegment(
+            startTime: 10,
+            duration: 3,
+            text: "Second sitting",
+            source: .microphone
+        )
+        let sessions = [
+            MeetingSession(
+                startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                endedAt: Date(timeIntervalSince1970: 1_700_000_010)
+            ),
+            MeetingSession(
+                startedAt: Date(timeIntervalSince1970: 1_700_001_000),
+                endedAt: Date(timeIntervalSince1970: 1_700_001_010)
+            )
+        ]
+
+        let visible = TranscriptBadgeGroupingPolicy.visibleBadgeIDs(
+            in: [first, next],
+            sessions: sessions
+        )
+
+        #expect(visible == [first.id, next.id])
+    }
 }

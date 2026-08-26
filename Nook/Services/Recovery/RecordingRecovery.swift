@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 
 /// A recording left in the recordings folder with no note to show for it.
@@ -46,10 +47,32 @@ struct OrphanedRecording: Identifiable, Hashable, Sendable {
     }
 }
 
+/// Files that could not be removed after their note was saved.
+///
+/// A saved note's identifier normally keeps its audio out of the orphan scan.
+/// Keeping this separate lets a failed cleanup remain visible without treating
+/// a successfully retained `.m4a` as stranded audio.
+struct RecoveryCleanupFailure: Identifiable, Hashable, Sendable {
+    let id: UUID
+    let noteTitle: String
+    let urls: [URL]
+    let recordedAt: Date
+    let byteSize: Int64
+
+    var sizeLabel: String {
+        ByteCountFormatter.string(fromByteCount: byteSize, countStyle: .file)
+    }
+
+    var dateLabel: String {
+        recordedAt.formatted(date: .abbreviated, time: .shortened)
+    }
+}
+
 /// Finds, recovers, and removes recordings that never became notes.
 @MainActor
 final class RecordingRecovery: ObservableObject {
     @Published private(set) var orphans: [OrphanedRecording] = []
+    @Published private(set) var cleanupFailures: [RecoveryCleanupFailure] = []
     @Published private(set) var isWorking = false
     @Published private(set) var message: String?
 
@@ -74,16 +97,34 @@ final class RecordingRecovery: ObservableObject {
     }
 
     private let store: MarkdownStore
+    private let trashItem: (URL) throws -> Void
+    private var reloadCancellable: AnyCancellable?
     private let transcriber = TranscriptionService()
     private let summarizer = SummaryService()
 
-    init(store: MarkdownStore) {
+    init(
+        store: MarkdownStore,
+        trashItem: @escaping (URL) throws -> Void = { url in
+            try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+        }
+    ) {
         self.store = store
+        self.trashItem = trashItem
+        // MarkdownStore publishes notes before it clears isLoading. Scanning
+        // from that transition is the one place that cannot observe the old
+        // note set after an asynchronous reload.
+        reloadCancellable = store.$isLoading
+            .removeDuplicates()
+            .filter { !$0 }
+            .sink { [weak self] _ in
+                self?.scan()
+            }
     }
 
     var totalSizeLabel: String {
         ByteCountFormatter.string(
-            fromByteCount: orphans.reduce(0) { $0 + $1.byteSize },
+            fromByteCount: orphans.reduce(0) { $0 + $1.byteSize }
+                + cleanupFailures.reduce(0) { $0 + $1.byteSize },
             countStyle: .file
         )
     }
@@ -96,6 +137,8 @@ final class RecordingRecovery: ObservableObject {
     /// here. A recording still being made or still being written up is not
     /// stranded either, and is excluded by `activeRecording`.
     func scan() {
+        let manager = FileManager.default
+        reconcileCleanupFailures(using: manager)
         if case .inFlight(let activeID) = activeRecording, activeID == nil {
             orphans = []
             return
@@ -105,7 +148,6 @@ final class RecordingRecovery: ObservableObject {
             inFlightIDs.insert(activeID)
         }
         let directory = store.recordingsDirectory()
-        let manager = FileManager.default
         guard let entries = try? manager.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey]
@@ -150,9 +192,35 @@ final class RecordingRecovery: ObservableObject {
         .sorted { $0.recordedAt > $1.recordedAt }
     }
 
+    /// Removes entries whose failed files have since gone away in Finder.
+    private func reconcileCleanupFailures(using manager: FileManager) {
+        cleanupFailures = cleanupFailures.compactMap { failure in
+            let remaining = failure.urls.filter {
+                manager.fileExists(atPath: $0.path)
+            }
+            guard !remaining.isEmpty else { return nil }
+            let byteSize = remaining.reduce(0) { total, url in
+                total + Int64(
+                    (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
+                        ?? 0
+                )
+            }
+            return RecoveryCleanupFailure(
+                id: failure.id,
+                noteTitle: failure.noteTitle,
+                urls: remaining,
+                recordedAt: failure.recordedAt,
+                byteSize: byteSize
+            )
+        }
+    }
+
     func reveal(_ orphan: OrphanedRecording) {
-        guard let first = orphan.urls.first else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([first])
+        NSWorkspace.shared.activateFileViewerSelecting(orphan.urls)
+    }
+
+    func reveal(_ failure: RecoveryCleanupFailure) {
+        NSWorkspace.shared.activateFileViewerSelecting(failure.urls)
     }
 
     /// Moves a stranded recording to the Trash.
@@ -160,24 +228,26 @@ final class RecordingRecovery: ObservableObject {
     /// This pane exists because the audio was kept so nothing was lost, and
     /// unlinking it here would be the one place Nook takes that back. Trashing
     /// keeps the deletion reversible from the Finder, exactly as deleting a
-    /// note does. Volumes without a Trash still deserve a working delete.
+    /// note does. If a volume has no Trash, the recording stays in place.
     func delete(_ orphan: OrphanedRecording) {
         let manager = FileManager.default
-        var failure: String?
+        var failedURLs: [URL] = []
         for url in orphan.urls where manager.fileExists(atPath: url.path) {
             do {
-                try manager.trashItem(at: url, resultingItemURL: nil)
+                try trashItem(url)
             } catch {
-                do {
-                    try manager.removeItem(at: url)
-                } catch {
-                    failure = failure
-                        ?? "Couldn’t remove \(url.lastPathComponent): "
-                            + error.localizedDescription
-                }
+                failedURLs.append(url)
             }
         }
-        message = failure
+        if failedURLs.isEmpty {
+            message = nil
+        } else {
+            let names = failedURLs.map(\.lastPathComponent)
+                .joined(separator: ", ")
+            let noun = failedURLs.count == 1 ? "file was" : "files were"
+            message = "Could not move \(names) to the Trash. The \(noun) "
+                + "left in place. Try again after making the Trash available."
+        }
         scan()
     }
 
@@ -261,7 +331,7 @@ final class RecordingRecovery: ObservableObject {
                 // normally. Removing every source file here deleted it, so
                 // recovering a meeting was also the act that threw away the
                 // recording the user had asked Nook to keep.
-                for url in Self.filesToRemoveAfterRecovery(
+                let cleanupURLs = Self.filesToRemoveAfterRecovery(
                     sources: orphan.urls,
                     extractedAudio: audioURL,
                     liveNotes: MeetingCoordinator.liveNotesURL(
@@ -269,15 +339,97 @@ final class RecordingRecovery: ObservableObject {
                         in: recordingsDirectory
                     ),
                     keepAudio: MeetingCoordinator.keepAudioPreference
-                ) {
-                    try? FileManager.default.removeItem(at: url)
+                )
+                let manager = FileManager.default
+                let failedCleanupURLs = Self.cleanupFiles(
+                    cleanupURLs,
+                    fileExists: { manager.fileExists(atPath: $0.path) },
+                    remove: { try manager.removeItem(at: $0) }
+                )
+                if failedCleanupURLs.isEmpty {
+                    self.cleanupFailures.removeAll { $0.id == note.id }
+                    self.message = "Saved “\(note.title)”."
+                } else {
+                    self.retainCleanupFailure(
+                        for: note,
+                        recordedAt: orphan.recordedAt,
+                        urls: failedCleanupURLs
+                    )
                 }
-                self.message = "Saved “\(note.title)”."
                 self.scan()
             } catch {
                 self.message = error.localizedDescription
             }
         }
+    }
+
+    /// Keeps failed post-recovery cleanup visible until the files are gone.
+    ///
+    /// The saved note's identifier would otherwise make a second scan treat
+    /// these paths as ordinary retained audio, even when cleanup was requested
+    /// and failed.
+    func retainCleanupFailure(
+        for note: MeetingNote,
+        recordedAt: Date,
+        urls: [URL]
+    ) {
+        guard !urls.isEmpty else { return }
+        let failure = Self.cleanupFailure(
+            for: note,
+            recordedAt: recordedAt,
+            urls: urls
+        )
+        cleanupFailures.removeAll { $0.id == note.id }
+        cleanupFailures.append(failure)
+        message = Self.cleanupFailureMessage(failure)
+    }
+
+    private static func cleanupFailure(
+        for note: MeetingNote,
+        recordedAt: Date,
+        urls: [URL]
+    ) -> RecoveryCleanupFailure {
+        let byteSize = urls.reduce(0) { total, url in
+            total + Int64(
+                (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+            )
+        }
+        return RecoveryCleanupFailure(
+            id: note.id,
+            noteTitle: note.title,
+            urls: urls,
+            recordedAt: recordedAt,
+            byteSize: byteSize
+        )
+    }
+
+    /// Removes files that no longer belong in the recordings folder and keeps
+    /// every failed path for the caller to surface. The closures make the
+    /// failure branch deterministic without touching a user's files in tests.
+    static func cleanupFiles(
+        _ urls: Set<URL>,
+        fileExists: (URL) -> Bool,
+        remove: (URL) throws -> Void
+    ) -> [URL] {
+        urls.sorted { $0.path < $1.path }.filter { url in
+            guard fileExists(url) else { return false }
+            do {
+                try remove(url)
+                return false
+            } catch {
+                return true
+            }
+        }
+    }
+
+    private static func cleanupFailureMessage(
+        _ failure: RecoveryCleanupFailure
+    ) -> String {
+        let names = failure.urls.map(\.lastPathComponent)
+            .joined(separator: ", ")
+        let noun = failure.urls.count == 1 ? "file remains" : "files remain"
+        return "Saved “\(failure.noteTitle)”, but could not remove \(names). "
+            + "The \(noun) in Nook’s recordings folder. Use Reveal to inspect them."
     }
 
     /// What a finished recovery no longer needs on disk.

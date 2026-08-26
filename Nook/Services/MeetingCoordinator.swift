@@ -107,6 +107,16 @@ struct KeptAudioStranded: Error {
     let underlying: any Error
 }
 
+/// A transcript-first save once existed, but Nook can no longer verify a note
+/// file that owns those words. Recovery must keep the recording in this case;
+/// manufacturing a second note would undo an explicit deletion or overwrite
+/// an external file operation.
+private struct DurableMeetingNoteUnavailable: LocalizedError {
+    let reason: String
+
+    var errorDescription: String? { reason }
+}
+
 struct SummaryProgress: Equatable, Sendable {
     let part: Int
     let total: Int
@@ -190,6 +200,10 @@ final class MeetingCoordinator: ObservableObject {
 
     private let store: MarkdownStore
     private let detector: MeetingDetector
+    /// The input check shares the microphone and ScreenCaptureKit. Waiting for
+    /// its teardown before requesting meeting capture prevents two starts from
+    /// opening those resources during the same turn of the main actor.
+    private let prepareForAudioCapture: (@MainActor () async -> Void)?
     private let capture = CaptureService()
     /// Global flag hotkey, registered only while a recording is running.
     private let momentHotKeys = MomentHotKeyController(
@@ -221,6 +235,17 @@ final class MeetingCoordinator: ObservableObject {
     private var recordingStartTask: Task<Void, Never>?
     private var liveStartupTask: Task<Void, Never>?
     private var liveSummaryTask: Task<Void, Never>?
+    /// Progress callbacks can arrive after a model deadline because the
+    /// underlying framework may not observe task cancellation immediately.
+    /// A generation makes those late callbacks harmless when a meeting has
+    /// moved on, been discarded, or started another summary pass.
+    private var summaryProgressGeneration = 0
+    /// Background enrichment for an appended sitting. The sitting itself is
+    /// saved and its audio settled before this starts, so the note is useful
+    /// without waiting on a model. A token prevents a cancelled older pass
+    /// from applying after a newer append to the same note.
+    private var appendedSummaryTasks: [UUID: Task<Void, Never>] = [:]
+    private var appendedSummaryTokens: [UUID: UUID] = [:]
     private var pauseTask: Task<Void, Never>?
     private var momentNoticeTask: Task<Void, Never>?
     private var dismissedDetection: DetectedMeeting?
@@ -236,14 +261,24 @@ final class MeetingCoordinator: ObservableObject {
     private var accumulatedElapsed: TimeInterval = 0
     private var activeElapsedStartedAt: Date?
     private var processingCancellationRequested = false
+    /// Once an appended sitting is durable, cancelling would have to roll the
+    /// old note back while preserving edits made since the append. Closing the
+    /// cancellation window at that synchronous save boundary avoids either
+    /// deleting the existing note or silently keeping a half-discarded sitting.
+    private var processingOwnsAttachedScaffold = false
     /// A meeting can end while ScreenCaptureKit is finalizing a pause or adding
     /// the resumed output. Remember that stop request and run it as soon as the
     /// transition becomes terminal instead of silently discarding it.
     private var stopRequestedDuringPauseTransition = false
 
-    init(store: MarkdownStore, detector: MeetingDetector) {
+    init(
+        store: MarkdownStore,
+        detector: MeetingDetector,
+        prepareForAudioCapture: (@MainActor () async -> Void)? = nil
+    ) {
         self.store = store
         self.detector = detector
+        self.prepareForAudioCapture = prepareForAudioCapture
         self.localeIdentifier = UserDefaults.standard.string(forKey: "transcriptionLocale")
             ?? Locale.current.identifier
         self.keepAudio = Self.keepAudioPreference
@@ -335,6 +370,7 @@ final class MeetingCoordinator: ObservableObject {
         onRecordingStopped?()
         topPanelHidden = false
         processingCancellationRequested = false
+        processingOwnsAttachedScaffold = false
         phase = .processing(.preparing)
         NookEventLog.write(.meetingStopStarted)
         onPresentationRequested?()
@@ -414,7 +450,8 @@ final class MeetingCoordinator: ObservableObject {
     var canCancelProcessing: Bool {
         guard case .processing(let step) = phase,
               step != .discarding,
-              activeDraft != nil
+              activeDraft != nil,
+              !processingOwnsAttachedScaffold
         else {
             return false
         }
@@ -445,10 +482,13 @@ final class MeetingCoordinator: ObservableObject {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Discard this meeting?"
-        alert.informativeText = """
-            Processing has not finished, so nothing has been saved yet. \
-            Discarding deletes the audio permanently.
-            """
+        let transcriptFirstNoteExists = activeDraft.flatMap { draft in
+            store.notes.first(where: { $0.id == draft.id })
+        }?.fileURL.map { FileManager.default.fileExists(atPath: $0.path) }
+            ?? false
+        alert.informativeText = transcriptFirstNoteExists
+            ? "Nook has already saved a transcript-first note. Discarding moves that note to the Trash and deletes the recording permanently."
+            : "Processing has not saved a note yet. Discarding deletes the recording permanently."
         alert.addButton(withTitle: "Discard Recording")
         alert.addButton(withTitle: "Keep Processing")
         // The safe option takes Return, so reflexive agreement preserves the
@@ -778,13 +818,14 @@ final class MeetingCoordinator: ObservableObject {
         lastSummaryAt = .distantPast
         liveSummaryForceRequested = false
         lastStallCheckAt = .distantPast
-        summaryProgress = nil
+        invalidateSummaryProgress()
         liveCaptionNotice = nil
         liveTranscriptIsComplete = false
         isPaused = false
         pauseTransitionInFlight = false
         topPanelHidden = false
         processingCancellationRequested = false
+        processingOwnsAttachedScaffold = false
         stopRequestedDuringPauseTransition = false
         accumulatedElapsed = 0
         activeElapsedStartedAt = nil
@@ -797,6 +838,9 @@ final class MeetingCoordinator: ObservableObject {
             guard let self else { return }
 
             do {
+                await self.prepareForAudioCapture?()
+                try Task.checkCancellation()
+                guard self.activeDraft?.id == draft.id else { return }
                 try await capture.requestPermissions()
                 try Task.checkCancellation()
                 try await SpeechAssets.requestAuthorization()
@@ -916,22 +960,32 @@ final class MeetingCoordinator: ObservableObject {
     /// and saying so when the deadline wins.
     private func summarizedWithinDeadline(
         transcript: [TranscriptSegment],
-        fallbackTitle: String
+        fallbackTitle: String,
+        attention: SummaryAttention? = nil
     ) async -> SummaryResult {
         let characters = transcript.reduce(0) { $0 + $1.text.count }
         let seconds = Self.summaryDeadline(
             forTranscriptCharacters: characters,
             isTerminating: isTerminating
         )
-        summaryProgress = nil
+        let progressGeneration = beginSummaryProgress()
         let result = await withDeadline(seconds: seconds) {
             [weak self, summarizer] () -> SummaryResult in
             await summarizer.summarizeReportingFailure(
                 transcript: transcript,
                 fallbackTitle: fallbackTitle,
+                attention: attention,
                 onProgress: { part, total in
                     await MainActor.run {
-                        self?.summaryProgress = SummaryProgress(
+                        guard let self,
+                              Self.shouldApplySummaryProgress(
+                                  generation: progressGeneration,
+                                  currentGeneration: self.summaryProgressGeneration
+                              )
+                        else {
+                            return
+                        }
+                        self.summaryProgress = SummaryProgress(
                             part: part,
                             total: total
                         )
@@ -939,7 +993,7 @@ final class MeetingCoordinator: ObservableObject {
                 }
             )
         }
-        summaryProgress = nil
+        endSummaryProgress(for: progressGeneration)
         if let result { return result }
         NookEventLog.write(.summaryTimedOut)
         return SummaryResult(
@@ -950,6 +1004,141 @@ final class MeetingCoordinator: ObservableObject {
             ),
             failure: .timedOut
         )
+    }
+
+    private func beginSummaryProgress() -> Int {
+        summaryProgressGeneration &+= 1
+        summaryProgress = nil
+        return summaryProgressGeneration
+    }
+
+    private func endSummaryProgress(for generation: Int) {
+        guard summaryProgressGeneration == generation else { return }
+        summaryProgressGeneration &+= 1
+        summaryProgress = nil
+    }
+
+    private func invalidateSummaryProgress() {
+        summaryProgressGeneration &+= 1
+        summaryProgress = nil
+    }
+
+    /// A late callback from an older model pass must not repopulate the
+    /// progress indicator after that pass timed out or the meeting moved on.
+    nonisolated static func shouldApplySummaryProgress(
+        generation: Int,
+        currentGeneration: Int
+    ) -> Bool {
+        generation == currentGeneration
+    }
+
+    /// Builds the note that must be useful before the on-device model gets a
+    /// turn. The deterministic fallback is deliberately written first, so a
+    /// model refusal or a timeout never leaves the transcript stranded in a
+    /// temporary processing state.
+    static func transcriptFirstScaffold(
+        for draft: MeetingDraft,
+        transcript: [TranscriptSegment],
+        personalNotes: String,
+        moments: [MeetingMoment],
+        endedAt: Date
+    ) -> MeetingNote {
+        let fallback: MeetingInsights
+        if transcript.isEmpty {
+            // Keep the empty-input result identical to SummaryService's
+            // existing fast path. A no-speech recording should not acquire a
+            // different explanation merely because it is saved earlier.
+            fallback = MeetingInsights(
+                title: draft.title,
+                summary: "No speech was detected in this recording.",
+                keyPoints: [],
+                decisions: [],
+                actionItems: []
+            )
+        } else {
+            fallback = SummaryService.fallbackInsights(
+                transcript: transcript,
+                fallbackTitle: draft.title
+            )
+        }
+        return MeetingNote(
+            id: draft.id,
+            kind: .meeting,
+            title: fallback.title,
+            startedAt: draft.startedAt,
+            endedAt: endedAt,
+            sourceApp: draft.sourceApp,
+            summary: fallback.summary,
+            keyPoints: fallback.keyPoints,
+            decisions: fallback.decisions,
+            actionItems: fallback.actionItems,
+            personalNotes: personalNotes,
+            transcript: transcript,
+            moments: moments
+        )
+    }
+
+    /// Applies a successful model result only to fields that still equal the
+    /// scaffold. Every other field starts from the freshest store copy, so a
+    /// title edit, note, flag, checkbox, extra section, or metadata update
+    /// made while the model worked remains authoritative.
+    ///
+    /// A missing note means somebody deleted it while enrichment was running.
+    /// Returning nil lets the caller finish without recreating that deletion.
+    static func mergingTranscriptFirstSummary(
+        _ result: SummaryResult,
+        scaffold: MeetingNote,
+        current: MeetingNote?
+    ) -> MeetingNote? {
+        guard let current, current.id == scaffold.id else { return nil }
+        guard result.failure == nil else { return current }
+        // The model was grounded in the scaffold transcript. If that source
+        // changed while it worked, keeping the current note is safer than
+        // applying claims that no longer have the same evidence.
+        guard current.transcript == scaffold.transcript else { return current }
+
+        var merged = current
+        if current.title == scaffold.title {
+            merged.title = result.insights.title
+        }
+        if current.summary == scaffold.summary {
+            merged.summary = result.insights.summary
+        }
+        if current.keyPoints == scaffold.keyPoints {
+            merged.keyPoints = result.insights.keyPoints
+        }
+        if current.decisions == scaffold.decisions {
+            merged.decisions = result.insights.decisions
+        }
+        if current.actionItems == scaffold.actionItems,
+           current.completedActionItems == scaffold.completedActionItems {
+            merged.actionItems = result.insights.actionItems
+        }
+        return merged
+    }
+
+    /// Reads the durable Markdown itself rather than trusting an in-memory
+    /// model left over from before a failed save or an external deletion.
+    /// Candidate order lets an explicit filename rename win while retaining
+    /// the original scaffold path as a last read-back check.
+    private static func persistedNote(
+        id: UUID,
+        candidateURLs: [URL?]
+    ) -> MeetingNote? {
+        var checked: Set<URL> = []
+        for candidate in candidateURLs.compactMap({ $0 }) {
+            let url = candidate.standardizedFileURL
+            guard checked.insert(url).inserted,
+                  FileManager.default.fileExists(atPath: url.path),
+                  let markdown = try? String(contentsOf: url, encoding: .utf8),
+                  let decoded = MarkdownCodec.decode(markdown, fileURL: url),
+                  decoded.id == id
+            else {
+                continue
+            }
+            return decoded
+        }
+        return nil
     }
 
     private func finishRecording() async {
@@ -970,6 +1159,9 @@ final class MeetingCoordinator: ObservableObject {
         // point still has to be able to save them: they are the only
         // transcript of the meeting that survives a finalize that went wrong.
         var liveSegments: [TranscriptSegment] = []
+        // Once this exists, cancellation removes the scaffold along with the
+        // recording. Before it exists, the old recovery path remains intact.
+        var transcriptFirstScaffold: MeetingNote?
         // Total unpaused seconds of captured audio, as of the moment stop was
         // requested. The live transcript timeline only advances with delivered
         // audio (ingest is gated off while paused), so this is the reference
@@ -1033,29 +1225,61 @@ final class MeetingCoordinator: ObservableObject {
                 return
             }
 
-            phase = .processing(.summarizing)
-            let insights = await summarizedWithinDeadline(
+            phase = .processing(.saving)
+            let scaffold = Self.transcriptFirstScaffold(
+                for: draft,
                 transcript: transcript,
-                fallbackTitle: draft.title
-            ).insights
+                personalNotes: personalNotes,
+                moments: liveMoments,
+                endedAt: Date()
+            )
+            let savedScaffold = try store.save(scaffold)
+            transcriptFirstScaffold = savedScaffold
+            try Task.checkCancellation()
+
+            phase = .processing(.summarizing)
+            let attention = SummaryAttention(
+                myNotes: personalNotes,
+                moments: liveMoments,
+                transcript: transcript
+            )
+            let result = await summarizedWithinDeadline(
+                transcript: transcript,
+                fallbackTitle: draft.title,
+                attention: attention.isEmpty ? nil : attention
+            )
             try Task.checkCancellation()
 
             phase = .processing(.saving)
-            let note = MeetingNote(
-                id: draft.id,
-                title: insights.title,
-                startedAt: draft.startedAt,
-                endedAt: Date(),
-                sourceApp: draft.sourceApp,
-                summary: insights.summary,
-                keyPoints: insights.keyPoints,
-                decisions: insights.decisions,
-                actionItems: insights.actionItems,
-                personalNotes: personalNotes,
-                transcript: transcript,
-                moments: liveMoments
+            let current = store.notes.first(where: { $0.id == savedScaffold.id })
+            let currentFileExists = current?.fileURL.map {
+                FileManager.default.fileExists(atPath: $0.path)
+            } ?? false
+            let merged = Self.mergingTranscriptFirstSummary(
+                result,
+                scaffold: savedScaffold,
+                current: currentFileExists ? current : nil
             )
-            let saved = try store.save(note)
+            var persistedCandidate = current
+            if !result.usedFallback, let current, let merged, merged != current {
+                // A conflict means the transcript-first note remains the
+                // durable result. It must not enter the older rescue branch,
+                // which would create a second note from the same captions.
+                persistedCandidate = (try? store.save(merged)) ?? current
+            }
+            let freshest = store.notes.first { $0.id == savedScaffold.id }
+            guard let saved = Self.persistedNote(
+                id: savedScaffold.id,
+                candidateURLs: [
+                    freshest?.fileURL,
+                    persistedCandidate?.fileURL,
+                    savedScaffold.fileURL,
+                ]
+            ) else {
+                throw DurableMeetingNoteUnavailable(
+                    reason: "Nook saved the transcript, but the note file disappeared before processing finished."
+                )
+            }
 
             let cleanupFailures = RecordingArtifactCleanup.removeArtifacts(
                 for: draft,
@@ -1069,6 +1293,9 @@ final class MeetingCoordinator: ObservableObject {
             )
         } catch {
             if Task.isCancelled || processingCancellationRequested {
+                if let transcriptFirstScaffold {
+                    _ = store.delete(transcriptFirstScaffold)
+                }
                 await discardCancelledMeeting(
                     draft: draft,
                     additionalURLs: recordingURLs + [audioURL]
@@ -1080,7 +1307,7 @@ final class MeetingCoordinator: ObservableObject {
             liveSummaryTask?.cancel()
             liveSummaryTask = nil
             liveSummaryIsRefreshing = false
-            summaryProgress = nil
+            invalidateSummaryProgress()
             // The live captions are the only transcript that survives a
             // failed finalize, so the track is stopped for its words rather
             // than cancelled. Cancelling threw an hour of already-recognised
@@ -1091,11 +1318,25 @@ final class MeetingCoordinator: ObservableObject {
             } else if liveTranscriber.isRunning {
                 await liveTranscriber.cancel()
             }
-            if await saveLiveCaptionNote(
+            if transcriptFirstScaffold == nil,
+               !(error is DurableMeetingNoteUnavailable),
+               await saveLiveCaptionNote(
                 draft: draft,
                 segments: liveSegments,
                 personalNotes: personalNotes
             ) {
+                return
+            }
+            // Cancellation can arrive while the bounded live-caption summary
+            // is awaiting its model. That helper deliberately returns without
+            // saving; route the now-cancelled meeting through the same discard
+            // cleanup as a cancellation caught earlier, rather than turning it
+            // into a processing failure with a preserved recording.
+            if Task.isCancelled || processingCancellationRequested {
+                await discardCancelledMeeting(
+                    draft: draft,
+                    additionalURLs: recordingURLs + [audioURL]
+                )
                 return
             }
             // The recording is deliberately kept.
@@ -1115,6 +1356,7 @@ final class MeetingCoordinator: ObservableObject {
             pauseTransitionInFlight = false
             audioLevel = 0
             processingCancellationRequested = false
+            processingOwnsAttachedScaffold = false
             stopRequestedDuringPauseTransition = false
             phase = .failed(
                 error.localizedDescription
@@ -1159,10 +1401,19 @@ final class MeetingCoordinator: ObservableObject {
         }
 
         phase = .processing(.summarizing)
+        let attention = SummaryAttention(
+            myNotes: personalNotes,
+            moments: liveMoments,
+            transcript: transcript
+        )
         let insights = await summarizedWithinDeadline(
             transcript: transcript,
-            fallbackTitle: draft.title
+            fallbackTitle: draft.title,
+            attention: attention.isEmpty ? nil : attention
         ).insights
+        guard !Task.isCancelled, !processingCancellationRequested else {
+            return false
+        }
         phase = .processing(.saving)
 
         do {
@@ -1267,9 +1518,10 @@ final class MeetingCoordinator: ObservableObject {
         liveNotes = ""
         liveInsights = nil
         liveSummaryUpdatedAt = nil
-        summaryProgress = nil
+        invalidateSummaryProgress()
         topPanelHidden = false
         processingCancellationRequested = false
+        processingOwnsAttachedScaffold = false
         stopRequestedDuringPauseTransition = false
         if cleanupFailures.isEmpty {
             phase = .completed(title)
@@ -1339,6 +1591,12 @@ final class MeetingCoordinator: ObservableObject {
         let priorAudioDuration = priorAudioExists
             ? await NoteSessionAppend.audioDuration(of: priorAudioURL)
             : nil
+        guard let currentTarget = store.notes.first(where: { $0.id == target.id })
+        else {
+            throw DurableMeetingNoteUnavailable(
+                reason: "The note this recording belonged to is no longer available."
+            )
+        }
         // A file that exists but cannot be measured cannot be concatenated
         // safely either, so it is treated like absent audio rather than
         // trusted with the timeline.
@@ -1353,13 +1611,13 @@ final class MeetingCoordinator: ObservableObject {
         // audio exists its length decides where this sitting begins. Any gap
         // between audio and transcript extent is real recorded time.
         let offset = hadUsablePriorAudio
-            ? target.audioStart + (priorAudioDuration ?? 0)
+            ? currentTarget.audioStart + (priorAudioDuration ?? 0)
             : NoteSessionAppend.continuationOffset(
-                for: target,
+                for: currentTarget,
                 priorAudioDuration: nil
             )
 
-        var promotedTarget = target
+        var promotedTarget = currentTarget
         NoteSessionAppend.promoteSpokenToMeeting(&promotedTarget)
 
         let material = NoteSessionAppend.Material(
@@ -1376,43 +1634,25 @@ final class MeetingCoordinator: ObservableObject {
         // start, exactly where it already was.
         let combinedAudioStart = plan == .adoptSession
             ? offset
-            : target.audioStart
+            : currentTarget.audioStart
 
-        phase = .processing(.summarizing)
         let appended = NoteSessionAppend.appending(
             material: material,
             to: promotedTarget,
             offset: offset,
             audioStart: combinedAudioStart
         )
-        let result = await summarizedWithinDeadline(
-            transcript: appended.transcript,
-            fallbackTitle: target.title.isEmpty ? draft.title : target.title
-        )
-        try Task.checkCancellation()
-
         phase = .processing(.saving)
-        var updated = appended
-        updated.title = Self.mergedTitle(
-            existing: promotedTarget.title,
-            proposed: result.insights.title
-        )
-        // A fallback summary is Nook explaining that it has nothing, which is
-        // strictly worse than the summary the note already had.
-        if !result.usedFallback {
-            updated.summary = result.insights.summary
-            updated.keyPoints = result.insights.keyPoints
-            updated.decisions = result.insights.decisions
-        } else if updated.summary.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        ).isEmpty {
-            updated.summary = result.insights.summary
+        try Task.checkCancellation()
+        let saved: MeetingNote
+        do {
+            saved = try store.save(appended)
+        } catch {
+            throw DurableMeetingNoteUnavailable(
+                reason: "Nook could not append the transcript to its existing note."
+            )
         }
-        updated.actionItems = Self.unionedActionItems(
-            existing: appended.actionItems,
-            proposed: result.insights.actionItems
-        )
-        let saved = try store.save(updated)
+        processingOwnsAttachedScaffold = true
 
         // Every irreversible move happens after the note is safely on disk.
         // Rewriting the note's audio first meant a failed save left the file
@@ -1457,7 +1697,110 @@ final class MeetingCoordinator: ObservableObject {
             additionalURLs: recordingURLs + [sessionAudioURL],
             preserving: preserve
         )
+        scheduleAppendedSummaryEnrichment(
+            scaffold: saved,
+            fallbackTitle: currentTarget.title.isEmpty
+                ? draft.title
+                : currentTarget.title
+        )
         return (saved, audioFailures + cleanupFailures)
+    }
+
+    /// Enriches an appended sitting only after its transcript is durable.
+    /// The note remains useful if the model is slow or unavailable, while the
+    /// token and optimistic merge keep an older pass from overwriting a later
+    /// append or anything the user changed in the meantime.
+    private func scheduleAppendedSummaryEnrichment(
+        scaffold: MeetingNote,
+        fallbackTitle: String
+    ) {
+        let noteID = scaffold.id
+        appendedSummaryTasks[noteID]?.cancel()
+
+        let token = UUID()
+        appendedSummaryTokens[noteID] = token
+        let characters = scaffold.transcript.reduce(0) { $0 + $1.text.count }
+        let seconds = Self.summaryDeadline(
+            forTranscriptCharacters: characters,
+            isTerminating: isTerminating
+        )
+        let attention = SummaryAttention(
+            myNotes: scaffold.personalNotes,
+            moments: scaffold.moments,
+            transcript: scaffold.transcript
+        )
+
+        appendedSummaryTasks[noteID] = Task { @MainActor [weak self, summarizer] in
+            guard let self else { return }
+            defer {
+                if self.appendedSummaryTokens[noteID] == token {
+                    self.appendedSummaryTokens[noteID] = nil
+                    self.appendedSummaryTasks[noteID] = nil
+                }
+            }
+
+            let result = await withDeadline(seconds: seconds) {
+                await summarizer.summarizeReportingFailure(
+                    transcript: scaffold.transcript,
+                    fallbackTitle: fallbackTitle,
+                    attention: attention.isEmpty ? nil : attention
+                )
+            }
+            guard !Task.isCancelled,
+                  self.appendedSummaryTokens[noteID] == token,
+                  let result,
+                  !result.usedFallback,
+                  let current = self.store.notes.first(where: { $0.id == noteID }),
+                  let merged = Self.mergingAppendedSessionSummary(
+                      result,
+                      scaffold: scaffold,
+                      current: current
+                  ),
+                  merged != current
+            else {
+                return
+            }
+            _ = try? self.store.save(merged)
+        }
+    }
+
+    /// Applies generated fields only when their scaffold values remain
+    /// untouched. A transcript change invalidates the model's evidence, and a
+    /// missing note represents an intentional deletion that must not be
+    /// recreated by a late result.
+    static func mergingAppendedSessionSummary(
+        _ result: SummaryResult,
+        scaffold: MeetingNote,
+        current: MeetingNote?
+    ) -> MeetingNote? {
+        guard let current, current.id == scaffold.id else { return nil }
+        guard result.failure == nil else { return current }
+        guard current.transcript == scaffold.transcript else { return current }
+
+        var merged = current
+        if current.title == scaffold.title {
+            merged.title = mergedTitle(
+                existing: scaffold.title,
+                proposed: result.insights.title
+            )
+        }
+        if current.summary == scaffold.summary {
+            merged.summary = result.insights.summary
+        }
+        if current.keyPoints == scaffold.keyPoints {
+            merged.keyPoints = result.insights.keyPoints
+        }
+        if current.decisions == scaffold.decisions {
+            merged.decisions = result.insights.decisions
+        }
+        if current.actionItems == scaffold.actionItems,
+           current.completedActionItems == scaffold.completedActionItems {
+            merged.actionItems = unionedActionItems(
+                existing: scaffold.actionItems,
+                proposed: result.insights.actionItems
+            )
+        }
+        return merged
     }
 
     private func placeKeptAudio(
@@ -1802,6 +2145,11 @@ final class MeetingCoordinator: ObservableObject {
         let snapshotCount = segments.count
         let previous = liveInsights
         let tail = SummaryService.liveTail(of: segments)
+        let attention = SummaryAttention(
+            myNotes: liveNotes,
+            moments: liveMoments,
+            transcript: segments
+        )
         liveSummaryTask = Task { [weak self] in
             guard let self else { return }
             if !isForced {
@@ -1818,7 +2166,8 @@ final class MeetingCoordinator: ObservableObject {
                 tail: tail,
                 fullTranscript: segments,
                 previous: previous,
-                fallbackTitle: fallbackTitle
+                fallbackTitle: fallbackTitle,
+                attention: attention.isEmpty ? nil : attention
             )
             liveSummaryIsRefreshing = false
             liveSummaryTask = nil
@@ -1914,7 +2263,7 @@ final class MeetingCoordinator: ObservableObject {
         liveSummaryTask = nil
         liveSummaryIsRefreshing = false
         liveSummaryForceRequested = false
-        summaryProgress = nil
+        invalidateSummaryProgress()
         elapsedTask?.cancel()
         meterTask?.cancel()
 
@@ -1935,6 +2284,7 @@ final class MeetingCoordinator: ObservableObject {
         pendingStartRequest = nil
         requiredPermission = nil
         processingCancellationRequested = false
+        processingOwnsAttachedScaffold = false
         stopRequestedDuringPauseTransition = false
         elapsed = 0
         accumulatedElapsed = 0

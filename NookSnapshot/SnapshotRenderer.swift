@@ -8,7 +8,7 @@ struct SnapshotRenderer {
         let arguments = CommandLine.arguments
         guard (2...3).contains(arguments.count) else {
             FileHandle.standardError.write(
-                Data("Usage: NookSnapshot <output.png> [library|library-light|library-compact|welcome-light|welcome-dark|welcome-permission-light|welcome-permission-dark|welcome-ready-light|welcome-ready-dark|welcome-microphone-light|welcome-microphone-dark|welcome-speech-light|welcome-speech-dark|welcome-calendar-light|welcome-calendar-dark|welcome-dictation-light|welcome-dictation-dark|detail-transcript-light|detail-transcript-dark|detail-markdown-light|detail-markdown-dark|detail-notes-light|detail-notes-dark|settings-about-light|settings-about-dark|settings-general-light|settings-general-dark|settings-listening-light|settings-listening-dark|settings-dictation-light|settings-dictation-dark|settings-privacy-light|settings-privacy-dark|settings-updates-light|settings-updates-dark|quick-note-light|quick-note-dark|quick-note-filled-light|quick-note-filled-dark|prep-light|prep-dark|ask-light|ask-dark|palette-light|palette-dark|floating-notes-light|floating-notes-dark|library-recording-light|library-recording-dark|live|notch|external-panel|summary-light|summary-dark|notes-light|notes-dark|detected-light|detected-dark|detected-compact-light|detected-compact-dark|processing-light|processing-dark|completed-light|completed-dark|failure-light|failure-dark]\n".utf8)
+                Data("Usage: NookSnapshot <output.png> [library|library-light|library-compact|welcome-light|welcome-dark|welcome-permission-light|welcome-permission-dark|welcome-ready-light|welcome-ready-dark|welcome-microphone-light|welcome-microphone-dark|welcome-speech-light|welcome-speech-dark|welcome-calendar-light|welcome-calendar-dark|welcome-dictation-light|welcome-dictation-dark|detail-transcript-light|detail-transcript-dark|detail-markdown-light|detail-markdown-dark|detail-notes-light|detail-notes-dark|settings-about-light|settings-about-dark|settings-general-light|settings-general-dark|settings-listening-light|settings-listening-dark|settings-dictation-light|settings-dictation-dark|settings-keyboard-light|settings-keyboard-dark|settings-privacy-light|settings-privacy-dark|settings-updates-light|settings-updates-dark|quick-note-light|quick-note-dark|quick-note-filled-light|quick-note-filled-dark|prep-light|prep-dark|ask-light|ask-dark|palette-light|palette-dark|floating-notes-light|floating-notes-dark|library-recording-light|library-recording-dark|live|notch|external-panel|summary-light|summary-dark|notes-light|notes-dark|detected-light|detected-dark|detected-compact-light|detected-compact-dark|processing-light|processing-dark|completed-light|completed-dark|failure-light|failure-dark]\n".utf8)
             )
             Foundation.exit(64)
         }
@@ -61,6 +61,14 @@ struct SnapshotRenderer {
         let meeting = MeetingCoordinator(store: store, detector: detector)
         let markdownDraft = MarkdownDraftController()
         let personalNotesDraft = PersonalNotesDraftController()
+        let shortcutDefaultsName = "NookSnapshot-\(UUID().uuidString)"
+        let shortcutDefaults = UserDefaults(suiteName: shortcutDefaultsName)
+            ?? .standard
+        shortcutDefaults.removePersistentDomain(forName: shortcutDefaultsName)
+        let shortcuts = ShortcutStore(defaults: shortcutDefaults)
+        defer {
+            shortcutDefaults.removePersistentDomain(forName: shortcutDefaultsName)
+        }
         let appearanceController = NookAppearanceController(
             initialSelection: snapshotColorScheme == .light ? .light : .dark,
             persistsSelection: false
@@ -72,6 +80,7 @@ struct SnapshotRenderer {
         let dictation = DictationCoordinator(localeIdentifier: "en_US", registersShortcut: false)
         let quickNote = QuickNoteController(store: store)
         let recovery = RecordingRecovery(store: store)
+        let audioInputCheck = AudioInputCheckService()
         if mode.contains("prep") || mode.contains("library") {
             Task { @MainActor in await calendar.setEnabled(true) }
         }
@@ -144,6 +153,7 @@ struct SnapshotRenderer {
             let pane: SettingsPane
             if mode.contains("about") { pane = .about }
             else if mode.contains("dictation") { pane = .dictation }
+            else if mode.contains("keyboard") { pane = .keyboard }
             else if mode.contains("privacy") { pane = .privacy }
             else if mode.contains("updates") { pane = .updates }
             else if mode.contains("listening") { pane = .listening }
@@ -158,7 +168,7 @@ struct SnapshotRenderer {
                     .environmentObject(updateController)
                     .environmentObject(dictation)
                     .environmentObject(quickNote)
-                    .environmentObject(recovery)
+                    .environmentObject(audioInputCheck)
                     .environmentObject(calendar)
                     .frame(width: canvasSize.width, height: canvasSize.height)
                     .background(Color(nsColor: .windowBackgroundColor))
@@ -174,7 +184,6 @@ struct SnapshotRenderer {
                 QuickNoteView()
                     .environmentObject(quickNote)
                     .environmentObject(dictation)
-                    .environmentObject(ShortcutStore.shared)
                     .frame(width: canvasSize.width, height: canvasSize.height)
                     .environment(\.colorScheme, snapshotColorScheme)
                     .transaction { $0.disablesAnimations = true }
@@ -218,6 +227,7 @@ struct SnapshotRenderer {
                         .environmentObject(markdownDraft)
                         .environmentObject(personalNotesDraft)
                         .environmentObject(prep)
+                        .environmentObject(recovery)
                     CommandPaletteView(
                         isPresented: .constant(true),
                         openActionEntries: [],
@@ -264,6 +274,7 @@ struct SnapshotRenderer {
                     .environmentObject(markdownDraft)
                     .environmentObject(personalNotesDraft)
                     .environmentObject(prep)
+                    .environmentObject(recovery)
                     .frame(width: canvasSize.width, height: canvasSize.height)
                     .environment(\.colorScheme, snapshotColorScheme)
                     .transaction { $0.disablesAnimations = true }
@@ -273,7 +284,6 @@ struct SnapshotRenderer {
             content = AnyView(
                 LiveMeetingView(rendersForSnapshot: true)
                     .environmentObject(meeting)
-                    .environmentObject(ShortcutStore.shared)
                     .frame(width: canvasSize.width, height: canvasSize.height)
                     .environment(\.colorScheme, .dark)
                     .transaction { $0.disablesAnimations = true }
@@ -326,6 +336,7 @@ struct SnapshotRenderer {
                     .environmentObject(markdownDraft)
                     .environmentObject(personalNotesDraft)
                     .environmentObject(prep)
+                    .environmentObject(recovery)
                     .frame(width: canvasSize.width, height: canvasSize.height)
                     .environment(\.colorScheme, snapshotColorScheme)
                     .transaction { $0.disablesAnimations = true }
@@ -427,7 +438,12 @@ struct SnapshotRenderer {
             }
         }
 
-        let hostingView = NSHostingView(rootView: content)
+        // Every isolated surface receives the same app-level dependency
+        // graph. Injecting it here keeps newly added modes from compiling and
+        // then trapping only when an environment-backed child is rendered.
+        let hostingView = NSHostingView(
+            rootView: content.environmentObject(shortcuts)
+        )
         hostingView.frame = NSRect(origin: .zero, size: canvasSize)
         let isLightAppearance = mode == "library-light"
             || mode.hasSuffix("-light")

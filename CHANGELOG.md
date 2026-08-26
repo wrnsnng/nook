@@ -4,6 +4,30 @@ Nook follows a user-facing release-note model. Each published version has a
 Markdown note in [`Releases/`](Releases/) and a matching `v<version>` release in
 the [binary releases repository](https://github.com/wrnsnng/nook-releases/releases).
 
+## 1.19.0
+
+- Meeting words are saved before summary work begins. New meetings and sessions
+  appended to an existing note keep their transcript even if summarization is
+  cancelled, times out, or fails.
+- Note titles now have an explicit edit state with Return to save and Escape to
+  cancel. Renames reject empty or conflicting names and wait for unsaved
+  Markdown changes instead of risking the file.
+- Summaries are easier to scan, stay grounded in My notes and flagged moments,
+  and no longer let template checklist items appear as open actions. Nearby
+  transcript lines from the same speaker are visually grouped.
+- Spoken notes have their own focused detail view, vocabulary, and word count
+  instead of looking like incomplete meetings.
+- Settings has clearer Keyboard, Dictation, and Listening groups. Shortcut
+  recording no longer shifts the layout, explains scope and conflicts, and
+  supports modifier-only combinations.
+- Listening settings gains a local audio input check with separate You and
+  Meeting meters. It records nothing, transcribes nothing, and leaves no file.
+- Recoverable recordings now appear in the library with Recover, Reveal, and
+  Delete actions, useful metadata, and visible cleanup errors.
+- Quick Note, dictation, summary regeneration, deletion, and recovery now ignore
+  stale asynchronous results. Deletion uses the Trash only and preserves the
+  note when the Trash is unavailable.
+
 ## 1.18.1
 
 - Fixed: structured summaries failed on newer macOS builds, where Apple

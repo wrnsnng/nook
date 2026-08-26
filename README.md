@@ -11,6 +11,8 @@ transcribes and summarizes on-device, and saves a portable Markdown note.
 ## Highlights
 
 - Records system audio and microphone audio without inviting a meeting bot.
+- Includes an explicit Settings check for microphone and meeting-audio levels,
+  without recording or saving a test stream.
 - Notices likely meetings across common native apps and browsers, then asks
   before recording.
 - Produces live, speaker-aware captions using Apple's on-device Speech framework.
@@ -82,6 +84,11 @@ to check for signed updates; neither request contains meeting content.
 Automatic meeting detection inspects local window titles, application identity,
 and app audio activity. New users choose whether to enable it, and Nook always
 asks before recording. Nook does not hide macOS recording indicators.
+
+The Listening pane includes a Start Test control for checking microphone and
+meeting audio levels before recording. The test is an in-memory meter only: it
+does not record, save audio, transcribe speech, or send anything, and it stops
+when Settings closes or a meeting or dictation session starts.
 
 Notes are stored as plaintext Markdown in `~/Documents/Nook` by default. The
 folder can be changed in Settings. Temporary video containers are removed after

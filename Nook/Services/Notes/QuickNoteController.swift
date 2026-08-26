@@ -10,7 +10,12 @@ import SwiftUI
 /// so it is searchable in the library and readable by anything else on the Mac.
 @MainActor
 final class QuickNoteController: ObservableObject {
-    @Published var text = ""
+    @Published var text = "" {
+        didSet {
+            guard text != oldValue else { return }
+            textRevision &+= 1
+        }
+    }
     @Published private(set) var isPresenting = false
     @Published private(set) var isWorking = false
     @Published private(set) var message: String?
@@ -133,7 +138,13 @@ final class QuickNoteController: ObservableObject {
     }
 
     private let store: MarkdownStore
-    private let assistant = NoteAssistant()
+    private let deleteSavedNote: @MainActor (MeetingNote) -> Bool
+    private let runAssistant: @Sendable (
+        NoteAction,
+        String,
+        NoteAssistantEngine
+    ) async throws -> String
+    private let loadAvailableEngines: @Sendable () async -> [NoteAssistantEngine]
     private var panel: NSPanel?
     private let windowDelegate = QuickNoteWindowDelegate()
     private var savedNoteID: UUID?
@@ -146,9 +157,40 @@ final class QuickNoteController: ObservableObject {
     private var savedNoteURL: URL?
     private var startedAt = Date()
     private var saveDebounce: Task<Void, Never>?
+    private var assistantTask: Task<Void, Never>?
+    private var assistantRunID: UUID?
+    /// Identifies the currently presented pad. A result from a previous
+    /// presentation must never be allowed to land in a newly opened note,
+    /// even if the words happen to be identical.
+    private var presentationID = UUID()
+    /// Changes on every user edit. An assistant result is only valid for the
+    /// exact revision whose words were sent to it.
+    private var textRevision = 0
+    /// Ends any dictation session aimed at this pad before the window goes
+    /// away. A recognizer can deliver its final words after a close request;
+    /// without invalidating that session, the no-field route presents the pad
+    /// again and makes a discarded note appear to come back.
+    var onDismissRequested: (@MainActor () -> Void)?
 
-    init(store: MarkdownStore) {
+    init(
+        store: MarkdownStore,
+        deleteSavedNote: (@MainActor (MeetingNote) -> Bool)? = nil,
+        assistantRun: (@Sendable (
+            NoteAction,
+            String,
+            NoteAssistantEngine
+        ) async throws -> String)? = nil,
+        availableEngines: (@Sendable () async -> [NoteAssistantEngine])? = nil
+    ) {
         self.store = store
+        self.deleteSavedNote = deleteSavedNote ?? { store.delete($0) }
+        let assistant = NoteAssistant()
+        self.runAssistant = assistantRun ?? { action, text, engine in
+            try await assistant.run(action, on: text, using: engine)
+        }
+        self.loadAvailableEngines = availableEngines ?? {
+            await assistant.availableEngines()
+        }
         self.engine = Self.restoredEngine()
         self.isContinuous = UserDefaults.standard.bool(
             forKey: Keys.continuous
@@ -185,6 +227,7 @@ final class QuickNoteController: ObservableObject {
         // A pending failure means the text on screen is the only copy, so a
         // new capture must not begin by clearing it.
         if !isPresenting, !hasUnsavedFailure {
+            beginPresentation()
             text = ""
             savedNoteID = nil
             savedNoteURL = nil
@@ -245,6 +288,7 @@ final class QuickNoteController: ObservableObject {
             panel?.makeKeyAndOrderFront(nil)
             return
         }
+        prepareToDismiss()
         hasUnsavedEdits = false
         isPresenting = false
         panel?.orderOut(nil)
@@ -313,9 +357,16 @@ final class QuickNoteController: ObservableObject {
     func discard() {
         saveDebounce?.cancel()
         saveDebounce = nil
+        prepareToDismiss()
         if let savedNoteID,
            let saved = store.notes.first(where: { $0.id == savedNoteID }) {
-            _ = store.delete(saved)
+            guard deleteSavedNote(saved) else {
+                message = store.lastError
+                    ?? "Nook couldn’t move this note to the Trash."
+                hasUnsavedFailure = true
+                panel?.makeKeyAndOrderFront(nil)
+                return
+            }
         }
         savedNoteID = nil
         savedNoteURL = nil
@@ -385,6 +436,7 @@ final class QuickNoteController: ObservableObject {
 
     func saveAndOpenInLibrary() {
         guard let note = saveIfNeeded() else { return }
+        prepareToDismiss()
         isPresenting = false
         panel?.orderOut(nil)
         panel = nil
@@ -436,6 +488,7 @@ final class QuickNoteController: ObservableObject {
             message = strandedCopy.map {
                 "Filed into that meeting, but the earlier copy in \($0) could not be moved to the Trash."
             }
+            prepareToDismiss()
             isPresenting = false
             panel?.orderOut(nil)
             panel = nil
@@ -459,7 +512,7 @@ final class QuickNoteController: ObservableObject {
     func refreshEngines() {
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let engines = await self.assistant.availableEngines()
+            let engines = await self.loadAvailableEngines()
             self.availableEngines = engines
             // A previously chosen engine can disappear when a tool is removed.
             // Falling back must never land on one that sends notes away, so an
@@ -480,23 +533,57 @@ final class QuickNoteController: ObservableObject {
         runningAction = action
         message = nil
         let engine = self.engine
-        Task { @MainActor [weak self] in
+        let presentationID = self.presentationID
+        let textRevision = self.textRevision
+        let runID = UUID()
+        assistantRunID = runID
+        assistantTask?.cancel()
+        let task = Task { @MainActor [weak self] in
             guard let self else { return }
             defer {
-                self.isWorking = false
-                self.runningAction = nil
+                // An older provider may ignore cancellation and finish after
+                // a new presentation has started another action. Only that
+                // action may clear the current spinner and task reference.
+                if self.assistantRunID == runID {
+                    self.isWorking = false
+                    self.runningAction = nil
+                    self.assistantTask = nil
+                    self.assistantRunID = nil
+                }
             }
             do {
-                let result = try await self.assistant.run(
+                let result = try await self.runAssistant(
                     action,
-                    on: body,
-                    using: engine
+                    body,
+                    engine
                 )
+                // A model or CLI can finish after the person edited, closed,
+                // discarded, or reopened the pad. Its output belongs only to
+                // the exact presentation and revision it saw.
+                guard !Task.isCancelled,
+                      self.assistantRunID == runID,
+                      self.isPresenting,
+                      self.presentationID == presentationID,
+                      self.textRevision == textRevision,
+                      self.text.trimmingCharacters(
+                          in: .whitespacesAndNewlines
+                      ) == body
+                else { return }
                 self.apply(result, for: action)
             } catch {
+                guard !Task.isCancelled,
+                      self.assistantRunID == runID,
+                      self.isPresenting,
+                      self.presentationID == presentationID,
+                      self.textRevision == textRevision,
+                      self.text.trimmingCharacters(
+                          in: .whitespacesAndNewlines
+                      ) == body
+                else { return }
                 self.message = error.localizedDescription
             }
         }
+        assistantTask = task
     }
 
     private func apply(_ result: String, for action: NoteAction) {
@@ -601,8 +688,40 @@ final class QuickNoteController: ObservableObject {
         windowDelegate.onShouldClose = { [weak self] in
             self?.canClose() ?? true
         }
+        // The controller can be instantiated without the full app in tests,
+        // so the production dictation dependency is attached only when a real
+        // window is created. Tests may install their own closure first.
+        if onDismissRequested == nil {
+            onDismissRequested = {
+                AppModel.shared.dictation.cancel()
+            }
+        }
         panel.delegate = windowDelegate
         self.panel = panel
+    }
+
+    /// Makes every exit from the pad terminate the same capture session.
+    /// Turning hands-free off first also prevents a final delivery from
+    /// scheduling another listening window while cancellation is settling.
+    private func prepareToDismiss() {
+        // The assistant may still be waiting on Foundation Models or a CLI.
+        // Cancellation is only an optimisation: the identity and revision
+        // checks in its completion are the actual safety boundary because a
+        // provider is allowed to ignore cancellation.
+        assistantTask?.cancel()
+        assistantTask = nil
+        assistantRunID = nil
+        isWorking = false
+        runningAction = nil
+        presentationID = UUID()
+        textRevision &+= 1
+        isContinuous = false
+        onDismissRequested?()
+    }
+
+    private func beginPresentation() {
+        presentationID = UUID()
+        textRevision &+= 1
     }
 
     private static let frameAutosaveName = "QuickNote"

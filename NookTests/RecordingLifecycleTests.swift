@@ -855,6 +855,30 @@ struct LiveSummarySchedulingTests {
 @MainActor
 struct SummaryDeadlineTests {
     @Test
+    func cancellingADeadlineWaitResumesImmediately() async {
+        let signal = DeadlineSignal<Int>()
+        var finished = false
+        let task = Task { @MainActor in
+            let value = await signal.wait()
+            finished = true
+            return value
+        }
+        await Task.yield()
+
+        task.cancel()
+        try? await Task.sleep(for: .milliseconds(20))
+
+        let cancellationFinishedTheWait = finished
+        if !cancellationFinishedTheWait {
+            // Let a broken implementation unwind so the suite reports the
+            // failed expectation instead of hanging forever.
+            signal.signal(42)
+        }
+        #expect(cancellationFinishedTheWait)
+        #expect(await task.value == nil)
+    }
+
+    @Test
     func longerMeetingsAreAllowedLongerButNotForever() {
         let short = MeetingCoordinator.summaryDeadline(
             forTranscriptCharacters: 2_000,
@@ -887,6 +911,22 @@ struct SummaryDeadlineTests {
     }
 
     @Test
+    func progressFromAnOlderSummaryPassCannotUpdateTheCurrentIndicator() {
+        #expect(
+            MeetingCoordinator.shouldApplySummaryProgress(
+                generation: 4,
+                currentGeneration: 4
+            )
+        )
+        #expect(
+            !MeetingCoordinator.shouldApplySummaryProgress(
+                generation: 4,
+                currentGeneration: 5
+            )
+        )
+    }
+
+    @Test
     func aLongSummaryTellsTheUserWhichPartItIsOn() {
         let coordinator = MeetingCoordinator(
             store: MarkdownStore(),
@@ -909,11 +949,306 @@ struct SummaryDeadlineTests {
     }
 }
 
+/// A completed transcript is useful immediately, even while the on-device
+/// summary pass is still running. Enrichment is optimistic so edits made in
+/// the meantime stay with the note.
+@MainActor
+struct TranscriptFirstFinalizationTests {
+    private func draft() -> MeetingDraft {
+        MeetingDraft(
+            id: UUID(),
+            title: "Meeting Tue 2:03 PM",
+            sourceApp: "Manual",
+            startedAt: Date(timeIntervalSince1970: 1_000),
+            recordingURL: URL(fileURLWithPath: "/tmp/meeting.mp4")
+        )
+    }
+
+    private func transcript() -> [TranscriptSegment] {
+        [
+            TranscriptSegment(
+                startTime: 0,
+                duration: 12,
+                text: "The team approved the revised launch plan."
+            )
+        ]
+    }
+
+    private func generatedResult(failure: SummaryService.FailureReason? = nil)
+        -> SummaryResult {
+        SummaryResult(
+            insights: MeetingInsights(
+                title: "Launch planning",
+                summary: "The team approved the revised launch plan.",
+                keyPoints: ["Launch plan approved"],
+                decisions: ["Use the revised launch plan"],
+                actionItems: ["Share the launch plan"]
+            ),
+            failure: failure
+        )
+    }
+
+    @Test
+    func scaffoldCarriesUsefulDeterministicMeetingContent() {
+        let noteDraft = draft()
+        let transcript = transcript()
+        let moments = [MeetingMoment(offset: 4)]
+        let endedAt = Date(timeIntervalSince1970: 1_020)
+        let scaffold = MeetingCoordinator.transcriptFirstScaffold(
+            for: noteDraft,
+            transcript: transcript,
+            personalNotes: "Ask about the launch owner.",
+            moments: moments,
+            endedAt: endedAt
+        )
+        let fallback = SummaryService.fallbackInsights(
+            transcript: transcript,
+            fallbackTitle: noteDraft.title
+        )
+
+        #expect(scaffold.id == noteDraft.id)
+        #expect(scaffold.kind == .meeting)
+        #expect(scaffold.title == fallback.title)
+        #expect(scaffold.summary == fallback.summary)
+        #expect(scaffold.transcript == transcript)
+        #expect(scaffold.personalNotes == "Ask about the launch owner.")
+        #expect(scaffold.moments == moments)
+        #expect(scaffold.startedAt == noteDraft.startedAt)
+        #expect(scaffold.endedAt == endedAt)
+        #expect(scaffold.sourceApp == noteDraft.sourceApp)
+        #expect(scaffold.fileURL == nil)
+    }
+
+    @Test
+    func emptyTranscriptKeepsTheExistingNoSpeechResult() {
+        let noteDraft = draft()
+        let scaffold = MeetingCoordinator.transcriptFirstScaffold(
+            for: noteDraft,
+            transcript: [],
+            personalNotes: "",
+            moments: [],
+            endedAt: Date(timeIntervalSince1970: 1_020)
+        )
+
+        #expect(scaffold.title == noteDraft.title)
+        #expect(scaffold.summary == "No speech was detected in this recording.")
+        #expect(scaffold.keyPoints.isEmpty)
+        #expect(scaffold.decisions.isEmpty)
+        #expect(scaffold.actionItems.isEmpty)
+    }
+
+    @Test
+    func enrichmentChangesOnlyFieldsStillEqualToTheScaffold() {
+        let noteDraft = draft()
+        let scaffold = MeetingCoordinator.transcriptFirstScaffold(
+            for: noteDraft,
+            transcript: transcript(),
+            personalNotes: "Original notes",
+            moments: [MeetingMoment(offset: 4)],
+            endedAt: Date(timeIntervalSince1970: 1_020)
+        )
+        var current = scaffold
+        current.title = "Renamed while processing"
+        current.keyPoints = ["A hand-written point"]
+        current.actionItems = ["A hand-written action"]
+        current.completedActionItems = ["A hand-written action"]
+        current.personalNotes = "Notes added while processing"
+        current.moments = [MeetingMoment(offset: 9)]
+        current.extraSections = [
+            ExtraSection(
+                heading: "## Handwritten",
+                body: "Preserve this section.",
+                anchor: nil
+            )
+        ]
+        current.fileURL = URL(fileURLWithPath: "/tmp/renamed.md")
+        current.fileModified = Date(timeIntervalSince1970: 1_030)
+
+        let merged = MeetingCoordinator.mergingTranscriptFirstSummary(
+            generatedResult(),
+            scaffold: scaffold,
+            current: current
+        )
+
+        #expect(merged?.title == current.title)
+        #expect(merged?.summary == "The team approved the revised launch plan.")
+        #expect(merged?.keyPoints == current.keyPoints)
+        #expect(merged?.decisions == ["Use the revised launch plan"])
+        #expect(merged?.actionItems == current.actionItems)
+        #expect(merged?.completedActionItems == current.completedActionItems)
+        #expect(merged?.personalNotes == current.personalNotes)
+        #expect(merged?.transcript == current.transcript)
+        #expect(merged?.moments == current.moments)
+        #expect(merged?.extraSections == current.extraSections)
+        #expect(merged?.fileURL == current.fileURL)
+        #expect(merged?.fileModified == current.fileModified)
+    }
+
+    @Test
+    func aChangedCheckboxPreventsReplacingTheActionList() {
+        let noteDraft = draft()
+        var scaffold = MeetingCoordinator.transcriptFirstScaffold(
+            for: noteDraft,
+            transcript: transcript(),
+            personalNotes: "Original notes",
+            moments: [],
+            endedAt: Date(timeIntervalSince1970: 1_020)
+        )
+        scaffold.actionItems = ["Review the launch plan"]
+
+        var current = scaffold
+        current.completedActionItems = ["Review the launch plan"]
+
+        let merged = MeetingCoordinator.mergingTranscriptFirstSummary(
+            generatedResult(),
+            scaffold: scaffold,
+            current: current
+        )
+
+        #expect(merged?.actionItems == current.actionItems)
+        #expect(merged?.completedActionItems == current.completedActionItems)
+    }
+
+    @Test
+    func changedTranscriptPreventsApplyingClaimsFromAnOlderSource() {
+        let noteDraft = draft()
+        let scaffold = MeetingCoordinator.transcriptFirstScaffold(
+            for: noteDraft,
+            transcript: transcript(),
+            personalNotes: "Original notes",
+            moments: [],
+            endedAt: Date(timeIntervalSince1970: 1_020)
+        )
+        var current = scaffold
+        current.transcript = [
+            TranscriptSegment(
+                startTime: 0,
+                duration: 12,
+                text: "A different transcript was written by the user."
+            )
+        ]
+
+        let merged = MeetingCoordinator.mergingTranscriptFirstSummary(
+            generatedResult(),
+            scaffold: scaffold,
+            current: current
+        )
+
+        #expect(merged == current)
+    }
+
+    @Test
+    func fallbackResultLeavesTheTranscriptFirstNoteUntouched() {
+        let noteDraft = draft()
+        let scaffold = MeetingCoordinator.transcriptFirstScaffold(
+            for: noteDraft,
+            transcript: transcript(),
+            personalNotes: "Original notes",
+            moments: [],
+            endedAt: Date(timeIntervalSince1970: 1_020)
+        )
+        var current = scaffold
+        current.personalNotes = "Changed while the model was unavailable"
+
+        let merged = MeetingCoordinator.mergingTranscriptFirstSummary(
+            generatedResult(failure: .modelBusy),
+            scaffold: scaffold,
+            current: current
+        )
+
+        #expect(merged == current)
+    }
+
+    @Test
+    func deletedNoteIsNeverRecreatedByEnrichment() {
+        let noteDraft = draft()
+        let scaffold = MeetingCoordinator.transcriptFirstScaffold(
+            for: noteDraft,
+            transcript: transcript(),
+            personalNotes: "Original notes",
+            moments: [],
+            endedAt: Date(timeIntervalSince1970: 1_020)
+        )
+
+        #expect(
+            MeetingCoordinator.mergingTranscriptFirstSummary(
+                generatedResult(),
+                scaffold: scaffold,
+                current: nil
+            ) == nil
+        )
+
+        var different = scaffold
+        different = MeetingNote(
+            id: UUID(),
+            kind: different.kind,
+            title: different.title,
+            startedAt: different.startedAt,
+            endedAt: different.endedAt,
+            sourceApp: different.sourceApp,
+            summary: different.summary,
+            keyPoints: different.keyPoints,
+            decisions: different.decisions,
+            actionItems: different.actionItems,
+            completedActionItems: different.completedActionItems,
+            personalNotes: different.personalNotes,
+            transcript: different.transcript,
+            moments: different.moments,
+            sessions: different.sessions,
+            audioStart: different.audioStart,
+            extraSections: different.extraSections,
+            fileURL: different.fileURL,
+            fileModified: different.fileModified
+        )
+        #expect(
+            MeetingCoordinator.mergingTranscriptFirstSummary(
+                generatedResult(),
+                scaffold: scaffold,
+                current: different
+            ) == nil
+        )
+    }
+}
+
 /// Recording into a note regenerated its title and replaced its action items,
 /// so a name the user chose and a commitment they were still tracking both
 /// disappeared because a second sitting did not mention them again.
 @MainActor
 struct AppendedSessionTests {
+    private func summaryScaffold() -> MeetingNote {
+        MeetingNote(
+            title: "Meeting Wed 2:03 PM",
+            startedAt: Date(timeIntervalSince1970: 1_000),
+            endedAt: Date(timeIntervalSince1970: 1_120),
+            sourceApp: "Manual",
+            summary: "Earlier summary",
+            keyPoints: ["Earlier point"],
+            decisions: ["Earlier decision"],
+            actionItems: ["Book the load test window"],
+            personalNotes: "Keep this note",
+            transcript: [
+                TranscriptSegment(
+                    startTime: 0,
+                    duration: 12,
+                    text: "The team approved the migration plan."
+                )
+            ]
+        )
+    }
+
+    private func generatedSummary() -> SummaryResult {
+        SummaryResult(
+            insights: MeetingInsights(
+                title: "Migration plan review",
+                summary: "The migration plan was approved.",
+                keyPoints: ["Migration is ready"],
+                decisions: ["Proceed with migration"],
+                actionItems: ["Draft the rollback note"]
+            ),
+            failure: nil
+        )
+    }
+
     @Test
     func aTitleTheUserChoseSurvivesASecondSitting() {
         #expect(
@@ -972,6 +1307,70 @@ struct AppendedSessionTests {
         )
 
         #expect(merged == ["[x] Book the load test window"])
+    }
+
+    @Test
+    func backgroundEnrichmentPreservesEditsMadeAfterTheAppend() {
+        let scaffold = summaryScaffold()
+        var current = scaffold
+        current.title = "Pricing rework with Ana"
+        current.keyPoints = ["A point added while summarizing"]
+        current.completedActionItems = ["Book the load test window"]
+        current.personalNotes += "\n\nAnother thought"
+
+        let merged = MeetingCoordinator.mergingAppendedSessionSummary(
+            generatedSummary(),
+            scaffold: scaffold,
+            current: current
+        )
+
+        #expect(merged?.title == current.title)
+        #expect(merged?.summary == "The migration plan was approved.")
+        #expect(merged?.keyPoints == current.keyPoints)
+        #expect(merged?.decisions == ["Proceed with migration"])
+        #expect(merged?.actionItems == current.actionItems)
+        #expect(merged?.completedActionItems == current.completedActionItems)
+        #expect(merged?.personalNotes == current.personalNotes)
+    }
+
+    @Test
+    func untouchedAppendedFieldsReceiveTheGroundedSummary() {
+        let scaffold = summaryScaffold()
+        let merged = MeetingCoordinator.mergingAppendedSessionSummary(
+            generatedSummary(),
+            scaffold: scaffold,
+            current: scaffold
+        )
+
+        #expect(merged?.title == "Migration plan review")
+        #expect(merged?.summary == "The migration plan was approved.")
+        #expect(merged?.keyPoints == ["Migration is ready"])
+        #expect(merged?.decisions == ["Proceed with migration"])
+        #expect(merged?.actionItems == [
+            "Book the load test window",
+            "Draft the rollback note",
+        ])
+    }
+
+    @Test
+    func changedTranscriptRejectsAStaleAppendedSummary() {
+        let scaffold = summaryScaffold()
+        var current = scaffold
+        current.transcript.append(
+            TranscriptSegment(
+                startTime: 14,
+                duration: 3,
+                text: "This arrived in a later sitting."
+            )
+        )
+
+        #expect(
+            MeetingCoordinator.mergingAppendedSessionSummary(
+                generatedSummary(),
+                scaffold: scaffold,
+                current: current
+            ) == current
+        )
     }
 
     /// Audio kept under an earlier promise is never destroyed, and turning

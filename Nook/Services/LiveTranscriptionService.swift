@@ -692,8 +692,26 @@ final class DeadlineSignal<Value: Sendable> {
 
     func wait() async -> Value? {
         if hasResolved { return resolvedValue }
-        return await withCheckedContinuation { continuation in
-            self.continuation = continuation
+        if Task.isCancelled {
+            signal(nil)
+            return nil
+        }
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                // Cancellation can win immediately before this continuation
+                // is installed. `signal` records that resolution, so the
+                // waiter resumes here instead of sleeping until the original
+                // 90-to-900-second deadline.
+                if hasResolved {
+                    continuation.resume(returning: resolvedValue)
+                } else {
+                    self.continuation = continuation
+                }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.signal(nil)
+            }
         }
     }
 

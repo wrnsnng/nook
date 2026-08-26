@@ -244,7 +244,10 @@ final class MarkdownStore: ObservableObject {
     ///
     /// Templates are static text on the model's own fields, so the file that
     /// lands on disk is byte-for-byte what any equivalent note would encode;
-    /// nothing is generated and nothing leaves the Mac.
+    /// nothing is generated and nothing leaves the Mac. Their checklist lines
+    /// are marked complete because they are prompts for the note, not open
+    /// work; the prompts remain visible and can be reopened when they become
+    /// real follow-ups.
     @discardableResult
     func createTemplatedNote(from template: NoteTemplate) throws -> MeetingNote {
         let now = Date()
@@ -256,6 +259,7 @@ final class MarkdownStore: ObservableObject {
                 sourceApp: "Personal",
                 summary: template.summary,
                 actionItems: template.actionItems,
+                completedActionItems: Set(template.actionItems),
                 personalNotes: ""
             )
         )
@@ -296,6 +300,77 @@ final class MarkdownStore: ObservableObject {
             : "\(loadIssues.count) Markdown file\(loadIssues.count == 1 ? "" : "s") couldn’t be loaded."
     }
 
+    /// Explicitly renames a saved note's Markdown file to match its current
+    /// display title. Saving a title deliberately does not call this: a file's
+    /// path is an address, and callers may want to change that address only
+    /// when they ask for it.
+    ///
+    /// The move preserves every byte in the file. The destination follows the
+    /// same date-and-sanitized-title convention as a new note, including the
+    /// existing collision suffixes. The source timestamp is checked first so
+    /// an edit made outside Nook is never moved away from the path a person
+    /// may still be using.
+    @discardableResult
+    func renameManagedFile(for note: MeetingNote) throws -> MeetingNote {
+        let known = notes.first(where: { $0.id == note.id })
+        guard let source = note.fileURL ?? known?.fileURL else {
+            lastError = MarkdownStoreError.renameRequiresSavedNote.errorDescription
+            throw MarkdownStoreError.renameRequiresSavedNote
+        }
+
+        let sourceURL = source.standardizedFileURL
+        let managedDirectory = storageURL.standardizedFileURL
+        guard sourceURL.deletingLastPathComponent() == managedDirectory else {
+            lastError = MarkdownStoreError.renameRequiresManagedFile.errorDescription
+            throw MarkdownStoreError.renameRequiresManagedFile
+        }
+        guard fileManager.fileExists(atPath: sourceURL.path) else {
+            lastError = MarkdownStoreError.renameSourceMissing.errorDescription
+            throw MarkdownStoreError.renameSourceMissing
+        }
+
+        try refuseIfChangedElsewhere(
+            sourceURL,
+            lastSeen: note.fileModified ?? known?.fileModified
+        )
+
+        let destination = availableDestination(
+            for: note,
+            excluding: sourceURL
+        )
+        let destinationURL = destination.standardizedFileURL
+
+        // The path already matches. It is still a successful explicit request,
+        // but there is no filesystem mutation to perform.
+        if destinationURL == sourceURL {
+            var unchanged = note
+            unchanged.fileURL = sourceURL
+            unchanged.fileModified = Self.modificationDate(of: sourceURL)
+            upsert(unchanged)
+            lastError = nil
+            return unchanged
+        }
+
+        do {
+            // moveItem refuses an existing destination; availableDestination
+            // has already selected a free collision-safe path, so this never
+            // overwrites another note.
+            try fileManager.moveItem(at: sourceURL, to: destinationURL)
+        } catch {
+            lastError = MarkdownStoreError.renameFailed.errorDescription
+            throw MarkdownStoreError.renameFailed
+        }
+
+        protectSensitiveFile(at: destinationURL)
+        var renamed = note
+        renamed.fileURL = destinationURL
+        renamed.fileModified = Self.modificationDate(of: destinationURL)
+        invalidateReloadSnapshot()
+        upsert(renamed)
+        lastError = nil
+        return renamed
+    }
+
     /// Moves a note's Markdown file to the Trash.
     ///
     /// Trashing rather than unlinking keeps the deletion reversible from the
@@ -315,14 +390,12 @@ final class MarkdownStore: ObservableObject {
                 try fileManager.trashItem(at: url, resultingItemURL: nil)
             }
         } catch {
-            // Volumes without a Trash still deserve a working delete.
-            do {
-                try fileManager.removeItem(at: url)
-            } catch {
-                lastError = "Couldn’t move \(url.lastPathComponent) to the Trash: "
-                    + error.localizedDescription
-                return false
-            }
+            // A missing Trash is a safety boundary, not an invitation to
+            // unlink the only copy. Keep both the file and the in-memory note
+            // so the user can make the Trash available and try again.
+            lastError = "Couldn’t move \(url.lastPathComponent) to the Trash: "
+                + error.localizedDescription
+            return false
         }
         notes.removeAll { $0.id == note.id }
         invalidateReloadSnapshot()
@@ -445,13 +518,18 @@ final class MarkdownStore: ObservableObject {
         return "\(formatter.string(from: note.startedAt))-\(compactTitle).md"
     }
 
-    private func availableDestination(for note: MeetingNote) -> URL {
+    private func availableDestination(
+        for note: MeetingNote,
+        excluding source: URL? = nil
+    ) -> URL {
         let preferred = storageURL.appendingPathComponent(filename(for: note))
-        guard fileManager.fileExists(atPath: preferred.path) else {
+        let sourceURL = source?.standardizedFileURL
+        guard fileManager.fileExists(atPath: preferred.path),
+              preferred.standardizedFileURL != sourceURL else {
             return preferred
         }
 
-        if
+        if source == nil,
             let markdown = try? String(contentsOf: preferred, encoding: .utf8),
             MarkdownCodec.decode(markdown)?.id == note.id
         {
@@ -467,9 +545,23 @@ final class MarkdownStore: ObservableObject {
             return unique
         }
 
-        return storageURL
+        let fullID = storageURL
             .appendingPathComponent("\(stem)-\(note.id.uuidString.lowercased())")
             .appendingPathExtension("md")
+        guard fileManager.fileExists(atPath: fullID.path) else {
+            return fullID
+        }
+
+        var suffix = 2
+        while true {
+            let candidate = storageURL
+                .appendingPathComponent("\(stem)-\(note.id.uuidString.lowercased()) \(suffix)")
+                .appendingPathExtension("md")
+            if !fileManager.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+            suffix += 1
+        }
     }
 
     private func markdownFiles(in directory: URL) throws -> [URL] {
@@ -571,6 +663,10 @@ enum MarkdownStoreError: LocalizedError {
     case saveReadBackFailed
     case fileChangedElsewhere
     case wouldEmptyNote
+    case renameRequiresSavedNote
+    case renameRequiresManagedFile
+    case renameSourceMissing
+    case renameFailed
 
     var errorDescription: String? {
         switch self {
@@ -584,6 +680,14 @@ enum MarkdownStoreError: LocalizedError {
             "This file changed outside Nook, so it was reloaded instead of overwritten. Try your change again."
         case .wouldEmptyNote:
             "Saving would have emptied this note, so nothing was written. Open the file to check it."
+        case .renameRequiresSavedNote:
+            "This note has no saved Markdown file to rename."
+        case .renameRequiresManagedFile:
+            "This file is outside Nook’s notes folder, so it was not renamed."
+        case .renameSourceMissing:
+            "This note’s Markdown file is missing, so it was not renamed."
+        case .renameFailed:
+            "Nook couldn’t rename this note file, so the original was left unchanged."
         }
     }
 }
@@ -591,8 +695,8 @@ enum MarkdownStoreError: LocalizedError {
 /// Starting points for a new note in the library.
 ///
 /// Deliberately tiny: three skeletons whose value is the checklist they save
-/// the user from retyping, not content. Every seed line is an ordinary
-/// action item the sidebar already understands.
+/// the user from retyping, not content. Their seed lines are visible prompts,
+/// not open work, when a note is first created from the template.
 enum NoteTemplate: String, CaseIterable, Identifiable {
     case blank
     case oneOnOne

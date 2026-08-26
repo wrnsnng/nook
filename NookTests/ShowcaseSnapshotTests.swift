@@ -33,9 +33,11 @@ struct ShowcaseSnapshotTests {
 
         let detector = MeetingDetector()
         let meeting = MeetingCoordinator(store: store, detector: detector)
+        let recovery = RecordingRecovery(store: store)
         let content = LibraryView()
             .environmentObject(store)
             .environmentObject(meeting)
+            .environmentObject(recovery)
             .frame(width: 1_220, height: 760)
             .preferredColorScheme(.dark)
 

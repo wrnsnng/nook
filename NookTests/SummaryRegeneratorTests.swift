@@ -13,12 +13,14 @@ struct SummaryRegeneratorTests {
         private let lock = NSLock()
         private(set) var calls = 0
         private(set) var fallbackTitle: String?
+        private(set) var attention: SummaryAttention?
 
-        func record(fallbackTitle: String) {
+        func record(fallbackTitle: String, attention: SummaryAttention?) {
             lock.lock()
             defer { lock.unlock() }
             calls += 1
             self.fallbackTitle = fallbackTitle
+            self.attention = attention
         }
     }
 
@@ -29,9 +31,10 @@ struct SummaryRegeneratorTests {
         func summarizeReportingFailure(
             transcript: [TranscriptSegment],
             fallbackTitle: String,
+            attention: SummaryAttention?,
             onStage: SummaryStageHandler?
         ) async -> SummaryResult {
-            recorder.record(fallbackTitle: fallbackTitle)
+            recorder.record(fallbackTitle: fallbackTitle, attention: attention)
             await onStage?(.condensing(pass: 1, part: 2, total: 5))
             await onStage?(.writingUp)
             return result
@@ -156,6 +159,24 @@ struct SummaryRegeneratorTests {
     }
 
     @Test
+    func regenerationPassesCurrentNotesAndFlaggedContextToSummarizer() async {
+        let recorder = StubRecorder()
+        let note = meetingNote()
+
+        _ = await SummaryRegenerator.regenerate(
+            note,
+            using: successfulSummarizer(recorder: recorder)
+        )
+
+        #expect(recorder.attention?.myNotes == note.personalNotes)
+        #expect(recorder.attention?.flaggedMoments.count == 1)
+        #expect(
+            recorder.attention?.flaggedMoments.first?.segments.map(\.text)
+                == note.transcript.map(\.text)
+        )
+    }
+
+    @Test
     func regenerationChangesNothingTheModelDoesNotOwn() async {
         let recorder = StubRecorder()
         let note = meetingNote()
@@ -205,6 +226,62 @@ struct SummaryRegeneratorTests {
             return
         }
         #expect(updated.completedActionItems == ["Draft the rollout plan"])
+    }
+
+    /// A long regeneration starts from one snapshot of the note. Only the
+    /// generated fields may come from that snapshot; edits made while the
+    /// model was working must come from the latest stored value.
+    @Test
+    func completedRegenerationMergesIntoTheFreshestNote() {
+        let original = meetingNote()
+        var regenerated = original
+        regenerated.title = "New model title"
+        regenerated.summary = "New model summary"
+        regenerated.keyPoints = ["New fact"]
+        regenerated.decisions = ["New decision"]
+        regenerated.actionItems = ["Still active", "New action"]
+
+        var latest = original
+        latest.personalNotes = "Written while regeneration ran"
+        latest.moments.append(MeetingMoment(offset: 42))
+        latest.completedActionItems = ["Still active", "Removed action"]
+        latest.fileModified = Date(timeIntervalSince1970: 1_770_002_500)
+
+        let merged = SummaryRegenerator.mergingGeneratedFields(
+            from: regenerated,
+            startingFrom: original,
+            into: latest
+        )
+
+        #expect(merged.title == "New model title")
+        #expect(merged.summary == "New model summary")
+        #expect(merged.keyPoints == ["New fact"])
+        #expect(merged.decisions == ["New decision"])
+        #expect(merged.actionItems == ["Still active", "New action"])
+        #expect(merged.personalNotes == "Written while regeneration ran")
+        #expect(merged.moments == latest.moments)
+        #expect(merged.fileModified == latest.fileModified)
+        #expect(merged.completedActionItems == ["Still active"])
+    }
+
+    @Test
+    func explicitTitleRenameWinsOverAStaleRegenerationResult() {
+        let starting = meetingNote()
+        var regenerated = starting
+        regenerated.title = "Model title"
+        regenerated.summary = "Fresh model summary"
+
+        var latest = starting
+        latest.title = "Renamed while regeneration ran"
+
+        let merged = SummaryRegenerator.mergingGeneratedFields(
+            from: regenerated,
+            startingFrom: starting,
+            into: latest
+        )
+
+        #expect(merged.title == latest.title)
+        #expect(merged.summary == regenerated.summary)
     }
 
     // MARK: A failed pass
@@ -276,6 +353,7 @@ struct RegenerationStageTests {
         func summarizeReportingFailure(
             transcript: [TranscriptSegment],
             fallbackTitle: String,
+            attention: SummaryAttention?,
             onStage: SummaryStageHandler?
         ) async -> SummaryResult {
             await onStage?(.condensing(pass: 1, part: 2, total: 5))

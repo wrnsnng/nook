@@ -200,6 +200,8 @@ struct LibraryView: View {
     @EnvironmentObject private var markdownDraft: MarkdownDraftController
     @EnvironmentObject private var personalNotesDraft: PersonalNotesDraftController
     @EnvironmentObject private var prep: PrepBriefController
+    @EnvironmentObject private var meeting: MeetingCoordinator
+    @EnvironmentObject private var recovery: RecordingRecovery
     @EnvironmentObject private var shortcuts: ShortcutStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
@@ -537,6 +539,10 @@ struct LibraryView: View {
 
             prepSection
             openActionsSection
+            LibraryRecoverySection(
+                recovery: recovery,
+                localeIdentifier: meeting.localeIdentifier
+            )
 
             LibraryLiveSection(selection: selection)
 
@@ -1249,6 +1255,270 @@ private struct LibraryLiveSection: View {
                 librarySidebarSectionHeader("Now")
             }
         }
+    }
+}
+
+/// A quiet, actionable place for recordings that never became notes.
+///
+/// Recovery belongs beside the library's notes because that is where a person
+/// will look for something that was kept but never written up. It remains a
+/// small section, present only while there is something to act on, and keeps
+/// its destructive confirmation local to the controls that can trigger it.
+private struct LibraryRecoverySection: View {
+    @ObservedObject var recovery: RecordingRecovery
+    let localeIdentifier: String
+    @State private var pendingDeletion: OrphanedRecording?
+    @State private var showsAll = false
+
+    private static let visibleOrphanLimit = 3
+
+    @ViewBuilder
+    var body: some View {
+        if !recovery.orphans.isEmpty || !recovery.cleanupFailures.isEmpty {
+            Section {
+                ForEach(visibleOrphans) { orphan in
+                    recoveryRow(for: orphan)
+                }
+
+                ForEach(recovery.cleanupFailures) { failure in
+                    cleanupFailureRow(for: failure)
+                }
+
+                if recovery.orphans.count > visibleOrphans.count {
+                    Button("Show \(recovery.orphans.count - visibleOrphans.count) more recordings") {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showsAll = true
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(NookPalette.accent)
+                    .frame(minHeight: 28)
+                    .contentShape(Rectangle())
+                    .accessibilityHint("Shows the remaining recordings that need attention")
+                } else if showsAll,
+                          recovery.orphans.count > Self.visibleOrphanLimit {
+                    Button("Show fewer recordings") {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showsAll = false
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(NookPalette.accent)
+                    .frame(minHeight: 28)
+                    .contentShape(Rectangle())
+                }
+
+                if let message = recovery.message {
+                    Label {
+                        Text(message)
+                            .font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } icon: {
+                        Image(systemName: "info.circle")
+                    }
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel(message)
+                }
+
+                if recovery.isWorking {
+                    HStack(spacing: NookSpacing.small) {
+                        ProgressView()
+                            .controlSize(.small)
+                            .scaleEffect(0.7)
+                        Text(
+                            "Working through that recording locally. This can take a while."
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+            } header: {
+                HStack(spacing: NookSpacing.xSmall) {
+                    Label(
+                        "Recordings need attention",
+                        systemImage: "waveform.badge.exclamationmark"
+                    )
+                    Spacer(minLength: NookSpacing.small)
+                    Text(recovery.totalSizeLabel)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Recordings need attention")
+                .accessibilityValue(recoverySummary)
+            } footer: {
+                Text(recoveryFooter)
+            }
+            .alert(
+                "Move this recording to the Trash?",
+                isPresented: Binding(
+                    get: { pendingDeletion != nil },
+                    set: { if !$0 { pendingDeletion = nil } }
+                )
+            ) {
+                Button("Move to Trash", role: .destructive) {
+                    if let orphan = pendingDeletion {
+                        recovery.delete(orphan)
+                    }
+                    pendingDeletion = nil
+                }
+                Button("Cancel", role: .cancel) {
+                    pendingDeletion = nil
+                }
+            } message: {
+                Text(
+                    "This recording is the only copy of that conversation. It moves to the Trash and can be restored from there, or you can recover it as a note first."
+                )
+            }
+        }
+    }
+
+    private func recoveryRow(for orphan: OrphanedRecording) -> some View {
+        VStack(alignment: .leading, spacing: NookSpacing.xSmall) {
+            HStack(alignment: .firstTextBaseline, spacing: NookSpacing.small) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(orphan.dateLabel)
+                        .font(.callout.weight(.medium))
+                    HStack(spacing: NookSpacing.xSmall) {
+                        Text(orphan.sizeLabel)
+                        if orphan.isAudioOnly {
+                            Text("·")
+                            Text("Audio only")
+                        }
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: NookSpacing.xSmall)
+            }
+
+            HStack(spacing: NookSpacing.small) {
+                Button("Recover") {
+                    recovery.recover(
+                        orphan,
+                        localeIdentifier: localeIdentifier
+                    )
+                }
+                .controlSize(.small)
+                .disabled(recovery.isWorking)
+                .help("Recover this recording as a note.")
+                .accessibilityLabel(
+                    "Recover recording from \(orphan.dateLabel) as a note"
+                )
+
+                Button("Reveal") {
+                    recovery.reveal(orphan)
+                }
+                .controlSize(.small)
+                .help("Reveal this recording in Finder.")
+                .accessibilityLabel(
+                    "Reveal recording from \(orphan.dateLabel) in Finder"
+                )
+
+                Button("Delete", role: .destructive) {
+                    pendingDeletion = orphan
+                }
+                .controlSize(.small)
+                .disabled(recovery.isWorking)
+                .help("Move this recording to the Trash.")
+                .accessibilityLabel(
+                    "Move recording from \(orphan.dateLabel) to the Trash"
+                )
+            }
+        }
+        .padding(.vertical, NookSpacing.xSmall)
+        .accessibilityElement(children: .contain)
+    }
+
+    private func cleanupFailureRow(
+        for failure: RecoveryCleanupFailure
+    ) -> some View {
+        VStack(alignment: .leading, spacing: NookSpacing.xSmall) {
+            HStack(alignment: .firstTextBaseline, spacing: NookSpacing.small) {
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundStyle(NookPalette.warning)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Saved note: \(failure.noteTitle)")
+                        .font(.callout.weight(.medium))
+                    Text(
+                        "\(failure.dateLabel) · \(failure.sizeLabel) still in Nook"
+                    )
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    Text("Some files could not be removed after recovery.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: NookSpacing.xSmall)
+            }
+
+            Button("Reveal files") {
+                recovery.reveal(failure)
+            }
+            .controlSize(.small)
+            .help("Reveal the files that could not be removed in Finder.")
+            .accessibilityLabel(
+                "Reveal files left after recovering \(failure.noteTitle) in Finder"
+            )
+        }
+        .padding(.vertical, NookSpacing.xSmall)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var visibleOrphans: [OrphanedRecording] {
+        showsAll
+            ? recovery.orphans
+            : Array(recovery.orphans.prefix(Self.visibleOrphanLimit))
+    }
+
+    private var recordingCountLabel: String {
+        let count = recovery.orphans.count
+        return "\(count) recording\(count == 1 ? "" : "s")"
+    }
+
+    private var recoverySummary: String {
+        var parts: [String] = []
+        if !recovery.orphans.isEmpty {
+            parts.append("\(recordingCountLabel) without notes")
+        }
+        if !recovery.cleanupFailures.isEmpty {
+            let count = recovery.cleanupFailures.count
+            parts.append(
+                "\(count) cleanup issue\(count == 1 ? "" : "s")"
+            )
+        }
+        parts.append("\(recovery.totalSizeLabel) total")
+        return parts.joined(separator: ", ")
+    }
+
+    private var recoveryContext: String {
+        if !recovery.cleanupFailures.isEmpty {
+            if recovery.orphans.isEmpty {
+                return recovery.cleanupFailures.count == 1
+                    ? "A note was saved, but one or more files from its recovery could not be removed."
+                    : "Notes were saved, but some recovery files could not be removed."
+            }
+            return "Some recovered notes still have files that could not be removed."
+        }
+        if recovery.orphans.count == 1 {
+            return "Nook has no matching note for this recording. Processing may have been interrupted, or the original note may have been deleted."
+        }
+        return "Nook has no matching notes for these recordings. Processing may have been interrupted, or the original notes may have been deleted."
+    }
+
+    private var recoveryFooter: String {
+        var text = recoveryContext
+        if !recovery.orphans.isEmpty {
+            text += " Recover a recording as a note, reveal its files, or move it to the Trash."
+        }
+        if !recovery.cleanupFailures.isEmpty {
+            text += " Reveal the remaining files to inspect them in Finder."
+        }
+        return text
     }
 }
 

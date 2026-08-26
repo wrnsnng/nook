@@ -36,12 +36,24 @@ struct ShortcutStoreTests {
     func everyActionHasAUsableDefault() {
         for id in NookShortcutID.allCases {
             #expect(!id.title.isEmpty, "\(id.rawValue) has no title")
+            #expect(!id.detail.isEmpty, "\(id.rawValue) has no detail")
             #expect(id.defaultShortcut.isValid, "\(id.rawValue) default invalid")
             #expect(
                 !id.defaultShortcut.isModifierOnly,
                 "\(id.rawValue) default is modifiers alone"
             )
         }
+    }
+
+    @Test
+    func shortcutSectionsCoverTheCatalogExactlyOnce() {
+        let grouped = NookShortcutSection.allCases.flatMap(\.shortcutIDs)
+
+        #expect(grouped.count == NookShortcutID.allCases.count)
+        #expect(Set(grouped) == Set(NookShortcutID.allCases))
+        #expect(NookShortcutID.flagMoment.section == .recording)
+        #expect(NookShortcutID.commandPalette.section == .libraryAndNotes)
+        #expect(NookShortcutID.quickNoteDiscard.section == .quickNote)
     }
 
     /// Two actions shipped on one combination would fight out of the box.
@@ -91,6 +103,43 @@ struct ShortcutStoreTests {
         #expect(!store.isOverridden(.finishMeeting))
     }
 
+    @Test
+    func actionBindingsRejectModifiersWithoutAKey() throws {
+        let store = ShortcutStore(defaults: freshDefaults())
+        let modifierOnly = try #require(
+            RecordedShortcut(modifiers: [.control, .option])
+        )
+
+        store.set(modifierOnly, for: .flagMoment)
+
+        #expect(!store.isOverridden(.flagMoment))
+        #expect(
+            store.binding(for: .flagMoment)
+                == NookShortcutID.flagMoment.defaultShortcut
+        )
+    }
+
+    @Test
+    func aPersistedModifierOnlyActionBindingIsDiscardedOnLoad() throws {
+        let defaults = freshDefaults()
+        let modifierOnly = try #require(
+            RecordedShortcut(modifiers: [.command, .shift])
+        )
+        let encoded = try JSONEncoder().encode([
+            NookShortcutID.newNote.rawValue: modifierOnly
+        ])
+        defaults.set(encoded, forKey: "nook.customShortcuts")
+
+        let store = ShortcutStore(defaults: defaults)
+
+        #expect(!store.isOverridden(.newNote))
+        #expect(!store.hasOverrides)
+        #expect(
+            store.binding(for: .newNote)
+                == NookShortcutID.newNote.defaultShortcut
+        )
+    }
+
     // MARK: Persistence
 
     /// Settings and the menu system read different instances over an app's
@@ -120,12 +169,15 @@ struct ShortcutStoreTests {
     func resettingEverythingForgetsEveryRebind() {
         let defaults = freshDefaults()
         let store = ShortcutStore(defaults: defaults)
+        #expect(!store.hasOverrides)
         store.set(
             shortcut(UInt32(kVK_ANSI_Y), [.command], display: "Y"),
             for: .startRecording
         )
+        #expect(store.hasOverrides)
         store.resetAll()
 
+        #expect(!store.hasOverrides)
         #expect(!store.isOverridden(.startRecording))
         let reader = ShortcutStore(defaults: defaults)
         #expect(!reader.isOverridden(.startRecording))
@@ -161,6 +213,29 @@ struct ShortcutStoreTests {
 
         store.set(nil, for: .quickNoteDiscard)
         #expect(shortcutsConflictsAreEmpty(store))
+    }
+
+    @Test
+    func conflictsUsePhysicalKeyAndNormalizedModifiersNotDisplayCharacters() {
+        let store = ShortcutStore(defaults: freshDefaults())
+        let first = shortcut(
+            UInt32(kVK_ANSI_B),
+            [.command, .capsLock],
+            display: "B"
+        )
+        let second = shortcut(
+            UInt32(kVK_ANSI_B),
+            [.command],
+            display: "Different layout character"
+        )
+
+        store.set(first, for: .newNote)
+        store.set(second, for: .saveNote)
+
+        let conflicts = store.conflicts()
+        #expect(conflicts.count == 1)
+        #expect(Set(conflicts[0]) == [.newNote, .saveNote])
+        #expect(ShortcutBindingKey(first) == ShortcutBindingKey(second))
     }
 
     private func shortcutsConflictsAreEmpty(_ store: ShortcutStore) -> Bool {

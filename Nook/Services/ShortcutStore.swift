@@ -39,10 +39,61 @@ enum NookShortcutID: String, CaseIterable, Identifiable {
         }
     }
 
+    /// The short explanation shown below the action name in Keyboard
+    /// settings. Keeping this with the catalog prevents the settings pane
+    /// from growing a second, eventually stale action list.
+    var detail: String {
+        switch self {
+        case .flagMoment:
+            "Add a timestamp to the meeting that is recording."
+        case .startRecording:
+            "Start a new meeting recording."
+        case .pauseResumeRecording:
+            "Pause or resume the meeting that is recording."
+        case .finishMeeting:
+            "Stop recording and create the meeting note."
+        case .commandPalette:
+            "Search Nook's commands from the Library."
+        case .newNote:
+            "Create a blank note in the Library."
+        case .saveNote:
+            "Save changes in the current note."
+        case .quickNoteChecklist:
+            "Add a checklist line to the Quick Note."
+        case .quickNoteDiscard:
+            "Discard the current Quick Note."
+        }
+    }
+
+    /// The settings section that owns this action. This mapping deliberately
+    /// switches over every enum case, so adding a shortcut without deciding
+    /// where it belongs is a compile-time reminder.
+    var section: NookShortcutSection {
+        switch self {
+        case .flagMoment, .startRecording, .pauseResumeRecording, .finishMeeting:
+            .recording
+        case .commandPalette, .newNote, .saveNote:
+            .libraryAndNotes
+        case .quickNoteChecklist, .quickNoteDiscard:
+            .quickNote
+        }
+    }
+
     /// Whether this shortcut must work while another application is
     /// frontmost. Global shortcuts register with the system rather than
     /// waiting inside Nook's menus.
     var isGlobal: Bool { self == .flagMoment }
+
+    /// A compact scope label for the Keyboard settings row.
+    var scopeLabel: String { isGlobal ? "Global" : "Nook only" }
+
+    /// The longer scope description is used as the accessibility value of
+    /// the compact label, so the visual row and spoken explanation agree.
+    var scopeDescription: String {
+        isGlobal
+            ? "Works while another application is frontmost."
+            : "Works only while a Nook window is active."
+    }
 
     var defaultShortcut: DictationShortcut {
         switch self {
@@ -101,6 +152,49 @@ enum NookShortcutID: String, CaseIterable, Identifiable {
                 displayCharacter: "⌫"
             )
         }
+    }
+}
+
+/// The three jobs represented by Nook's configurable keyboard shortcuts.
+///
+/// This is intentionally a catalog rather than a view-only grouping. The
+/// Keyboard pane and its tests both consume the same case-to-action mapping.
+enum NookShortcutSection: String, CaseIterable, Identifiable {
+    case recording
+    case libraryAndNotes
+    case quickNote
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .recording: "Recording"
+        case .libraryAndNotes: "Library and notes"
+        case .quickNote: "Quick Note"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .recording: "waveform.badge.mic"
+        case .libraryAndNotes: "books.vertical"
+        case .quickNote: "note.text"
+        }
+    }
+
+    var footer: String {
+        switch self {
+        case .recording:
+            "Flag This Moment is global. The other recording controls work in Nook while a meeting is recording."
+        case .libraryAndNotes:
+            "These shortcuts work while a Nook library or note window is active."
+        case .quickNote:
+            "These shortcuts work while the Quick Note window is active."
+        }
+    }
+
+    var shortcutIDs: [NookShortcutID] {
+        NookShortcutID.allCases.filter { $0.section == self }
     }
 }
 
@@ -194,6 +288,23 @@ extension DictationShortcut {
     }
 }
 
+/// The physical identity used when deciding whether two shortcuts collide.
+///
+/// `displayCharacter` describes the keyboard layout that happened to be active
+/// when the shortcut was recorded. It is useful for showing the user what they
+/// pressed, but it is not part of the event identity: the same physical key can
+/// produce a different character on another layout. Modifier flags are masked
+/// to the four device-independent modifiers before they reach this key as well.
+struct ShortcutBindingKey: Hashable, Sendable {
+    let keyCode: UInt32
+    let modifierFlags: UInt
+
+    init(_ shortcut: DictationShortcut) {
+        keyCode = shortcut.keyCode
+        modifierFlags = shortcut.flags.rawValue
+    }
+}
+
 /// Reads and writes the user's rebound shortcuts.
 ///
 /// One store owns every rebinding so the same values reach the menu commands,
@@ -209,6 +320,9 @@ final class ShortcutStore: ObservableObject {
     /// Overrides keyed by catalog identifier. Absent means default.
     @Published private(set) var overrides: [String: RecordedShortcut] = [:]
 
+    /// Whether at least one action needs a custom binding reset.
+    var hasOverrides: Bool { !overrides.isEmpty }
+
     private let defaults: UserDefaults
     private static let storageKey = "nook.customShortcuts"
 
@@ -219,7 +333,13 @@ final class ShortcutStore: ObservableObject {
                [String: RecordedShortcut].self,
                from: data
            ) {
-            overrides = decoded
+            // Versions that briefly let the shared recorder accept
+            // modifier-only action bindings may have persisted one. Do not
+            // revive an unusable menu equivalent on the next launch.
+            overrides = decoded.filter {
+                $0.value.isValid && !$0.value.isModifierOnly
+            }
+            if overrides.count != decoded.count { persist() }
         }
     }
 
@@ -236,6 +356,10 @@ final class ShortcutStore: ObservableObject {
     /// Rebinds an action, or clears its override when passed nil.
     func set(_ shortcut: RecordedShortcut?, for id: NookShortcutID) {
         if let shortcut {
+            // Every catalog action ultimately reaches a menu equivalent or a
+            // Carbon hotkey. Neither can represent modifiers by themselves,
+            // and accepting one turns the empty key into Space in SwiftUI.
+            guard shortcut.isValid, !shortcut.isModifierOnly else { return }
             overrides[id.rawValue] = shortcut
         } else {
             overrides.removeValue(forKey: id.rawValue)
@@ -255,13 +379,10 @@ final class ShortcutStore: ObservableObject {
     /// first wins silently, so Settings shows these instead of pretending
     /// every combination can coexist.
     func conflicts() -> [[NookShortcutID]] {
-        var byCombination: [String: [NookShortcutID]] = [:]
+        var byCombination: [ShortcutBindingKey: [NookShortcutID]] = [:]
         for id in NookShortcutID.allCases {
             let binding = binding(for: id)
-            byCombination[
-                "\(binding.keyCode)-\(binding.modifierFlags)",
-                default: []
-            ].append(id)
+            byCombination[ShortcutBindingKey(binding), default: []].append(id)
         }
         return byCombination.values.filter { $0.count > 1 }
     }

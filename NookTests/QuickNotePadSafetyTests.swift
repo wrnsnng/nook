@@ -2,6 +2,62 @@ import Foundation
 import Testing
 @testable import Nook
 
+private actor DelayedQuickNoteAssistant {
+    private var continuation: CheckedContinuation<String, Never>?
+    private var queuedResult: String?
+    private(set) var didStart = false
+
+    func nextResult() async -> String {
+        didStart = true
+        if let queuedResult {
+            self.queuedResult = nil
+            return queuedResult
+        }
+        return await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func release(_ result: String) {
+        if let continuation {
+            self.continuation = nil
+            continuation.resume(returning: result)
+        } else {
+            queuedResult = result
+        }
+    }
+}
+
+private enum DelayedQuickNoteAssistantError: Error {
+    case failed
+}
+
+private actor DelayedQuickNoteFailure {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var releaseRequested = false
+    private(set) var didStart = false
+
+    func nextResult() async throws -> String {
+        didStart = true
+        if releaseRequested {
+            throw DelayedQuickNoteAssistantError.failed
+        }
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+        throw DelayedQuickNoteAssistantError.failed
+    }
+
+    func release() {
+        if let continuation {
+            self.continuation = nil
+            continuation.resume()
+        } else {
+            releaseRequested = true
+        }
+    }
+}
+
 /// The quick note pad is usually the only copy of something that was said out
 /// loud a second ago. Two ways of ending it used to throw those words away
 /// without saying anything: quitting inside the autosave debounce, and closing
@@ -113,6 +169,41 @@ struct QuickNotePadSafetyTests {
     }
 
     @Test
+    func closingThePadEndsItsCaptureSession() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pad = QuickNoteController(store: store(in: directory))
+        var dismissalCount = 0
+        pad.onDismissRequested = { dismissalCount += 1 }
+        pad.isContinuous = true
+
+        pad.close()
+
+        #expect(dismissalCount == 1)
+        #expect(!pad.isContinuous)
+    }
+
+    @Test
+    func aFailedDiscardKeepsTheSavedNoteAndItsWords() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        let pad = QuickNoteController(
+            store: store,
+            deleteSavedNote: { _ in false }
+        )
+        pad.text = "Keep the pricing thought."
+        #expect(pad.saveIfNeeded() != nil)
+
+        pad.discard()
+
+        #expect(pad.text == "Keep the pricing thought.")
+        #expect(store.notes.count == 1)
+        #expect(pad.hasUnsavedFailure)
+        #expect(pad.message != nil)
+    }
+
+    @Test
     func aPadThatSavesOnTheSecondTryStopsBlockingTheClose() throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -138,6 +229,97 @@ struct QuickNotePadSafetyTests {
         #expect(pad.canClose())
         #expect(!pad.hasUnsavedFailure)
         #expect(store.notes.first?.summary == "One line, then another.")
+    }
+
+    @Test
+    func delayedAssistantOutputCannotReplaceWordsEditedWhileItWasThinking() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        let assistant = DelayedQuickNoteAssistant()
+        let pad = QuickNoteController(
+            store: store,
+            assistantRun: { _, _, _ in await assistant.nextResult() },
+            availableEngines: { [.onDevice] }
+        )
+
+        pad.present()
+        pad.text = "The words I just said are the source of truth."
+        pad.run(.tidy)
+        for _ in 0..<100 {
+            if await assistant.didStart { break }
+            await Task.yield()
+        }
+        #expect(await assistant.didStart)
+
+        pad.text = "I edited this while the assistant was thinking."
+        await assistant.release("A stale rewrite")
+        for _ in 0..<20 { await Task.yield() }
+
+        #expect(pad.text == "I edited this while the assistant was thinking.")
+        #expect(!pad.hasUnsavedFailure)
+        pad.close()
+    }
+
+    @Test
+    func delayedAssistantOutputCannotLandAfterThePadIsClosedAndReopened() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        let assistant = DelayedQuickNoteAssistant()
+        let pad = QuickNoteController(
+            store: store,
+            assistantRun: { _, _, _ in await assistant.nextResult() },
+            availableEngines: { [.onDevice] }
+        )
+
+        pad.present()
+        pad.text = "The first presentation should not receive old output."
+        pad.run(.tidy)
+        for _ in 0..<100 {
+            if await assistant.didStart { break }
+            await Task.yield()
+        }
+        #expect(await assistant.didStart)
+
+        pad.close()
+        pad.present()
+        pad.text = "This is a new presentation."
+        await assistant.release("Output from the old presentation")
+        for _ in 0..<20 { await Task.yield() }
+
+        #expect(pad.text == "This is a new presentation.")
+        pad.close()
+    }
+
+    @Test
+    func delayedAssistantFailureCannotSurfaceAfterDiscard() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        let continuation = DelayedQuickNoteFailure()
+        let pad = QuickNoteController(
+            store: store,
+            assistantRun: { _, _, _ in try await continuation.nextResult() },
+            availableEngines: { [.onDevice] }
+        )
+
+        pad.present()
+        pad.text = "This thought is being discarded."
+        pad.run(.tidy)
+        for _ in 0..<100 {
+            if await continuation.didStart { break }
+            await Task.yield()
+        }
+        #expect(await continuation.didStart)
+
+        pad.discard()
+        await continuation.release()
+        for _ in 0..<20 { await Task.yield() }
+
+        #expect(pad.text.isEmpty)
+        #expect(pad.message == nil)
+        #expect(!pad.isPresenting)
     }
 
     @Test

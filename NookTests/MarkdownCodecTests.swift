@@ -1313,6 +1313,89 @@ struct MarkdownCodecTests {
         #expect(draft.rawMarkdown.contains("Protected edit"))
         #expect(draft.hasChanges)
     }
+
+    @Test
+    @MainActor
+    func aLateRefreshCannotRedirectAnotherNotesDraft() throws {
+        let fileManager = FileManager.default
+        let directory = fileManager.temporaryDirectory
+            .appendingPathComponent("NookLateRefreshTests-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: directory) }
+
+        let store = MarkdownStore()
+        store.storageURL = directory
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let first = try store.save(
+            MeetingNote(
+                title: "First",
+                startedAt: start,
+                endedAt: start,
+                sourceApp: "Manual",
+                summary: "First summary"
+            )
+        )
+        let second = try store.save(
+            MeetingNote(
+                title: "Second",
+                startedAt: start,
+                endedAt: start,
+                sourceApp: "Manual",
+                summary: "Second summary"
+            )
+        )
+        let draft = MarkdownDraftController()
+        draft.prepare(for: first, store: store)
+        draft.prepare(for: second, store: store)
+        let secondMarkdown = draft.rawMarkdown
+
+        draft.refresh(for: first, store: store)
+
+        #expect(draft.noteID == second.id)
+        #expect(draft.rawMarkdown == secondMarkdown)
+    }
+
+    @Test
+    @MainActor
+    func aDraftCannotBeSavedIntoAnotherNote() throws {
+        let fileManager = FileManager.default
+        let directory = fileManager.temporaryDirectory
+            .appendingPathComponent("NookWrongDraftSaveTests-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: directory) }
+
+        let store = MarkdownStore()
+        store.storageURL = directory
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let first = try store.save(
+            MeetingNote(
+                title: "First",
+                startedAt: start,
+                endedAt: start,
+                sourceApp: "Manual",
+                summary: "Protected first summary"
+            )
+        )
+        let second = try store.save(
+            MeetingNote(
+                title: "Second",
+                startedAt: start,
+                endedAt: start,
+                sourceApp: "Manual",
+                summary: "Protected second summary"
+            )
+        )
+        let draft = MarkdownDraftController()
+        draft.prepare(for: first, store: store)
+        draft.rawMarkdown += "\nFirst-only draft"
+
+        #expect(throws: MarkdownDraftError.wrongNote) {
+            try draft.save(note: second, store: store)
+        }
+        let secondOnDisk = try String(contentsOf: second.fileURL!, encoding: .utf8)
+        #expect(secondOnDisk.contains("Protected second summary"))
+        #expect(!secondOnDisk.contains("First-only draft"))
+    }
 }
 
 /// "My notes" is user-authored free text. People write their own sub-headings

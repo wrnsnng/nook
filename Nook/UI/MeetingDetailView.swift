@@ -35,13 +35,17 @@ struct MeetingDetailView: View {
     @State private var copyNotice: String?
     @State private var copyNoticeSeverity: CopyConfirmationBanner.Severity = .success
     @State private var titleDraft: String
+    /// Rename is an intentional mode, rather than a field that is live in
+    /// every note. The title that was visible when the mode began is the
+    /// cancel target, even if the draft has since been edited.
+    @State private var isEditingTitle = false
+    @State private var titleAtEditStart: String
     /// Whether the My notes field has the keyboard. Leaving it writes what is
     /// there, for the same reason the title field does: waiting for a button
     /// meant every other way out of the field threw the words away.
     @FocusState private var personalNotesFocused: Bool
-    /// Tracks the title field so leaving it commits the edit. Return-only
-    /// saving silently discarded titles whenever the user clicked another
-    /// note instead of pressing Return first.
+    /// The title field is focused only after the user explicitly chooses
+    /// Rename. The read-only title shown when a note opens never requests it.
     @FocusState private var titleFieldFocused: Bool
     /// The Markdown length, recomputed when the draft changes rather than on
     /// every pass through `body`. Counting a long note's characters during
@@ -55,21 +59,39 @@ struct MeetingDetailView: View {
     /// and which stage it has reached, so waiting reads as progress instead
     /// of a dead button.
     @State private var regenerationStage: SummaryStage?
+    /// Button-driven work is kept explicitly so navigation can cancel it.
+    /// Without this handle, the old detail view could finish after another
+    /// note had taken over the shared Markdown draft controller.
+    @State private var regenerationTask: Task<Void, Never>?
     /// The note's checkbox lines as they exist on disk right now. Checkbox
     /// state is deliberately absent from the decoded model, so ticking from
     /// here needs the file's own truth to stay aligned with the sidebar.
     @State private var checklistLines: [ActionItemLine] = []
-    /// Words across the whole transcript, computed once when the note
-    /// changes rather than inside the header. `ViewThatFits` measures both of
-    /// its candidate layouts, which ran this reduce over every transcript
-    /// segment twice per body pass; a long meeting paid that cost at
-    /// whatever rate anything else in the window invalidated this view.
-    @State private var transcriptWordCount = 0
+    /// Words across the note's primary source, computed once when the note
+    /// changes rather than inside the header. Spoken notes keep their prose
+    /// in `summary`; recorded meetings keep words in transcript segments.
+    @State private var contentWordCount = 0
+    /// The first row and every meaningful source/session transition keep a
+    /// badge. Rows whose badge is hidden still name their source through the
+    /// row's accessibility label below.
+    @State private var transcriptSourceBadgeIDs: Set<UUID>
 
     init(note: MeetingNote, initialTab: DetailTab = .notes) {
         self.note = note
-        _tab = State(initialValue: initialTab)
+        let startingTab = note.kind == .spoken
+            && note.transcript.isEmpty
+            && initialTab == .transcript
+            ? .notes
+            : initialTab
+        _tab = State(initialValue: startingTab)
         _titleDraft = State(initialValue: note.title)
+        _titleAtEditStart = State(initialValue: note.title)
+        _transcriptSourceBadgeIDs = State(
+            initialValue: TranscriptBadgeGroupingPolicy.visibleBadgeIDs(
+                in: note.transcript,
+                sessions: note.sessions
+            )
+        )
     }
 
     var body: some View {
@@ -106,26 +128,56 @@ struct MeetingDetailView: View {
             markdownDraft.prepare(for: note, store: store)
             personalNotes.prepare(for: note, store: store)
             markdownCharacterCount = markdownDraft.rawMarkdown.count
-            transcriptWordCount = note.transcriptWordCount
+            contentWordCount = note.detailContentWordCount
+            transcriptSourceBadgeIDs = TranscriptBadgeGroupingPolicy.visibleBadgeIDs(
+                in: filteredTranscript,
+                sessions: note.sessions
+            )
             reloadChecklist()
         }
         .onChange(of: markdownDraft.rawMarkdown) { _, markdown in
             markdownCharacterCount = markdown.count
         }
         .onChange(of: note) { _, newValue in
-            transcriptWordCount = newValue.transcriptWordCount
+            contentWordCount = newValue.detailContentWordCount
+            transcriptSourceBadgeIDs = TranscriptBadgeGroupingPolicy.visibleBadgeIDs(
+                in: Self.filteredTranscript(
+                    from: newValue,
+                    matching: transcriptSearch
+                ),
+                sessions: newValue.sessions
+            )
             reloadChecklist()
+            if newValue.kind == .spoken,
+               newValue.transcript.isEmpty,
+               tab == .transcript {
+                tab = .notes
+            }
+        }
+        .onChange(of: transcriptSearch) { _, _ in
+            // Group the rows that are actually visible. A search can make a
+            // later segment the first row; it must not inherit a hidden
+            // predecessor's suppressed source badge.
+            transcriptSourceBadgeIDs = TranscriptBadgeGroupingPolicy.visibleBadgeIDs(
+                in: filteredTranscript,
+                sessions: note.sessions
+            )
         }
         .onChange(of: note.personalNotes) { _, _ in
             personalNotes.refresh(for: note)
         }
         .onChange(of: note.title) { oldValue, newValue in
+            guard !isEditingTitle else { return }
             if titleDraft == oldValue {
                 titleDraft = newValue
             }
+            titleAtEditStart = newValue
         }
         .onChange(of: titleFieldFocused) { _, focused in
-            guard !focused else { return }
+            guard !focused, isEditingTitle else { return }
+            // Clicking another control commits the draft. That keeps typed
+            // words from disappearing on a focus change, and is also stated
+            // in the editor's help and accessibility hint.
             saveTitle()
         }
         .onChange(of: personalNotesFocused) { _, focused in
@@ -135,6 +187,7 @@ struct MeetingDetailView: View {
         // Backstop for navigation that races focus loss: the view keeps its
         // own note, so committing here always writes the right file.
         .onDisappear {
+            cancelSummaryRegeneration()
             saveTitle()
             savePersonalNotes()
         }
@@ -151,20 +204,34 @@ struct MeetingDetailView: View {
         )
     }
 
+    /// Spoken notes already expose their original wording in `summary`, so a
+    /// second empty Transcript surface would only suggest meeting capture
+    /// happened. Keep a transcript tab when a caller supplies transcript
+    /// segments, so an unusual but valid model value never becomes unreachable.
+    private var showsTranscriptTab: Bool {
+        note.kind != .spoken || !note.transcript.isEmpty
+    }
+
     private var documentHeader: some View {
         VStack(alignment: .leading, spacing: 22) {
             ViewThatFits(in: .horizontal) {
                 HStack(alignment: .bottom, spacing: 28) {
                     titleBlock
                     Spacer(minLength: 24)
-                    DetailTabBar(selection: $tab)
+                    DetailTabBar(
+                        selection: $tab,
+                        showsTranscript: showsTranscriptTab
+                    )
                     detailActions
                 }
 
                 VStack(alignment: .leading, spacing: 18) {
                     titleBlock
                     HStack {
-                        DetailTabBar(selection: $tab)
+                        DetailTabBar(
+                            selection: $tab,
+                            showsTranscript: showsTranscriptTab
+                        )
                         Spacer()
                         detailActions
                     }
@@ -189,6 +256,20 @@ struct MeetingDetailView: View {
             } label: {
                 Label("Show in Finder", systemImage: "folder")
             }
+
+            Button {
+                renameManagedFile()
+            } label: {
+                Label(
+                    "Rename File to Match Title",
+                    systemImage: "arrow.triangle.2.circlepath"
+                )
+            }
+            .disabled(!canRenameManagedFile)
+            .help(
+                renameFileHelp
+            )
+            .accessibilityHint(renameFileHelp)
 
             if SummaryRegenerator.isAvailable(for: note) {
                 Button {
@@ -220,27 +301,81 @@ struct MeetingDetailView: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("Meeting actions")
-        .accessibilityLabel("Meeting actions")
+        .help(detailActionsLabel)
+        .accessibilityLabel(detailActionsLabel)
     }
 
     private var titleBlock: some View {
         VStack(alignment: .leading, spacing: 10) {
-            TextField("Meeting title", text: $titleDraft)
-                .textFieldStyle(.plain)
-                .font(NookType.title)
-                .tracking(-0.45)
-                .lineLimit(2)
-                .focused($titleFieldFocused)
-                .onSubmit(saveTitle)
-                .help("Edits save when you press Return or click away")
-                .accessibilityLabel("Meeting title")
-                .accessibilityHint(
-                    "Edits save when you press Return or leave the field"
-                )
-                .accessibilityAddTraits(.isHeader)
+            if isEditingTitle {
+                TextField(titleLabel, text: $titleDraft)
+                    .textFieldStyle(.plain)
+                    .font(NookType.title)
+                    .tracking(-0.45)
+                    .lineLimit(2)
+                    .focused($titleFieldFocused)
+                    .onSubmit(saveTitle)
+                    .onExitCommand(perform: cancelTitleEditing)
+                    .onAppear(perform: focusAndSelectTitle)
+                    .help(
+                        "Press Return to save, Escape to cancel, or click away to save"
+                    )
+                    .accessibilityLabel("\(titleLabel), editing")
+                    .accessibilityValue(titleDraft)
+                    .accessibilityHint(
+                        "Press Return to save, Escape to cancel, or click away to save"
+                    )
+                    .accessibilityAddTraits(.isHeader)
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(note.title)
+                        .font(NookType.title)
+                        .tracking(-0.45)
+                        .lineLimit(2)
+                        .textSelection(.enabled)
+                        .accessibilityLabel("\(titleLabel): \(note.title)")
+                        .accessibilityHint(
+                            titleReadOnlyHint
+                        )
+                        .accessibilityAddTraits(.isHeader)
 
-            HStack(spacing: 15) {
+                    Button {
+                        beginTitleEditing()
+                    } label: {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 12, weight: .semibold))
+                            .frame(width: 28, height: 28)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(!canRenameTitle)
+                    .help(titleRenameHelp)
+                    .accessibilityLabel(renameLabel)
+                    .accessibilityHint(titleRenameHelp)
+                }
+            }
+
+            detailMetadata
+        }
+    }
+
+    private var detailMetadata: some View {
+        HStack(spacing: 15) {
+            if note.kind == .spoken {
+                NookMetadataLabel(
+                    title: "Spoken note",
+                    symbol: "waveform.badge.mic",
+                    tint: NookPalette.accent
+                )
+                NookMetadataLabel(
+                    title: "Created "
+                        + note.startedAt.formatted(
+                            date: .abbreviated,
+                            time: .shortened
+                        ),
+                    symbol: "calendar"
+                )
+            } else {
                 NookMetadataLabel(
                     title: note.startedAt.formatted(
                         date: .abbreviated,
@@ -252,30 +387,74 @@ struct MeetingDetailView: View {
                 if !note.sourceApp.isEmpty {
                     NookMetadataLabel(title: note.sourceApp, symbol: "macbook")
                 }
-                NookMetadataLabel(
-                    title: "\(transcriptWordCount) words",
-                    symbol: "text.word.spacing"
-                )
             }
+
+            NookMetadataLabel(
+                title: "\(contentWordCount) words",
+                symbol: "text.word.spacing"
+            )
+        }
+    }
+
+    private var titleLabel: String {
+        note.kind == .spoken ? "Note title" : "Meeting title"
+    }
+
+    private var renameLabel: String {
+        note.kind == .spoken ? "Rename note" : "Rename meeting"
+    }
+
+    private var canRenameTitle: Bool {
+        DetailRenamePolicy.allowsTitleRename(
+            hasMarkdownChanges: markdownDraft.hasChanges
+        )
+    }
+
+    private var titleRenameHelp: String {
+        canRenameTitle
+            ? "Enter title editing mode"
+            : DetailRenamePolicy.markdownDraftBlockedMessage
+    }
+
+    private var titleReadOnlyHint: String {
+        canRenameTitle
+            ? "Read-only title. Activate \(renameLabel) to edit."
+            : "Read-only title. Save or revert Markdown edits before renaming."
+    }
+
+    private var renameFileHelp: String {
+        if markdownDraft.hasChanges {
+            return DetailRenamePolicy.markdownDraftBlockedMessage
+        }
+        return canRenameManagedFile
+            ? "Rename this saved Markdown file to match the title"
+            : "Only saved notes in Nook’s notes folder can be renamed"
+    }
+
+    private var detailActionsLabel: String {
+        switch note.kind {
+        case .spoken: "Note actions"
+        case .meeting: "Meeting actions"
+        case .digest: "Digest actions"
         }
     }
 
     private var notesView: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 38) {
-                if !note.summary.trimmingCharacters(
-                    in: .whitespacesAndNewlines
-                ).isEmpty {
+                if hasPrimaryContent {
                     summarySection
                 }
 
-                if !note.moments.isEmpty {
+                if note.kind != .spoken, !note.moments.isEmpty {
                     momentsSection
                 }
 
-                personalNotesSection
+                if note.kind != .spoken {
+                    personalNotesSection
+                }
 
-                if !note.keyPoints.isEmpty {
+                if note.kind != .spoken, !note.keyPoints.isEmpty {
                     EditorialSection(
                         title: "Key points",
                         symbol: "sparkles",
@@ -297,7 +476,7 @@ struct MeetingDetailView: View {
                     }
                 }
 
-                if !note.decisions.isEmpty {
+                if note.kind != .spoken, !note.decisions.isEmpty {
                     EditorialSection(
                         title: "Decisions",
                         symbol: "checkmark.seal",
@@ -333,7 +512,8 @@ struct MeetingDetailView: View {
                     actionItemsSection
                 }
 
-                if checklistLines.isEmpty,
+                if note.kind != .spoken,
+                   checklistLines.isEmpty,
                    note.keyPoints.isEmpty,
                    note.decisions.isEmpty,
                    note.actionItems.isEmpty {
@@ -628,8 +808,17 @@ struct MeetingDetailView: View {
     /// lifted out and rendered as the tickable list above, so no sentence
     /// appears twice on the page. The file itself is untouched by this.
     private var displaySummary: String {
+        Self.displaySummaryText(for: note)
+    }
+
+    private static func displaySummaryText(for note: MeetingNote) -> String {
         guard note.kind == .spoken else { return note.summary }
-        return note.summary
+        let source = note.summary.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        ).isEmpty
+            ? note.transcript.map(\.text).joined(separator: " ")
+            : note.summary
+        return source
             .split(separator: "\n", omittingEmptySubsequences: true)
             .filter { line in
                 !line.trimmingCharacters(in: .whitespaces).hasPrefix("- [")
@@ -637,31 +826,77 @@ struct MeetingDetailView: View {
             .joined(separator: "\n")
     }
 
+    private var hasPrimaryContent: Bool {
+        !displaySummary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// The note value is the source of truth. Deriving these lightweight
+    /// presentation-only boundaries here prevents SwiftUI from retaining a
+    /// previous note's paragraph state when the detail view is reused.
+    private var summaryParagraphs: [String] {
+        DetailSummaryParagraphPolicy.paragraphs(for: displaySummary)
+    }
+
     private var summarySection: some View {
         VStack(alignment: .leading, spacing: 16) {
             NookSectionLabel(
-                title: "The gist",
-                symbol: "text.alignleft",
+                title: note.kind == .spoken ? "Spoken words" : "The gist",
+                symbol: note.kind == .spoken
+                    ? "waveform" : "text.alignleft",
                 tint: NookPalette.accent
             )
 
             if isRegenerating {
                 regenerationStatusCard
             } else {
-                Text(displaySummary)
-                    .font(NookType.editorialSummary)
-                    .lineSpacing(7)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                summaryProse
             }
         }
     }
 
+    @ViewBuilder
+    private var summaryProse: some View {
+        if summaryParagraphs.count < 2 {
+            summaryParagraphText(summaryParagraphs.first ?? displaySummary)
+        } else {
+            VStack(alignment: .leading, spacing: 14) {
+                ForEach(
+                    Array(summaryParagraphs.enumerated()),
+                    id: \.offset
+                ) { _, paragraph in
+                    summaryParagraphText(paragraph)
+                }
+            }
+            // Combining the individual selectable Text values keeps
+            // VoiceOver's reading order identical to the source prose while
+            // the visible spacing makes long summaries easier to scan.
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    private func summaryParagraphText(_ paragraph: String) -> some View {
+        Text(paragraph)
+            .font(
+                note.kind == .spoken
+                    ? NookType.spoken : NookType.editorialSummary
+            )
+            .lineSpacing(7)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private var filteredTranscript: [TranscriptSegment] {
-        guard !transcriptSearch.isEmpty else { return note.transcript }
+        Self.filteredTranscript(from: note, matching: transcriptSearch)
+    }
+
+    private static func filteredTranscript(
+        from note: MeetingNote,
+        matching search: String
+    ) -> [TranscriptSegment] {
+        guard !search.isEmpty else { return note.transcript }
         return note.transcript.filter {
-            $0.text.localizedCaseInsensitiveContains(transcriptSearch)
-                || $0.source.label.localizedCaseInsensitiveContains(transcriptSearch)
+            $0.text.localizedCaseInsensitiveContains(search)
+                || $0.source.label.localizedCaseInsensitiveContains(search)
         }
     }
 
@@ -766,6 +1001,8 @@ struct MeetingDetailView: View {
                             ForEach(filteredTranscript) { segment in
                                 TranscriptRow(
                                     segment: segment,
+                                    showsSourceBadge: transcriptSourceBadgeIDs
+                                        .contains(segment.id),
                                     isFlagged: flaggedSegmentIDs.contains(
                                         segment.id
                                     ),
@@ -984,7 +1221,7 @@ struct MeetingDetailView: View {
     private func regenerateSummary() {
         guard SummaryRegenerator.isAvailable(for: note),
               !markdownDraft.hasChanges,
-              regenerationStage == nil
+              regenerationTask == nil
         else { return }
 
         // The save below rewrites the whole file from the store's freshest
@@ -1011,19 +1248,21 @@ struct MeetingDetailView: View {
         // Something visible before the first part reports, which on a long
         // meeting takes a model round-trip.
         regenerationStage = .condensing(pass: 1, part: 0, total: 0)
-        Task {
-            // A struct view outlives its own body captures badly under
-            // weak; MainActor.run keeps ordering, and a stage landing after
-            // navigation simply writes an unused field.
+        regenerationTask = Task { @MainActor in
             let stageHandler: SummaryStageHandler = { stage in
-                await MainActor.run { regenerationStage = stage }
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard !Task.isCancelled else { return }
+                    regenerationStage = stage
+                }
             }
             let outcome = await SummaryRegenerator.regenerate(
                 current,
                 using: SummaryService(),
                 onStage: stageHandler
             )
-            finishSummaryRegeneration(outcome)
+            guard !Task.isCancelled else { return }
+            finishSummaryRegeneration(outcome, startingFrom: current)
         }
     }
 
@@ -1074,14 +1313,31 @@ struct MeetingDetailView: View {
     }
 
     private func finishSummaryRegeneration(
-        _ outcome: SummaryRegenerator.Outcome
+        _ outcome: SummaryRegenerator.Outcome,
+        startingFrom starting: MeetingNote
     ) {
+        regenerationTask = nil
         regenerationStage = nil
         switch outcome {
         case .regenerated(let updated):
             do {
-                let saved = try store.save(updated)
-                markdownDraft.refresh(for: saved, store: store)
+                guard let latest = store.notes.first(where: { $0.id == updated.id })
+                else {
+                    showCopyNotice(
+                        "This note is no longer in the library.",
+                        severity: .failure
+                    )
+                    return
+                }
+                let merged = SummaryRegenerator.mergingGeneratedFields(
+                    from: updated,
+                    startingFrom: starting,
+                    into: latest
+                )
+                let saved = try store.save(merged)
+                if markdownDraft.noteID == saved.id {
+                    markdownDraft.refresh(for: saved, store: store)
+                }
                 reloadChecklist()
                 showCopyNotice("Summary regenerated")
             } catch {
@@ -1099,27 +1355,100 @@ struct MeetingDetailView: View {
         }
     }
 
+    private func cancelSummaryRegeneration() {
+        regenerationTask?.cancel()
+        regenerationTask = nil
+        regenerationStage = nil
+    }
+
+    private func beginTitleEditing() {
+        guard !isEditingTitle else { return }
+        guard canRenameTitle else {
+            showCopyNotice(
+                DetailRenamePolicy.markdownDraftBlockedMessage,
+                severity: .info
+            )
+            return
+        }
+        titleAtEditStart = note.title
+        titleDraft = note.title
+        isEditingTitle = true
+    }
+
+    /// Requests focus after the conditional editor has been inserted, then
+    /// selects its text so a deliberate Rename starts ready to replace.
+    private func focusAndSelectTitle() {
+        titleFieldFocused = true
+        Task { @MainActor in
+            // The field editor is created after SwiftUI inserts the TextField.
+            await Task.yield()
+            guard isEditingTitle, titleFieldFocused else { return }
+            guard let window = NSApp.keyWindow else { return }
+            if let textView = window.firstResponder as? NSTextView,
+               textView.isFieldEditor {
+                textView.selectAll(nil)
+            }
+        }
+    }
+
+    private func cancelTitleEditing() {
+        guard isEditingTitle else { return }
+        titleDraft = titleAtEditStart
+        endTitleEditing()
+    }
+
+    private func endTitleEditing() {
+        // Leave edit mode before releasing focus. This prevents the focus
+        // observer from treating our own exit as a second save request.
+        isEditingTitle = false
+        titleFieldFocused = false
+    }
+
     private func saveTitle() {
+        guard isEditingTitle else { return }
+
+        // Markdown edits may have started after Rename was entered. Never
+        // rewrite the file underneath that draft: require an explicit Save or
+        // Revert first, then let the user intentionally begin again.
+        guard canRenameTitle else {
+            titleDraft = titleAtEditStart
+            endTitleEditing()
+            showCopyNotice(
+                DetailRenamePolicy.markdownDraftBlockedMessage,
+                severity: .info
+            )
+            return
+        }
+
         let title = titleDraft.trimmingCharacters(
             in: .whitespacesAndNewlines
         )
         guard !title.isEmpty else {
-            titleDraft = note.title
+            titleDraft = titleAtEditStart
+            endTitleEditing()
+            showCopyNotice("Title cannot be empty", severity: .failure)
             return
         }
-        guard title != note.title else { return }
+        guard title != titleAtEditStart else {
+            endTitleEditing()
+            return
+        }
 
         var updatedNote = note
         updatedNote.title = title
         do {
             let saved = try store.save(updatedNote)
+            titleDraft = saved.title
+            titleAtEditStart = saved.title
             markdownDraft.refresh(for: saved, store: store)
             showCopyNotice("Title saved")
+            endTitleEditing()
         } catch {
-            titleDraft = note.title
+            titleDraft = titleAtEditStart
             // A failure in a success banner reads as a confirmation, and the
             // typed title has just been reverted under the user.
             showCopyNotice("Title couldn’t be saved", severity: .failure)
+            endTitleEditing()
         }
     }
 
@@ -1135,6 +1464,47 @@ struct MeetingDetailView: View {
             }
         } catch {
             markdownDraft.statusMessage = error.localizedDescription
+        }
+    }
+
+    /// File naming is a separate, explicit action from changing a note's
+    /// display title. The store owns collision handling and keeps the move
+    /// reversible through Finder, while this guard keeps unsaved or external
+    /// paths out of the menu action.
+    private var canRenameManagedFile: Bool {
+        guard let fileURL = note.fileURL
+            ?? store.notes.first(where: { $0.id == note.id })?.fileURL
+        else { return false }
+        let standardized = fileURL.standardizedFileURL
+        let hasManagedFile = standardized.deletingLastPathComponent()
+            == store.storageURL.standardizedFileURL
+            && FileManager.default.fileExists(atPath: standardized.path)
+        return DetailRenamePolicy.allowsFileRename(
+            hasMarkdownChanges: markdownDraft.hasChanges,
+            hasManagedFile: hasManagedFile
+        )
+    }
+
+    private func renameManagedFile() {
+        guard !markdownDraft.hasChanges else {
+            showCopyNotice(
+                DetailRenamePolicy.markdownDraftBlockedMessage,
+                severity: .info
+            )
+            return
+        }
+        do {
+            // A title save can publish just before this menu action runs.
+            // Use the store's freshest copy so an explicit file rename uses
+            // the title the user just committed, not the header's old value.
+            let current = store.notes.first(where: { $0.id == note.id }) ?? note
+            let saved = try store.renameManagedFile(for: current)
+            if markdownDraft.noteID == saved.id {
+                markdownDraft.refresh(for: saved, store: store)
+            }
+            showCopyNotice("File renamed to match title")
+        } catch {
+            showCopyNotice(error.localizedDescription, severity: .failure)
         }
     }
 
@@ -1204,7 +1574,9 @@ private struct RecordIntoNoteMenuItem: View {
         }
         .disabled(!canRecordIntoThisNote)
         .help(
-            "Appends the next recording to this note instead of creating a new one"
+            note.kind == .spoken
+                ? "Record a meeting into this note and keep its spoken words"
+                : "Appends the next recording to this note instead of creating a new one"
         )
     }
 
@@ -1219,11 +1591,22 @@ private struct RecordIntoNoteMenuItem: View {
 
 private struct DetailTabBar: View {
     @Binding var selection: DetailTab
+    let showsTranscript: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(
+        selection: Binding<DetailTab>,
+        showsTranscript: Bool = true
+    ) {
+        _selection = selection
+        self.showsTranscript = showsTranscript
+    }
 
     var body: some View {
         HStack(spacing: 0) {
-            ForEach(DetailTab.allCases) { tab in
+            ForEach(DetailTab.allCases.filter { tab in
+                showsTranscript || tab != .transcript
+            }) { tab in
                 Button {
                     withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
                         selection = tab
@@ -1278,6 +1661,10 @@ private struct EditorialSection<Content: View>: View {
 
 private struct TranscriptRow: View {
     let segment: TranscriptSegment
+    /// Adjacent rows often come from the same source. The timestamp keeps
+    /// its column even when this badge is hidden, so every row remains a
+    /// stable target for search, moments, and playback.
+    var showsSourceBadge = true
     var isFlagged = false
     var isPlaying = false
     /// Present only when kept audio exists; tapping plays this line.
@@ -1286,7 +1673,13 @@ private struct TranscriptRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 18) {
             VStack(alignment: .trailing, spacing: 7) {
-                SourceBadge(source: segment.source)
+                if showsSourceBadge {
+                    SourceBadge(source: segment.source)
+                } else {
+                    Color.clear
+                        .frame(height: 16)
+                        .accessibilityHidden(true)
+                }
                 Text(segment.timestamp)
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(.secondary)
@@ -1344,10 +1737,338 @@ private struct TranscriptRow: View {
     }
 }
 
-private extension MeetingNote {
-    var transcriptWordCount: Int {
-        transcript.reduce(0) { count, segment in
-            count + segment.text.split(whereSeparator: \.isWhitespace).count
+/// Keeps file-backed rename actions away from a Markdown draft that is based
+/// on the old file. Saving or reverting first gives the next rename a fresh
+/// baseline and avoids silently discarding typed Markdown.
+enum DetailRenamePolicy {
+    static let markdownDraftBlockedMessage =
+        "Save or revert Markdown edits before renaming"
+
+    static func allowsTitleRename(hasMarkdownChanges: Bool) -> Bool {
+        !hasMarkdownChanges
+    }
+
+    static func allowsFileRename(
+        hasMarkdownChanges: Bool,
+        hasManagedFile: Bool
+    ) -> Bool {
+        hasManagedFile && !hasMarkdownChanges
+    }
+}
+
+/// Builds visual breaks for long prose without changing the words a note
+/// contains. A generated summary that is short, sparse, or difficult to split
+/// safely remains one exact string; paragraphing is only a reading aid.
+enum DetailSummaryParagraphPolicy {
+    /// Summaries under this size stay visually identical to the existing
+    /// single Text. The threshold avoids introducing a break into a compact
+    /// explanation where the extra whitespace would be distracting.
+    static let minimumWordCount = 80
+    /// At this size three balanced paragraphs are easier to scan than two
+    /// dense blocks. The policy never forces a split without a safe sentence
+    /// boundary, so a model output with unusual punctuation stays untouched.
+    static let threeParagraphWordCount = 180
+    static let minimumWordsPerParagraph = 18
+
+    static func paragraphs(for text: String) -> [String] {
+        let totalWords = wordCount(in: text)
+        guard totalWords >= minimumWordCount else { return [text] }
+
+        let paragraphCount = totalWords >= threeParagraphWordCount ? 3 : 2
+        if let paragraphs = splitParagraphs(
+            in: text,
+            totalWords: totalWords,
+            paragraphCount: paragraphCount,
+            boundaries: sentenceBoundaries(in: text)
+        ) {
+            return paragraphs
         }
+
+        // Some generated summaries contain one long sentence joined by
+        // semicolons. Use those clause boundaries only after sentence
+        // segmentation could not produce the requested paragraph count.
+        return splitParagraphs(
+            in: text,
+            totalWords: totalWords,
+            paragraphCount: paragraphCount,
+            boundaries: semicolonBoundaries(in: text)
+        ) ?? [text]
+    }
+
+    private static func splitParagraphs(
+        in text: String,
+        totalWords: Int,
+        paragraphCount: Int,
+        boundaries: [String.Index]
+    ) -> [String]? {
+        guard boundaries.count >= paragraphCount - 1 else { return nil }
+
+        var splitPoints: [String.Index] = []
+        var start = text.startIndex
+        for splitNumber in 1..<paragraphCount {
+            let targetWordCount = totalWords * splitNumber / paragraphCount
+            let paragraphsAfterSplit = paragraphCount - splitNumber
+            let candidates = boundaries.filter { boundary in
+                guard boundary != text.endIndex,
+                      text.distance(from: start, to: boundary) > 0
+                else { return false }
+
+                let wordsBeforeBoundary = wordCount(in: text[start..<boundary])
+                let wordsAfterBoundary = wordCount(in: text[boundary..<text.endIndex])
+                return wordsBeforeBoundary >= minimumWordsPerParagraph
+                    && wordsAfterBoundary
+                        >= minimumWordsPerParagraph * paragraphsAfterSplit
+            }
+            guard let chosen = candidates.min(by: { lhs, rhs in
+                let lhsDistance = abs(
+                    wordCount(in: text[text.startIndex..<lhs])
+                        - targetWordCount
+                )
+                let rhsDistance = abs(
+                    wordCount(in: text[text.startIndex..<rhs])
+                        - targetWordCount
+                )
+                return lhsDistance < rhsDistance
+            }) else {
+                return nil
+            }
+            splitPoints.append(chosen)
+            start = chosen
+        }
+
+        var result: [String] = []
+        var pieceStart = text.startIndex
+        for splitPoint in splitPoints {
+            result.append(String(text[pieceStart..<splitPoint]))
+            pieceStart = splitPoint
+        }
+        result.append(String(text[pieceStart..<text.endIndex]))
+
+        guard result.count == paragraphCount,
+              result.allSatisfy({
+                  wordCount(in: $0) >= minimumWordsPerParagraph
+              }),
+              result.joined() == text
+        else {
+            return nil
+        }
+        return result
+    }
+
+    private static func wordCount(in text: String) -> Int {
+        text.split(whereSeparator: \.isWhitespace).count
+    }
+
+    private static func wordCount(in text: Substring) -> Int {
+        text.split(whereSeparator: \.isWhitespace).count
+    }
+
+    /// A break is accepted only after terminal punctuation, optional closing
+    /// quotes/brackets, and whitespace followed by an uppercase or numeric
+    /// sentence start. This deliberately favors leaving a dense paragraph
+    /// intact over splitting a decimal, abbreviation, or lowercase fragment.
+    private static func sentenceBoundaries(in text: String) -> [String.Index] {
+        var boundaries: [String.Index] = []
+        var index = text.startIndex
+
+        while index < text.endIndex {
+            let character = text[index]
+            guard ".!?".contains(character) else {
+                index = text.index(after: index)
+                continue
+            }
+
+            let previous = index > text.startIndex
+                ? text[text.index(before: index)]
+                : nil
+            let immediateNext = text.index(after: index) < text.endIndex
+                ? text[text.index(after: index)]
+                : nil
+            // Ellipses are not sentence boundaries on their own. A decimal
+            // point is also not a sentence boundary when digits surround it.
+            if character == ".",
+               previous == "." || immediateNext == "."
+            {
+                index = text.index(after: index)
+                continue
+            }
+            if isDecimalPoint(in: text, at: index) {
+                index = text.index(after: index)
+                continue
+            }
+
+            var afterPunctuation = text.index(after: index)
+            while afterPunctuation < text.endIndex,
+                  isClosingPunctuation(text[afterPunctuation])
+            {
+                afterPunctuation = text.index(after: afterPunctuation)
+            }
+
+            var afterWhitespace = afterPunctuation
+            while afterWhitespace < text.endIndex,
+                  text[afterWhitespace].isWhitespace
+            {
+                afterWhitespace = text.index(after: afterWhitespace)
+            }
+
+            if afterWhitespace == text.endIndex {
+                boundaries.append(afterWhitespace)
+            } else if afterWhitespace != afterPunctuation,
+                      startsSentence(text[afterWhitespace]),
+                      !isAbbreviation(in: text, at: index)
+            {
+                boundaries.append(afterWhitespace)
+            }
+
+            index = text.index(after: index)
+        }
+        return boundaries
+    }
+
+    /// Returns whitespace-separated clause starts after semicolons. These are
+    /// a deliberately weaker fallback than sentence boundaries, used only
+    /// when the prose has no usable sentence-level split.
+    private static func semicolonBoundaries(in text: String) -> [String.Index] {
+        var boundaries: [String.Index] = []
+        var index = text.startIndex
+
+        while index < text.endIndex {
+            guard text[index] == ";" else {
+                index = text.index(after: index)
+                continue
+            }
+
+            var afterWhitespace = text.index(after: index)
+            while afterWhitespace < text.endIndex,
+                  text[afterWhitespace].isWhitespace
+            {
+                afterWhitespace = text.index(after: afterWhitespace)
+            }
+            if afterWhitespace != text.endIndex {
+                boundaries.append(afterWhitespace)
+            }
+            index = text.index(after: index)
+        }
+        return boundaries
+    }
+
+    private static func startsSentence(_ character: Character) -> Bool {
+        character.isUppercase || character.isNumber
+    }
+
+    private static func isClosingPunctuation(_ character: Character) -> Bool {
+        ")]}»”’'\"".contains(character)
+    }
+
+    private static func isDecimalPoint(
+        in text: String,
+        at index: String.Index
+    ) -> Bool {
+        guard text[index] == ".",
+              index > text.startIndex,
+              text.index(after: index) < text.endIndex
+        else { return false }
+        return text[text.index(before: index)].isNumber
+            && text[text.index(after: index)].isNumber
+    }
+
+    private static let commonAbbreviations: Set<String> = [
+        "approx", "dept", "dr", "etc", "fig", "inc", "jan", "feb",
+        "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct",
+        "nov", "dec", "max", "min", "mr", "mrs", "ms", "mt", "no",
+        "prof", "sr", "jr", "st", "vs"
+    ]
+
+    private static func isAbbreviation(
+        in text: String,
+        at punctuation: String.Index
+    ) -> Bool {
+        guard text[punctuation] == "." else { return false }
+        let before = text[..<punctuation]
+        let token = before.split { character in
+            character.isWhitespace || character.isPunctuation
+        }.last.map { String($0).lowercased() }
+        if let token, commonAbbreviations.contains(token) {
+            return true
+        }
+
+        let trimmed = String(before)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return ["e.g", "i.e", "u.s", "a.m", "p.m"].contains { dotted in
+            trimmed == dotted || trimmed.hasSuffix(" " + dotted)
+        }
+    }
+}
+
+/// Decides which transcript rows need a repeated source badge. It works on
+/// the rows being rendered, not the full note, so a search result always
+/// introduces its own source context.
+enum TranscriptBadgeGroupingPolicy {
+    /// Transcript rows are already coalesced at a much shorter interval. This
+    /// larger presentation window keeps natural consecutive utterances light
+    /// while making a real pause visible again.
+    static let maximumAdjacentGap: TimeInterval = 15
+
+    static func visibleBadgeIDs(
+        in segments: [TranscriptSegment],
+        sessions: [MeetingSession] = []
+    ) -> Set<UUID> {
+        guard let first = segments.first else { return [] }
+        var visible: Set<UUID> = [first.id]
+        var previous = first
+        let sessionBoundaryOffsets = sessionBoundaryOffsets(for: sessions)
+
+        for segment in segments.dropFirst() {
+            let crossesSessionBoundary = sessionBoundaryOffsets.contains { boundary in
+                previous.startTime < boundary
+                    && segment.startTime >= boundary
+            }
+            let startsAfterPrevious = segment.startTime >= previous.startTime
+            let previousEnd = previous.startTime + max(0, previous.duration)
+            let gap = segment.startTime - previousEnd
+            let meaningfulGap = !startsAfterPrevious || gap > maximumAdjacentGap
+            if segment.source != previous.source
+                || meaningfulGap
+                || crossesSessionBoundary
+            {
+                visible.insert(segment.id)
+            }
+            previous = segment
+        }
+        return visible
+    }
+
+    /// Session IDs are intentionally absent from the current model. Saved
+    /// transcript lines use the same cumulative-duration clock as Markdown's
+    /// session dividers, so those offsets are the only truthful boundary
+    /// signal available to this presentation policy.
+    private static func sessionBoundaryOffsets(
+        for sessions: [MeetingSession]
+    ) -> [TimeInterval] {
+        guard sessions.count > 1 else { return [] }
+        var offsets: [TimeInterval] = []
+        var elapsed: TimeInterval = 0
+        for session in sessions.dropLast() {
+            elapsed += session.duration
+            offsets.append(elapsed)
+        }
+        return offsets
+    }
+}
+
+private extension MeetingNote {
+    /// Spoken notes store their original wording in `summary`, while a
+    /// recorded meeting stores its words in transcript segments. Counting
+    /// the appropriate source keeps the header honest for both shapes.
+    var detailContentWordCount: Int {
+        let source: String
+        if kind == .spoken,
+           !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            source = summary
+        } else {
+            source = transcript.map(\.text).joined(separator: " ")
+        }
+        return source.split(whereSeparator: \.isWhitespace).count
     }
 }

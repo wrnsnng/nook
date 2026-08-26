@@ -39,6 +39,7 @@ final class AppModel: ObservableObject {
     let calendar: CalendarContextService
     let prep: PrepBriefController
     let recovery: RecordingRecovery
+    let audioInputCheck: AudioInputCheckService
     private let dictationIndicator = DictationIndicatorController()
     private var openLibraryAction: (@MainActor () -> Void)?
     private var openWelcomeAction: (@MainActor () -> Void)?
@@ -55,7 +56,14 @@ final class AppModel: ObservableObject {
         let markdownDraft = MarkdownDraftController()
         let personalNotesDraft = PersonalNotesDraftController()
         let detector = MeetingDetector()
-        let meeting = MeetingCoordinator(store: store, detector: detector)
+        let audioInputCheck = AudioInputCheckService()
+        let meeting = MeetingCoordinator(
+            store: store,
+            detector: detector,
+            prepareForAudioCapture: {
+                await audioInputCheck.stop()
+            }
+        )
         let notifications = MeetingNotificationService(meeting: meeting)
         self.appearance = appearance
         self.store = store
@@ -66,7 +74,10 @@ final class AppModel: ObservableObject {
         self.panel = NotchPanelCoordinator(meeting: meeting)
         self.notifications = notifications
         let dictation = DictationCoordinator(
-            localeIdentifier: meeting.localeIdentifier
+            localeIdentifier: meeting.localeIdentifier,
+            prepareForAudioCapture: {
+                await audioInputCheck.stop()
+            }
         )
         let quickNote = QuickNoteController(store: store)
         self.recovery = RecordingRecovery(store: store)
@@ -78,6 +89,7 @@ final class AppModel: ObservableObject {
         meeting.calendarContext = calendar
         let prep = PrepBriefController(store: store, calendar: calendar)
         self.prep = prep
+        self.audioInputCheck = audioInputCheck
         calendar.onUpcomingEvent = { [weak notifications, weak store] event in
             // The notification's Record action routes back through
             // MeetingNotificationService, so nothing starts without a tap.
@@ -169,8 +181,20 @@ final class AppModel: ObservableObject {
             .removeDuplicates()
             .dropFirst()
             .sink { [weak self] phase in
+                if phase.isAudioCaptureActive {
+                    self?.stopAudioInputCheck()
+                }
                 guard !phase.isRecording else { return }
                 self?.closeLiveNotes()
+            }
+            .store(in: &cancellables)
+
+        dictation.$phase
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] phase in
+                guard phase.isActive else { return }
+                self?.stopAudioInputCheck()
             }
             .store(in: &cancellables)
 
@@ -204,6 +228,23 @@ final class AppModel: ObservableObject {
         .store(in: &cancellables)
 
         detector.start()
+    }
+
+    /// The diagnostic stream is deliberately composed at the app boundary so
+    /// it cannot start beside a meeting or dictation capture session.
+    func startAudioInputCheck() {
+        audioInputCheck.start(
+            conflict: AudioInputCheckService.conflict(
+                meetingIsActive: meeting.phase.isAudioCaptureActive,
+                dictationIsActive: dictation.phase.isActive
+            )
+        )
+    }
+
+    func stopAudioInputCheck() {
+        Task { @MainActor [weak self] in
+            await self?.audioInputCheck.stop()
+        }
     }
 
     func installWindowActions(
@@ -374,5 +415,16 @@ final class AppModel: ObservableObject {
     private func promoteToWindowedApp() {
         guard NSApp.activationPolicy() != .regular else { return }
         NSApp.setActivationPolicy(.regular)
+    }
+}
+
+private extension MeetingPhase {
+    var isAudioCaptureActive: Bool {
+        switch self {
+        case .recording, .processing:
+            true
+        case .idle, .detected, .completed, .failed:
+            false
+        }
     }
 }

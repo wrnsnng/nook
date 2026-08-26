@@ -285,6 +285,14 @@ struct QuickNoteView: View {
     /// title, then the engine's, which is a privacy statement and so goes last.
     private var controlRow: some View {
         ViewThatFits(in: .horizontal) {
+            controls(
+                BarDetail(
+                    showsUtilityTitles: true,
+                    status: .full
+                )
+            )
+            // Keep the compact composer focused. Labels are offered only when
+            // the whole bar can carry them without forcing the editor shorter.
             controls(BarDetail(status: .full))
             controls(BarDetail(status: .short))
             controls(BarDetail(showsActionsTitle: false, status: .short))
@@ -304,6 +312,7 @@ struct QuickNoteView: View {
     private struct BarDetail {
         var showsEngineTitle = true
         var showsActionsTitle = true
+        var showsUtilityTitles = false
         var status: StatusDetail = .full
     }
 
@@ -317,13 +326,13 @@ struct QuickNoteView: View {
         HStack(spacing: NookSpacing.xSmall) {
             engineControl(showsTitle: detail.showsEngineTitle)
             actionsMenu(showsTitle: detail.showsActionsTitle)
-            checklistButton
-            filingButton
-            handsFreeToggle
+            checklistButton(showsTitle: detail.showsUtilityTitles)
+            filingButton(showsTitle: detail.showsUtilityTitles)
+            handsFreeToggle(showsTitle: detail.showsUtilityTitles)
             Spacer(minLength: NookSpacing.small)
             status(detail.status)
             Spacer(minLength: NookSpacing.small)
-            discardButton
+            discardButton(showsTitle: detail.showsUtilityTitles)
             doneButton
         }
     }
@@ -353,6 +362,8 @@ struct QuickNoteView: View {
                             Label(engine.title, systemImage: symbol(for: engine))
                         }
                     }
+                    .help(engine.detail)
+                    .accessibilityValue(engine.detail)
                 }
             } label: {
                 engineLabel(showsTitle: showsTitle)
@@ -362,6 +373,8 @@ struct QuickNoteView: View {
             .fixedSize()
             .help(note.engine.detail)
             .accessibilityLabel("Assistant: \(note.engine.title)")
+            .accessibilityValue(note.engine.detail)
+            .accessibilityHint("Choose which assistant runs note actions.")
         } else if !note.availableEngines.isEmpty {
             // With one engine there is no choice to offer. A disabled menu
             // would present a decision that does not exist, which reads as
@@ -372,6 +385,8 @@ struct QuickNoteView: View {
                 .fixedSize()
                 .help(note.engine.detail)
                 .accessibilityLabel("Assistant: \(note.engine.title)")
+                .accessibilityValue(note.engine.detail)
+                .accessibilityHint("Only one assistant is available.")
         }
     }
 
@@ -421,7 +436,9 @@ struct QuickNoteView: View {
             .fixedSize()
             .disabled(!canAct)
             .help(actionsHelp)
-            .accessibilityLabel("Actions")
+            .accessibilityLabel("Note actions")
+            .accessibilityValue("Using \(note.engine.title)")
+            .accessibilityHint("Choose an action to change or add to this note.")
         }
     }
 
@@ -456,11 +473,28 @@ struct QuickNoteView: View {
             + "\(note.engine.title)."
     }
 
-    private var checklistButton: some View {
+    @ViewBuilder
+    private func utilityLabel(
+        _ title: String,
+        systemImage: String,
+        showsTitle: Bool
+    ) -> some View {
+        if showsTitle {
+            Label(title, systemImage: systemImage)
+        } else {
+            Image(systemName: systemImage)
+        }
+    }
+
+    private func checklistButton(showsTitle: Bool) -> some View {
         Button {
             note.insertChecklistLine()
         } label: {
-            Image(systemName: "checklist")
+            utilityLabel(
+                "Checklist",
+                systemImage: "checklist",
+                showsTitle: showsTitle
+            )
                 .frame(height: Self.controlLabelHeight)
         }
         .buttonStyle(.bordered)
@@ -475,22 +509,28 @@ struct QuickNoteView: View {
                 + "."
         )
         .accessibilityLabel("Start a checklist line")
+        .accessibilityHint("Inserts a checklist line at the cursor.")
     }
 
     /// Files the buffer somewhere deliberate instead of promotion being a
     /// discovery exercise later. A button rather than a menu holding one item,
     /// which only added a click in front of the choice that mattered.
-    private var filingButton: some View {
+    private func filingButton(showsTitle: Bool) -> some View {
         Button {
             showsFilingPicker = true
         } label: {
-            Image(systemName: "text.badge.plus")
+            utilityLabel(
+                "File",
+                systemImage: "text.badge.plus",
+                showsTitle: showsTitle
+            )
                 .frame(height: Self.controlLabelHeight)
         }
         .buttonStyle(.bordered)
         .disabled(note.text.isEmpty)
         .help("Add to meeting, or open in Library.")
         .accessibilityLabel("Add to meeting, or open in Library")
+        .accessibilityHint("Save this quick note to a recent meeting or open it in Library.")
         .popover(isPresented: $showsFilingPicker, arrowEdge: .bottom) {
             filingPicker
         }
@@ -499,10 +539,14 @@ struct QuickNoteView: View {
     /// Only offered when dictation is on. A toggle for something that cannot
     /// run is a promise the pad has no way to keep.
     @ViewBuilder
-    private var handsFreeToggle: some View {
+    private func handsFreeToggle(showsTitle: Bool) -> some View {
         if dictation.isEnabled {
             Toggle(isOn: $note.isContinuous) {
-                Image(systemName: "waveform.badge.mic")
+                utilityLabel(
+                    "Hands-free",
+                    systemImage: "waveform.badge.mic",
+                    showsTitle: showsTitle
+                )
                     .frame(height: Self.controlLabelHeight)
             }
             .toggleStyle(.button)
@@ -511,14 +555,20 @@ struct QuickNoteView: View {
                 "Hands-free. Keep listening after each thought until you turn this off."
             )
             .accessibilityLabel("Hands-free")
+            .accessibilityValue(note.isContinuous ? "On" : "Off")
+            .accessibilityHint("Keeps listening after each thought until turned off.")
         }
     }
 
-    private var discardButton: some View {
+    private func discardButton(showsTitle: Bool) -> some View {
         Button {
             note.discardWithConfirmation()
         } label: {
-            Image(systemName: "trash")
+            utilityLabel(
+                "Discard",
+                systemImage: "trash",
+                showsTitle: showsTitle
+            )
                 .frame(height: Self.controlLabelHeight)
         }
         .buttonStyle(.bordered)
@@ -533,6 +583,7 @@ struct QuickNoteView: View {
                 + "."
         )
         .accessibilityLabel("Discard this note")
+        .accessibilityHint("Remove this quick note. Longer notes ask for confirmation.")
     }
 
     /// Saves and closes. Return belongs to the editor, so this is on

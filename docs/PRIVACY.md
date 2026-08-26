@@ -27,8 +27,23 @@ user holds the dictation shortcut
   → text inserted into the focused text field
 ```
 
+The Listening pane has an explicit **Test meeting audio** path for checking
+inputs before a meeting:
+
+```text
+user starts the audio check
+  → isolated ScreenCaptureKit microphone and system-audio outputs
+  → live levels shown in Settings
+  → user stops the check, or Settings and any active capture ends it
+```
+
+This check has no recording output or file URL. It does not save audio, run
+speech recognition, call a model, create recovery artifacts, write an event
+log, or hold a sleep assertion. The levels stay in memory on this Mac and the
+stream is never shared with the meeting or dictation pipelines.
+
 There is no Nook account, meeting bot, sync service, advertising SDK, analytics
-SDK, or application server in either path.
+SDK, or application server in any of these paths.
 
 ## Meeting detection
 
@@ -103,6 +118,12 @@ detected-meeting prompt. It does not hide the macOS recording indicator. The
 ScreenCaptureKit stream includes a 2×2-pixel, one-frame-per-second video track
 because the capture API requires a stream; the track is not used as useful
 screen video and its temporary container is deleted after processing.
+
+The separate **Test meeting audio** control in Settings starts only an
+audio-meter stream. It asks for the same microphone and Screen & System Audio
+Recording permissions, but it has no recording output, transcript, summary, or
+stored artifact. It stops when the user presses Stop, leaves Settings, starts a
+meeting, or starts dictation.
 
 Pausing removes the recording output and stops forwarding audio to live
 transcription until the user resumes.

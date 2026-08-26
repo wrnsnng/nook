@@ -25,14 +25,14 @@ struct SettingsView: View {
     @EnvironmentObject private var updater: NookUpdateController
     @EnvironmentObject private var dictation: DictationCoordinator
     @EnvironmentObject private var quickNote: QuickNoteController
-    @EnvironmentObject private var recovery: RecordingRecovery
     @EnvironmentObject private var calendar: CalendarContextService
     @EnvironmentObject private var shortcuts: ShortcutStore
+    @EnvironmentObject private var audioInputCheck: AudioInputCheckService
     @State private var pendingStorageURL: URL?
     @State private var storageMessage: String?
-    @State private var orphanPendingDeletion: OrphanedRecording?
     @State private var selectedPane: SettingsPane
     @State private var accessibilityGranted = TextInsertionService.isTrusted
+    @State private var showingRestoreAllDefaultsConfirmation = false
     /// Nil until the bundle's signature has been read, which happens off the
     /// main thread the first time About is shown.
     @State private var signature: NookCodeSignature?
@@ -175,9 +175,66 @@ struct SettingsView: View {
                 Text("Recognition runs with Apple’s on-device speech model. You can change the language between meetings.")
             }
 
+            audioInputCheckSection
             storageSection
         }
         .formStyle(.grouped)
+        .onDisappear {
+            AppModel.shared.stopAudioInputCheck()
+        }
+    }
+
+    private var audioInputCheckSection: some View {
+        Section {
+            AudioInputCheckMeterRow(
+                label: AudioInputCheckTrack.microphone.label,
+                level: audioInputCheck.levels.microphone
+            )
+            AudioInputCheckMeterRow(
+                label: AudioInputCheckTrack.meeting.label,
+                level: audioInputCheck.levels.meeting
+            )
+
+            HStack {
+                switch audioInputCheck.phase {
+                case .starting:
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Starting test")
+                case .stopping:
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Stopping test")
+                default:
+                    EmptyView()
+                }
+
+                Spacer(minLength: NookSpacing.small)
+
+                if audioInputCheck.isStopAvailable {
+                    Button("Stop Test") {
+                        AppModel.shared.stopAudioInputCheck()
+                    }
+                    .disabled(audioInputCheck.phase == .stopping)
+                } else {
+                    Button("Start Test") {
+                        AppModel.shared.startAudioInputCheck()
+                    }
+                    .disabled(audioInputCheck.phase == .starting)
+                }
+            }
+
+            if let errorMessage = audioInputCheck.errorMessage {
+                Label(errorMessage, systemImage: "exclamationmark.triangle")
+                    .font(NookType.caption)
+                    .foregroundStyle(NookPalette.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        } header: {
+            Label("Test meeting audio", systemImage: "waveform.and.mic")
+        } footer: {
+            Text("Nook briefly listens to your microphone and meeting audio to show these levels. It does not record, save audio, transcribe speech, or send anything. Stop a meeting or dictation before starting the test.")
+        }
     }
 
     /// Where what Nook hears ends up, and for how long. Filed with listening
@@ -250,185 +307,21 @@ struct SettingsView: View {
 
     private var dictationPane: some View {
         Form {
-            Section {
-                Toggle("Dictate into any text field", isOn: $dictation.isEnabled)
-
-                if dictation.isEnabled {
-                LabeledContent("Shortcut") {
-                    ShortcutRecorderView(
-                        shortcut: dictation.shortcut,
-                        onChange: { dictation.setShortcut($0) },
-                        accessibilityLabel: "Dictation shortcut"
-                    )
-                }
-
-                    Picker("Behaviour", selection: $dictation.activation) {
-                        ForEach(DictationActivation.allCases) { option in
-                            Text(option.title).tag(option)
-                        }
-                    }
-
-                    if let error = dictation.shortcutError {
-                        Label(error, systemImage: "exclamationmark.triangle.fill")
-                            .font(NookType.caption)
-                            .foregroundStyle(NookPalette.warning)
-                    }
-                }
-            } header: {
-                Label("Voice typing", systemImage: "keyboard")
-            } footer: {
-                Text(
-                    dictation.isEnabled
-                        ? "\(dictation.activation.detail) Your words appear as you speak, then land in whichever text field has focus."
-                        : "Hold a shortcut anywhere on your Mac, speak, and Nook types it into the field you are already in."
-                )
-            }
-
-            // Switched off, this pane used to be a single toggle in an empty
-            // window, which reads as a feature that failed to load rather than
-            // one waiting to be turned on. These two rows say what the switch
-            // is actually offering.
+            voiceTypingSection
             if !dictation.isEnabled {
-                Section {
-                    PrivacyFeatureRow(
-                        symbol: "text.cursor",
-                        title: "Your words, in any field",
-                        detail: "A message, a search box, a document. Speech is recognised on this Mac, and only settled words are typed."
-                    )
-                    PrivacyFeatureRow(
-                        symbol: "note.text",
-                        title: "Somewhere for a stray thought",
-                        detail: "With no text field focused, the same shortcut opens a quick note instead of doing nothing."
-                    )
-                } header: {
-                    Label("What this adds", systemImage: "wand.and.stars")
-                } footer: {
-                    Text("Dictation is off until you turn it on, and asks for Accessibility access only the first time you use it. Meeting notes work without it.")
-                }
+                dictationOffSection
             }
 
             if dictation.isEnabled {
-                Section {
-                    Picker("Style", selection: $dictation.style) {
-                        ForEach(DictationStyle.allCases) { option in
-                            Label(option.title, systemImage: option.symbol)
-                                .tag(option)
-                        }
-                    }
-
-                    Text(dictation.style.detail)
-                        .font(NookType.caption)
-                        .foregroundStyle(.secondary)
-
-                    if dictation.style == .custom {
-                        TextEditor(text: $dictation.customPrompt)
-                            .font(NookType.caption)
-                            .frame(minHeight: 68)
-                            .scrollContentBackground(.hidden)
-                            .padding(NookSpacing.small)
-                            .background(NookPalette.paper, in: .rect(cornerRadius: NookRadius.control))
-                            .accessibilityLabel("Custom dictation instruction")
-                    }
-
-                    if dictation.style.usesLanguageModel, !isAppleIntelligenceAvailable {
-                        Label(
-                            "Apple Intelligence is unavailable, so Nook will type your words unchanged.",
-                            systemImage: "info.circle"                        )
-                        .font(NookType.caption)
-                        .foregroundStyle(.secondary)
-                    }
-                } header: {
-                    Label("How Nook writes it", systemImage: "wand.and.stars")
-                } footer: {
-                    Text("Nook checks every rewrite against what you actually said. If the wording drifts too far, your own words are typed instead. A dictated question is never answered, only written down.")
-                }
-
+                dictationWritingSection
                 PerAppDictationStylesSection()
-
-                Section {
-                    Picker("Note actions run", selection: engineSelection) {
-                        ForEach(quickNote.availableEngines) { engine in
-                            Text(
-                                engine.provider.map {
-                                    "\(engine.title) (sends to \($0))"
-                                } ?? engine.title
-                            )
-                            .tag(engine)
-                        }
-                    }
-                    .disabled(quickNote.availableEngines.count < 2)
-
-                    if let provider = quickNote.engine.provider {
-                        HStack(alignment: .top, spacing: NookSpacing.small) {
-                            Image(systemName: "arrow.up.forward.app.fill")
-                                .foregroundStyle(NookPalette.warning)
-                                .accessibilityHidden(true)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Notes are sent to \(provider)")
-                                    .font(NookType.caption.weight(.semibold))
-                                Text("Every note you run an action on leaves this Mac. Nothing else does, and nothing is sent until you use an action.")
-                                    .font(NookType.caption)
-                                    .foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                            Spacer(minLength: 0)
-                            Button("Keep on this Mac") {
-                                quickNote.revokeConsent(for: quickNote.engine)
-                            }
-                        }
-                        .padding(.vertical, 2)
-                    }
-                } header: {
-                    Label("Spoken notes", systemImage: "note.text")
-                } footer: {
-                    Text(
-                        quickNote.availableEngines.count < 2
-                            ? "Tidy up, summarise, and find actions run with Apple Intelligence on this Mac. Install and sign into Claude Code or the Codex CLI to use those instead, with the subscription you already have."
-                            : "This is the default for every new note. You can still change it for a single note in the note window."
-                    )
-                }
-
-                Section {
-                    HStack(alignment: .top, spacing: NookSpacing.medium) {
-                        Image(
-                            systemName: accessibilityGranted
-                                ? "checkmark.circle.fill"
-                                : "exclamationmark.circle.fill"
-                        )
-                        .foregroundStyle(
-                            accessibilityGranted
-                                ? NookPalette.success
-                                : NookPalette.warning
-                        )
-                        .accessibilityHidden(true)
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(
-                                accessibilityGranted
-                                    ? "Accessibility access allowed"
-                                    : "Accessibility access required"
-                            )
-                            .font(NookType.caption.weight(.semibold))
-                            Text("Typing into another app is something only macOS can permit. Nook uses it to place your dictated text and nothing else.")
-                                .font(NookType.caption)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-
-                        Spacer(minLength: 0)
-
-                        if !accessibilityGranted {
-                            Button("Allow…") {
-                                dictation.requestAccessibilityPermission()
-                                dictation.openAccessibilitySettings()
-                            }
-                        }
-                    }
-                    .padding(.vertical, 2)
-                } header: {
-                    Label("Permission", systemImage: "hand.raised.fill")
-                }
+                dictationPermissionSection
             }
+
+            // Note actions are optional assistance for a saved quick note, not
+            // part of recognition. Keeping this section outside the enabled
+            // branch lets someone choose an assistant without enabling typing.
+            noteActionsSection
         }
         .formStyle(.grouped)
         .onReceive(
@@ -446,47 +339,292 @@ struct SettingsView: View {
         }
     }
 
+    private var voiceTypingSection: some View {
+        Section {
+            Toggle("Dictate into any text field", isOn: $dictation.isEnabled)
+
+            if dictation.isEnabled {
+                LabeledContent("Shortcut") {
+                    ShortcutRecorderView(
+                        shortcut: dictation.shortcut,
+                        onChange: { dictation.setShortcut($0) },
+                        accessibilityLabel: "Dictation shortcut"
+                    )
+                }
+
+                Picker("Behaviour", selection: $dictation.activation) {
+                    ForEach(DictationActivation.allCases) { option in
+                        Text(option.title).tag(option)
+                    }
+                }
+
+                if let error = dictation.shortcutError {
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .font(NookType.caption)
+                        .foregroundStyle(NookPalette.warning)
+                }
+            }
+        } header: {
+            Label("Voice typing", systemImage: "keyboard")
+        } footer: {
+            Text(
+                dictation.isEnabled
+                    ? "\(dictation.activation.detail) Your words appear as you speak, then land in whichever text field has focus."
+                    : "Hold a shortcut anywhere on your Mac, speak, and Nook types it into the field you are already in."
+            )
+        }
+    }
+
+    /// Switched off, this pane used to be a single toggle in an empty window,
+    /// which reads as a feature that failed to load rather than one waiting to
+    /// be turned on. These two rows say what the switch is actually offering.
+    private var dictationOffSection: some View {
+        Section {
+            PrivacyFeatureRow(
+                symbol: "text.cursor",
+                title: "Your words, in any field",
+                detail: "A message, a search box, a document. Speech is recognised on this Mac, and only settled words are typed."
+            )
+            PrivacyFeatureRow(
+                symbol: "note.text",
+                title: "Somewhere for a stray thought",
+                detail: "With no text field focused, the same shortcut opens a quick note instead of doing nothing."
+            )
+        } header: {
+            Label("What this adds", systemImage: "wand.and.stars")
+        } footer: {
+            Text("Dictation is off until you turn it on, and asks for Accessibility access only the first time you use it. Meeting notes work without it.")
+        }
+    }
+
+    private var dictationWritingSection: some View {
+        Section {
+            Picker("Style", selection: $dictation.style) {
+                ForEach(DictationStyle.allCases) { option in
+                    Label(option.title, systemImage: option.symbol)
+                        .tag(option)
+                }
+            }
+
+            Text(dictation.style.detail)
+                .font(NookType.caption)
+                .foregroundStyle(.secondary)
+
+            if dictation.style == .custom {
+                TextEditor(text: $dictation.customPrompt)
+                    .font(NookType.caption)
+                    .frame(minHeight: 68)
+                    .scrollContentBackground(.hidden)
+                    .padding(NookSpacing.small)
+                    .background(
+                        NookPalette.paper,
+                        in: .rect(cornerRadius: NookRadius.control)
+                    )
+                    .accessibilityLabel("Custom dictation instruction")
+            }
+
+            if dictation.style.usesLanguageModel, !isAppleIntelligenceAvailable {
+                Label(
+                    "Apple Intelligence is unavailable, so Nook will type your words unchanged.",
+                    systemImage: "info.circle"
+                )
+                .font(NookType.caption)
+                .foregroundStyle(.secondary)
+            }
+        } header: {
+            Label("How Nook writes it", systemImage: "wand.and.stars")
+        } footer: {
+            Text("Nook checks every rewrite against what you actually said. If the wording drifts too far, your own words are typed instead. A dictated question is never answered, only written down.")
+        }
+    }
+
+    private var dictationPermissionSection: some View {
+        Section {
+            HStack(alignment: .top, spacing: NookSpacing.medium) {
+                Image(
+                    systemName: accessibilityGranted
+                        ? "checkmark.circle.fill"
+                        : "exclamationmark.circle.fill"
+                )
+                .foregroundStyle(
+                    accessibilityGranted
+                        ? NookPalette.success
+                        : NookPalette.warning
+                )
+                .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(
+                        accessibilityGranted
+                            ? "Accessibility access allowed"
+                            : "Accessibility access required"
+                    )
+                    .font(NookType.caption.weight(.semibold))
+                    Text("Typing into another app is something only macOS can permit. Nook uses it to place your dictated text and nothing else.")
+                        .font(NookType.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 0)
+
+                if !accessibilityGranted {
+                    Button("Allow…") {
+                        dictation.requestAccessibilityPermission()
+                        dictation.openAccessibilitySettings()
+                    }
+                }
+            }
+            .padding(.vertical, 2)
+        } header: {
+            Label("Permission", systemImage: "hand.raised.fill")
+        }
+    }
+
+    private var noteActionsSection: some View {
+        Section {
+            if quickNote.availableEngines.isEmpty {
+                Label(
+                    "No assistant on this Mac. Turn on Apple Intelligence in System Settings, or install Claude Code or Codex.",
+                    systemImage: "info.circle"
+                )
+                .font(NookType.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Picker("Assistant", selection: engineSelection) {
+                    ForEach(quickNote.availableEngines) { engine in
+                        Text(
+                            engine.provider.map {
+                                "\(engine.title) (sends to \($0))"
+                            } ?? engine.title
+                        )
+                        .tag(engine)
+                    }
+                }
+                .disabled(quickNote.availableEngines.count < 2)
+                .help(quickNote.engine.detail)
+                .accessibilityLabel("Assistant for note actions")
+                .accessibilityValue(
+                    "\(quickNote.engine.title). \(quickNote.engine.detail)"
+                )
+
+                Text(quickNote.engine.detail)
+                    .font(NookType.caption)
+                    .foregroundStyle(
+                        quickNote.engine.leavesTheMac
+                            ? AnyShapeStyle(NookPalette.warning)
+                            : AnyShapeStyle(.secondary)
+                    )
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("Selected assistant")
+                    .accessibilityValue(
+                        "\(quickNote.engine.title). \(quickNote.engine.detail)"
+                    )
+
+                if let provider = quickNote.engine.provider {
+                    HStack(alignment: .top, spacing: NookSpacing.small) {
+                        Image(systemName: "arrow.up.forward.app.fill")
+                            .foregroundStyle(NookPalette.warning)
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Notes are sent to \(provider)")
+                                .font(NookType.caption.weight(.semibold))
+                            Text("Every note you run an action on leaves this Mac. Nothing else does, and nothing is sent until you use an action.")
+                                .font(NookType.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 0)
+                        Button("Keep on this Mac") {
+                            quickNote.revokeConsent(for: quickNote.engine)
+                        }
+                        .help("Switch note actions back to the on-device assistant.")
+                    }
+                    .padding(.vertical, 2)
+                    .accessibilityElement(children: .contain)
+                }
+            }
+        } header: {
+            Label("Note actions", systemImage: "wand.and.sparkles")
+        } footer: {
+            Text(noteActionsFooter)
+        }
+    }
+
+    private var noteActionsFooter: String {
+        guard !quickNote.availableEngines.isEmpty else {
+            return "Turn on Apple Intelligence in System Settings, or install Claude Code or Codex, to use note actions."
+        }
+
+        return "This is the default assistant for every new note. \(quickNote.engine.detail) You can still change it for a single note in the quick note window."
+    }
+
     private var isAppleIntelligenceAvailable: Bool {
         DictationRefiner.isModelAvailable
     }
 
-    /// Every Nook shortcut in one pane, each recorded the same way dictation
-    /// is: press the combination you want.
+    /// Every Nook shortcut in one pane, grouped by the job it serves. The
+    /// catalog owns the section membership and row copy, while this view owns
+    /// only presentation and the one-way route to Dictation settings.
     private var keyboardPane: some View {
         Form {
-            Section {
-                ForEach(NookShortcutID.allCases) { id in
-                    LabeledContent(id.title) {
-                        HStack(spacing: NookSpacing.small) {
-                            if shortcuts.isOverridden(id) {
-                                Button {
-                                    shortcuts.set(nil, for: id)
-                                } label: {
-                                    Image(systemName: "arrow.counterclockwise")
-                                        .font(NookType.caption)
-                                }
-                                .buttonStyle(.borderless)
-                                .help("Restore the default, "
-                                    + id.defaultShortcut.spokenDescription + ".")
-                                .accessibilityLabel(
-                                    "Reset \(id.title) to default"
-                                )
-                            }
-                            ShortcutRecorderView(
-                                shortcut: shortcuts.binding(for: id),
-                                onChange: { shortcuts.set($0, for: id) },
-                                accessibilityLabel: "\(id.title) shortcut"
-                            )
-                        }
+            ForEach(NookShortcutSection.allCases) { section in
+                Section {
+                    ForEach(section.shortcutIDs) { id in
+                        keyboardShortcutRow(for: id)
                     }
+                } header: {
+                    Label(section.title, systemImage: section.symbol)
+                } footer: {
+                    Text(section.footer)
                 }
-            } header: {
-                Label("Shortcuts", systemImage: "command")
-            } footer: {
-                Text(shortcutsFooter)
             }
 
-            if !shortcuts.conflicts().isEmpty || hasDictationConflict {
+            dictationShortcutReference
+
+            Section {
+                HStack(alignment: .top, spacing: NookSpacing.medium) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Restore keyboard shortcuts")
+                            .font(NookType.bodyEmphasized)
+                        Text(
+                            "Return every Nook shortcut to its original binding."
+                        )
+                        .font(NookType.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Spacer(minLength: NookSpacing.small)
+
+                    Button("Restore All Defaults", role: .destructive) {
+                        guard shortcuts.hasOverrides else { return }
+                        showingRestoreAllDefaultsConfirmation = true
+                    }
+                    .disabled(!shortcuts.hasOverrides)
+                    .help(
+                        shortcuts.hasOverrides
+                            ? "Restore every keyboard shortcut to its default."
+                            : "All keyboard shortcuts already use their defaults."
+                    )
+                    .accessibilityLabel("Restore all keyboard shortcut defaults")
+                    .accessibilityValue(
+                        shortcuts.hasOverrides
+                            ? "\(shortcuts.overrides.count) custom shortcuts"
+                            : "All shortcuts use their defaults"
+                    )
+                }
+                .padding(.vertical, NookSpacing.xSmall)
+            } header: {
+                Label("Reset", systemImage: "arrow.counterclockwise")
+            } footer: {
+                Text(
+                    "This affects only Nook's shortcuts. It does not change your Mac's keyboard settings."
+                )
+            }
+
+            if !shortcutConflictLines().isEmpty {
                 Section {
                     ForEach(shortcutConflictLines(), id: \.self) { line in
                         Label(line, systemImage: "exclamationmark.triangle")
@@ -502,15 +640,148 @@ struct SettingsView: View {
                 }
             }
         }
+        .formStyle(.grouped)
+        .confirmationDialog(
+            "Restore all keyboard shortcut defaults?",
+            isPresented: $showingRestoreAllDefaultsConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Restore All Defaults", role: .destructive) {
+                guard shortcuts.hasOverrides else { return }
+                shortcuts.resetAll()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(
+                "This removes every custom keyboard shortcut and restores Nook's defaults."
+            )
+        }
+    }
+
+    /// A row is deliberately not another recorder. Dictation owns its
+    /// modifier-only validation and persistence in Dictation settings, so
+    /// Keyboard settings only shows the current value and provides a route.
+    private var dictationShortcutReference: some View {
+        Section {
+            HStack(alignment: .top, spacing: NookSpacing.medium) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Dictation")
+                        .font(NookType.bodyEmphasized)
+                    Text("Voice typing uses this shortcut anywhere on your Mac.")
+                        .font(NookType.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: NookSpacing.small)
+
+                VStack(alignment: .trailing, spacing: NookSpacing.xSmall) {
+                    Text(dictation.shortcut.displayString)
+                        .font(NookType.control.monospaced())
+                        .accessibilityLabel("Dictation shortcut")
+                        .accessibilityValue(dictation.shortcut.displayString)
+
+                    Button("Open Dictation Settings") {
+                        selectedPane = .dictation
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Change the Dictation shortcut and voice typing settings.")
+                }
+            }
+            .padding(.vertical, NookSpacing.xSmall)
+        } header: {
+            Label("Voice typing", systemImage: "mic.and.signal.meter")
+        } footer: {
+            Text(
+                "Dictation can use a global shortcut, including modifiers held on their own. Change it in the Dictation pane."
+            )
+        }
+    }
+
+    private func keyboardShortcutRow(for id: NookShortcutID) -> some View {
+        VStack(alignment: .leading, spacing: NookSpacing.small) {
+            HStack(alignment: .top, spacing: NookSpacing.medium) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(id.title)
+                        .font(NookType.bodyEmphasized)
+                    Text(id.detail)
+                        .font(NookType.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                HStack(alignment: .top, spacing: NookSpacing.small) {
+                    Text(id.scopeLabel)
+                        .font(NookType.metadata)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("\(id.title) scope")
+                        .accessibilityValue(id.scopeDescription)
+
+                    if shortcuts.isOverridden(id) {
+                        Button {
+                            shortcuts.set(nil, for: id)
+                        } label: {
+                            Image(systemName: "arrow.counterclockwise")
+                                .font(NookType.caption)
+                                .frame(width: 24, height: 24)
+                        }
+                        .buttonStyle(.borderless)
+                        .help(
+                            "Restore \(id.title) to \(id.defaultShortcut.spokenDescription)."
+                        )
+                        .accessibilityLabel("Reset \(id.title) to default")
+                        .accessibilityValue(
+                            "Default \(id.defaultShortcut.displayString)"
+                        )
+                    }
+
+                    ShortcutRecorderView(
+                        shortcut: shortcuts.binding(for: id),
+                        onChange: { shortcuts.set($0, for: id) },
+                        allowsModifierOnly: false,
+                        accessibilityLabel: "\(id.title) shortcut"
+                    )
+                }
+            }
+
+            if let conflict = shortcutConflictMessage(for: id) {
+                Label(conflict, systemImage: "exclamationmark.triangle")
+                    .font(NookType.micro)
+                    .foregroundStyle(NookPalette.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel(conflict)
+            }
+        }
+        .padding(.vertical, NookSpacing.xSmall)
     }
 
     /// The dictation shortcut participates in conflict detection too: it is
     /// registered globally like Flag This Moment, so sharing with anything
     /// here would swallow the other action.
     private var hasDictationConflict: Bool {
-        NookShortcutID.allCases.contains {
-            shortcuts.binding(for: $0) == dictation.shortcut
+        let dictationKey = ShortcutBindingKey(dictation.shortcut)
+        return NookShortcutID.allCases.contains {
+            ShortcutBindingKey(shortcuts.binding(for: $0)) == dictationKey
         }
+    }
+
+    /// The local warning repeats the conflict next to every affected control;
+    /// the full Shared combinations section below remains for VoiceOver users
+    /// who need one complete summary of all collisions.
+    private func shortcutConflictMessage(for id: NookShortcutID) -> String? {
+        let binding = shortcuts.binding(for: id)
+        var names: [String] = []
+
+        for group in shortcuts.conflicts() where group.contains(id) {
+            names.append(contentsOf: group.filter { $0 != id }.map(\.title))
+        }
+        if ShortcutBindingKey(binding) == ShortcutBindingKey(dictation.shortcut) {
+            names.append("Dictation")
+        }
+
+        guard !names.isEmpty else { return nil }
+        return "Conflict: \(id.title) shares \(binding.spokenDescription) with \(readableNames(names))."
     }
 
     private func shortcutConflictLines() -> [String] {
@@ -521,29 +792,30 @@ struct SettingsView: View {
                 + "."
         }
         if hasDictationConflict {
-            let shared = NookShortcutID.allCases.first {
-                shortcuts.binding(for: $0) == dictation.shortcut
-            }
-            if let shared {
+            let dictationKey = ShortcutBindingKey(dictation.shortcut)
+            for shared in NookShortcutID.allCases where
+                ShortcutBindingKey(shortcuts.binding(for: shared)) == dictationKey {
                 lines.append(
                     "Dictation and \(shared.title) share "
                         + dictation.shortcut.spokenDescription + "."
                 )
             }
         }
-        return lines
+        return Array(Set(lines)).sorted()
     }
 
-    private var shortcutsFooter: String {
-        let globals = NookShortcutID.allCases
-            .filter(\.isGlobal)
-            .map(\.title)
-            .joined(separator: " and ")
-        return """
-        Click a combination, then press the new keys. Escape cancels. \
-        \(globals) works while any application is frontmost; the rest \
-        work inside Nook's windows.
-        """
+    private func readableNames(_ names: [String]) -> String {
+        switch names.count {
+        case 0:
+            return "another action"
+        case 1:
+            return names[0]
+        case 2:
+            return "\(names[0]) and \(names[1])"
+        default:
+            return names.dropLast().joined(separator: ", ")
+                + ", and \(names[names.count - 1])"
+        }
     }
 
     /// Routed through `selectEngine` so choosing an off-device engine here asks
@@ -559,65 +831,6 @@ struct SettingsView: View {
 
     private var privacyPane: some View {
         Form {
-            if !recovery.orphans.isEmpty {
-                Section {
-                    ForEach(recovery.orphans) { orphan in
-                        HStack(spacing: NookSpacing.small) {
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(orphan.dateLabel)
-                                    .font(NookType.caption.weight(.medium))
-                                Text(orphan.sizeLabel)
-                                    .font(NookType.micro)
-                                    .foregroundStyle(.secondary)
-                                if orphan.isAudioOnly {
-                                    Text("Audio only. This may be the kept audio of a note you deleted.")
-                                        .font(NookType.micro)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            Spacer(minLength: 0)
-                            Button("Save as Note") {
-                                recovery.recover(
-                                    orphan,
-                                    localeIdentifier: meeting.localeIdentifier
-                                )
-                            }
-                            .controlSize(.small)
-                            .disabled(recovery.isWorking)
-                            Button("Reveal") { recovery.reveal(orphan) }
-                                .controlSize(.small)
-                            Button("Delete", role: .destructive) {
-                                orphanPendingDeletion = orphan
-                            }
-                            .controlSize(.small)
-                            .disabled(recovery.isWorking)
-                        }
-                        .padding(.vertical, 1)
-                    }
-
-                    if let message = recovery.message {
-                        Text(message)
-                            .font(NookType.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    if recovery.isWorking {
-                        HStack(spacing: NookSpacing.small) {
-                            ProgressView().controlSize(.small).scaleEffect(0.7)
-                            Text("Working through that recording locally. This can take a while.")
-                                .font(NookType.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                } header: {
-                    Label(
-                        "Recordings without a note (\(recovery.totalSizeLabel))",
-                        systemImage: "waveform.badge.exclamationmark"
-                    )
-                } footer: {
-                    Text("These are recordings Nook has no note for, usually because processing was interrupted before the write-up finished. The audio was kept so nothing was lost. Save one as a note, or delete it once you are done with it: deleting moves it to the Trash, where you can still get it back.")
-                }
-            }
-
             Section {
                 PrivacyFeatureRow(
                     symbol: "icloud.slash",
@@ -641,7 +854,7 @@ struct SettingsView: View {
                     symbol: "terminal",
                     title: "One exception: note actions",
                     detail: "A note action can be handed to Claude Code or the Codex CLI installed on this Mac, which sends that note on. Off by default, agreed to once per provider, and never for anything you have not run an action on.",
-                    actionTitle: "Open dictation settings",
+                    actionTitle: "Open note action settings",
                     action: { selectedPane = .dictation }
                 )
 
@@ -659,29 +872,6 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        // Scanned here rather than on another pane: this is the pane that
-        // shows what the scan finds, and someone who opens Settings straight
-        // to Privacy was previously told about no stray recordings at all.
-        .onAppear { recovery.scan() }
-        .alert(
-            "Move this recording to the Trash?",
-            isPresented: Binding(
-                get: { orphanPendingDeletion != nil },
-                set: { if !$0 { orphanPendingDeletion = nil } }
-            )
-        ) {
-            Button("Move to Trash", role: .destructive) {
-                if let orphan = orphanPendingDeletion {
-                    recovery.delete(orphan)
-                }
-                orphanPendingDeletion = nil
-            }
-            Button("Cancel", role: .cancel) {
-                orphanPendingDeletion = nil
-            }
-        } message: {
-            Text("This recording is the only copy of that conversation. It moves to the Trash and can be restored from there, or you can save it as a note first.")
-        }
     }
 
     private var aboutPane: some View {
@@ -1125,72 +1315,96 @@ private struct PerAppDictationStylesSection: View {
     @State private var pickedStyle: DictationStyle = .cleanUp
     @State private var pickedApp = ""
     @State private var openApps: [OpenApp] = []
+    @State private var isExpanded = false
 
     var body: some View {
         Section {
-            HStack {
-                // The app is chosen from a list rather than taken from
-                // whichever app is frontmost. Pressing a button in Settings
-                // makes Nook itself frontmost, so the old control recorded an
-                // override for Nook every single time.
-                Picker("App", selection: $pickedApp) {
-                    Text("Choose an app").tag("")
-                    ForEach(openApps) { app in
-                        appLabel(bundleID: app.id, name: app.name)
-                            .tag(app.id)
+            DisclosureGroup(isExpanded: $isExpanded) {
+                HStack {
+                    // The app is chosen from a list rather than taken from
+                    // whichever app is frontmost. Pressing a button in Settings
+                    // makes Nook itself frontmost, so the old control recorded
+                    // an override for Nook every single time.
+                    Picker("App", selection: $pickedApp) {
+                        Text("Choose an app").tag("")
+                        ForEach(openApps) { app in
+                            appLabel(bundleID: app.id, name: app.name)
+                                .tag(app.id)
+                        }
                     }
-                }
-                .labelsHidden()
-                .accessibilityLabel("App to give its own dictation style")
-                .frame(maxWidth: 200)
+                    .labelsHidden()
+                    .accessibilityLabel("App to give its own dictation style")
+                    .frame(maxWidth: 200)
 
-                Picker("Style", selection: $pickedStyle) {
-                    ForEach(DictationStyle.allCases) { option in
-                        Text(option.title).tag(option)
+                    Picker("Style", selection: $pickedStyle) {
+                        ForEach(DictationStyle.allCases) { option in
+                            Text(option.title).tag(option)
+                        }
                     }
-                }
-                .labelsHidden()
-                .accessibilityLabel("Style used for new per-app overrides")
-                .frame(width: 130)
+                    .labelsHidden()
+                    .accessibilityLabel("Style used for new per-app overrides")
+                    .frame(width: 130)
 
-                Button("Add") {
-                    DictationStyle.setOverride(
-                        pickedStyle,
-                        forBundleID: pickedApp
-                    )
-                    overrides = DictationStyle.overriddenBundleIDs
-                    pickedApp = ""
-                }
-                .disabled(pickedApp.isEmpty)
-                .help("Give this app its own dictation style")
-            }
-
-            ForEach(overrides, id: \.self) { bundleID in
-                LabeledContent {
-                    Text(
-                        DictationStyle.override(forBundleID: bundleID)?.title
-                            ?? ""
-                    )
-                    .foregroundStyle(.secondary)
-                    Button("Remove") {
-                        DictationStyle.setOverride(nil, forBundleID: bundleID)
+                    Button("Add") {
+                        DictationStyle.setOverride(
+                            pickedStyle,
+                            forBundleID: pickedApp
+                        )
                         overrides = DictationStyle.overriddenBundleIDs
+                        pickedApp = ""
                     }
-                    .controlSize(.small)
-                    .accessibilityLabel(
-                        "Remove the style for \(OpenApp.name(forBundleID: bundleID))"
-                    )
-                } label: {
-                    appLabel(
-                        bundleID: bundleID,
-                        name: OpenApp.name(forBundleID: bundleID)
-                    )
+                    .disabled(pickedApp.isEmpty)
+                    .help("Give this app its own dictation style")
+                }
+
+                if overrides.isEmpty {
+                    Text("No app-specific styles yet.")
+                        .font(NookType.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(overrides, id: \.self) { bundleID in
+                        LabeledContent {
+                            Text(
+                                DictationStyle.override(forBundleID: bundleID)?.title
+                                    ?? ""
+                            )
+                            .foregroundStyle(.secondary)
+                            Button("Remove") {
+                                DictationStyle.setOverride(nil, forBundleID: bundleID)
+                                overrides = DictationStyle.overriddenBundleIDs
+                            }
+                            .controlSize(.small)
+                            .accessibilityLabel(
+                                "Remove the style for \(OpenApp.name(forBundleID: bundleID))"
+                            )
+                        } label: {
+                            appLabel(
+                                bundleID: bundleID,
+                                name: OpenApp.name(forBundleID: bundleID)
+                            )
+                        }
+                    }
+                }
+            } label: {
+                HStack {
+                    Label("Per-app styles", systemImage: "square.stack.3d.up")
+                    Spacer(minLength: NookSpacing.small)
+                    Text(overrideSummary)
+                        .font(NookType.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
+            .accessibilityLabel("Per-app dictation styles")
+            .accessibilityValue(overrideSummary)
+            .accessibilityHint(
+                isExpanded
+                    ? "Collapse the app-specific style controls"
+                    : "Expand to add or change a style for one app"
+            )
         } header: {
-            Label("Per-app styles", systemImage: "square.stack.3d.up")
+            Label("App-specific behavior", systemImage: "square.stack.3d.up")
         } footer: {
-            Text("An app listed here always gets its own style, wherever you are when you hold the shortcut.")
+            Text(perAppFooter)
         }
         .onAppear { openApps = OpenApp.current() }
         .onReceive(
@@ -1211,6 +1425,27 @@ private struct PerAppDictationStylesSection: View {
         }
     }
 
+    private var overrideSummary: String {
+        switch overrides.count {
+        case 0:
+            return "No overrides"
+        case 1:
+            return "1 app override"
+        default:
+            return "\(overrides.count) app overrides"
+        }
+    }
+
+    private var perAppFooter: String {
+        if isExpanded {
+            return "An app listed here always gets its own style, wherever you are when you hold the shortcut."
+        }
+        if overrides.isEmpty {
+            return "No app-specific styles are set. Expand this row to give one app its own dictation style."
+        }
+        return "\(overrideSummary). Expand this row to review or change them."
+    }
+
     private func appLabel(bundleID: String, name: String) -> some View {
         Label {
             Text(name)
@@ -1222,6 +1457,29 @@ private struct PerAppDictationStylesSection: View {
             } else {
                 Image(systemName: "app.dashed")
             }
+        }
+    }
+}
+
+private struct AudioInputCheckMeterRow: View {
+    let label: String
+    let level: Double
+
+    var body: some View {
+        HStack(spacing: NookSpacing.small) {
+            Text(label)
+                .frame(width: 72, alignment: .leading)
+
+            ProgressView(value: level, total: 1)
+                .tint(NookPalette.accent)
+                .accessibilityLabel("\(label) audio level")
+                .accessibilityValue("\(AudioInputCheckService.percentage(for: level))%")
+
+            Text("\(AudioInputCheckService.percentage(for: level))%")
+                .font(NookType.metadata.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 42, alignment: .trailing)
+                .accessibilityHidden(true)
         }
     }
 }
