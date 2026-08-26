@@ -4,6 +4,18 @@ Nook follows a user-facing release-note model. Each published version has a
 Markdown note in [`Releases/`](Releases/) and a matching `v<version>` release in
 the [binary releases repository](https://github.com/wrnsnng/nook-releases/releases).
 
+## 1.18.1
+
+- Fixed: structured summaries failed on newer macOS builds, where Apple
+  renamed the errors its model reports. Refusals, unparsable typed
+  answers, and overflows now degrade the same way under both names: a
+  declined chunk retries neutrally then steps aside, an unreadable
+  answer falls back to plain text with a locally parsed prose pass, and
+  a failed write-up salvages the facts, decisions, and actions
+  harvested from the raw transcript.
+- Sensitive content flags and malformed answers now explain themselves
+  in the note instead of reading as one generic failure.
+
 ## 1.18.0
 
 - Fixed: profanity in a transcript tripped Apple's input screening and
