@@ -40,6 +40,11 @@ enum NookEventLog {
         case summaryModelNotReady = "summary.model-not-ready"
         case summaryRejectedAsUngrounded = "summary.rejected-as-ungrounded"
         case summaryTimedOut = "summary.timed-out"
+        // Input screening rejects the prompt before generation, so it is not
+        // a GenerationError and used to read as a generic failure.
+        case summarySensitiveContent = "summary.sensitive-content"
+        case summaryMalformedAnswer = "summary.malformed-answer"
+        case summarySchemaUnsupported = "summary.schema-unsupported"
     }
 
     private static let maximumBytes = 512 * 1_024

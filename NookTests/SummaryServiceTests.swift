@@ -1,4 +1,5 @@
 import Foundation
+import FoundationModels
 import Testing
 @testable import Nook
 
@@ -543,5 +544,243 @@ struct TranscriptProfanityMaskTests {
         #expect(prompt.contains("f*** off"))
         #expect(prompt.contains("clean line"))
         #expect(!prompt.contains("fuck off"))
+    }
+}
+
+/// Input screening rejects a prompt before any generation happens and
+/// arrives as a bare error, not a GenerationError. An 85k character meeting
+/// died this way one second in, journalled as a generic generation failure.
+struct SensitiveContentRejectionTests {
+
+    /// Stands in for the framework's screening error, which carries its
+    /// message as a localized description with no typed case to match.
+    private struct ScreenedInput: LocalizedError {
+        var errorDescription: String? { "May contain sensitive content" }
+    }
+
+    @Test
+    func aScreeningRejectionIsNamedAsSuchNotAsAGenericFailure() {
+        #expect(
+            SummaryService.failureReason(for: ScreenedInput())
+                == .sensitiveContent
+        )
+        struct Unrelated: Error {}
+        #expect(
+            SummaryService.failureReason(for: Unrelated())
+                == .generationFailed
+        )
+        #expect(
+            SummaryService.failureReason(for: TranscriptReduceError.didNotFit)
+                == .transcriptTooLong
+        )
+    }
+
+    @Test
+    func detectionSurvivesNSErrorBridging() {
+        let bridged = NSError(
+            domain: "LanguageModel",
+            code: 1,
+            userInfo: [
+                NSLocalizedDescriptionKey: "May contain sensitive content"
+            ]
+        )
+        #expect(SummaryService.isSensitiveContentRejection(bridged))
+        #expect(!SummaryService.isSensitiveContentRejection(
+            TranscriptReduceError.didNotFit
+        ))
+    }
+
+    /// A refusal of the write-up must not cost the harvest: the ledger holds
+    /// items taken from the raw transcript, and they reach the note through
+    /// the same validation and grounding every model result passes.
+    @Test
+    func salvageBuildsAGroundedNoteFromTheHarvest() throws {
+        let transcript = [
+            TranscriptSegment(
+                startTime: 0,
+                duration: 30,
+                text: "So we agreed the pricing model lands at 1.9% from October."
+            ),
+            TranscriptSegment(
+                startTime: 30,
+                duration: 30,
+                text: "I will draft the rollout plan before the board review."
+            ),
+            TranscriptSegment(
+                startTime: 60,
+                duration: 30,
+                text: "The team confirmed the migration window stays in October."
+            ),
+        ]
+
+        let salvaged = SummaryService.salvagedInsights(
+            facts: ["Pricing modelled at 1.9%"],
+            decisions: ["Ship in October"],
+            actions: ["Ana drafts the rollout plan"],
+            transcript: transcript,
+            fallbackTitle: "Manual meeting"
+        )
+
+        let note = try #require(salvaged)
+        #expect(note.keyPoints == ["Pricing modelled at 1.9%"])
+        #expect(note.decisions == ["Ship in October"])
+        #expect(note.actionItems == ["Ana drafts the rollout plan"])
+        #expect(note.summary.contains("taken directly from the transcript"))
+        #expect(note.title != "Manual meeting")
+    }
+
+    /// Grounding is what makes the salvage honest: an entry nothing in the
+    /// conversation supports does not survive, so a refusal cannot be turned
+    /// into a licence to invent.
+    @Test
+    func salvageDropsEntriesNothingSaid() throws {
+        let transcript = [
+            TranscriptSegment(
+                startTime: 0,
+                duration: 30,
+                text: "We reviewed the migration plan for the October release."
+            )
+        ]
+
+        let salvaged = SummaryService.salvagedInsights(
+            facts: ["Budget approved at four million dollars"],
+            decisions: [],
+            actions: [],
+            transcript: transcript,
+            fallbackTitle: "Manual meeting"
+        )
+
+        let note = try #require(salvaged)
+        #expect(note.keyPoints.isEmpty)
+    }
+
+    @Test
+    func salvageOfNothingYieldsNothing() {
+        let salvaged = SummaryService.salvagedInsights(
+            facts: [],
+            decisions: [],
+            actions: [],
+            transcript: [],
+            fallbackTitle: "Manual meeting"
+        )
+        #expect(salvaged == nil)
+    }
+
+    /// Guided generation renamed its parse failure in newer runtimes. Both
+    /// names must read as one malformed answer, or the typed pipeline dies
+    /// the way an 85k character meeting did.
+    @Test
+    func aParsingErrorIsAnUnreadableAnswer() {
+        struct Unrelated: Error {}
+        #expect(!SummaryService.isUnparsableAnswer(Unrelated()))
+        #expect(
+            SummaryService.isUnparsableAnswer(
+                TranscriptReduceError.didNotFit
+            ) == false
+        )
+        guard #available(macOS 27.0, *) else { return }
+        let parsingError = GeneratedContent.ParsingError(
+            rawContent: "partial",
+            debugDescription: "Failed to parse generated content."
+        )
+        #expect(SummaryService.isUnparsableAnswer(parsingError))
+    }
+
+    /// The same refusal has two runtime names across the OS rename. A
+    /// meeting died because only the old one was tolerated, so the
+    /// classifier must speak both.
+    @Test
+    func refusalsAreRecognisedUnderBothNames() {
+        guard #available(macOS 27.0, *) else { return }
+        let modern = LanguageModelError.refusal(
+            .init(explanation: "declined", debugDescription: "refused")
+        )
+
+        #expect(SummaryService.classify(modern) == .refused)
+        #expect(SummaryService.failureReason(for: modern) == .declined)
+    }
+
+    @Test
+    func overflowIsRecognisedUnderBothNames() {
+        guard #available(macOS 27.0, *) else { return }
+        let modern = LanguageModelError.contextSizeExceeded(
+            .init(contextSize: 4_096, tokenCount: 5_000, debugDescription: "")
+        )
+
+        #expect(SummaryService.classify(modern) == .overflow)
+        #expect(
+            SummaryService.failureReason(for: modern) == .transcriptTooLong
+        )
+    }
+
+    @Test
+    func theModernTimeoutAndSchemaCasesLandOnTheirOwnReasons() {
+        guard #available(macOS 27.0, *) else { return }
+        let timedOut = LanguageModelError.timeout(
+            .init(debugDescription: "")
+        )
+        #expect(SummaryService.failureReason(for: timedOut) == .timedOut)
+
+        let schema = LanguageModelError.unsupportedGenerationGuide(
+            .init(schemaName: nil, debugDescription: "")
+        )
+        #expect(
+            SummaryService.failureReason(for: schema) == .schemaUnsupported
+        )
+    }
+}
+
+/// When the OS cannot deliver guided generation at all, the final pass falls
+/// back to a labelled prose answer parsed here. The parser is deterministic:
+/// it reads only lines it recognises and invents nothing.
+struct ProseInsightParserTests {
+
+    @Test
+    func aWellFormedAnswerParsesIntoEveryField() throws {
+        let text = """
+            TITLE: Migration rollout planning
+            SUMMARY: The team settled the October window and priced the work.
+            at 1.9% with board sign-off pending.
+            KEY POINTS:
+            - Modelled at 1.9%
+            - Migration stays in October
+            DECISIONS:
+            - Ship in October
+            ACTIONS:
+            - Ana drafts the rollout plan
+            """
+
+        let parsed = try #require(SummaryService.parsedProseInsights(text))
+
+        #expect(parsed.title == "Migration rollout planning")
+        #expect(
+            parsed.summary == "The team settled the October window and "
+                + "priced the work. at 1.9% with board sign-off pending."
+        )
+        #expect(parsed.keyPoints == ["Modelled at 1.9%", "Migration stays in October"])
+        #expect(parsed.decisions == ["Ship in October"])
+        #expect(parsed.actionItems == ["Ana drafts the rollout plan"])
+    }
+
+    @Test
+    func emptySectionsAreDroppedAndBulletsOutsideSectionsIgnored() throws {
+        let text = """
+            TITLE: Standup
+            SUMMARY: Short sync.
+            - stray bullet nobody asked about
+            """
+
+        let parsed = try #require(SummaryService.parsedProseInsights(text))
+
+        #expect(parsed.summary == "Short sync.")
+        #expect(parsed.keyPoints.isEmpty)
+        #expect(parsed.decisions.isEmpty)
+        #expect(parsed.actionItems.isEmpty)
+    }
+
+    @Test
+    func anAnswerWithoutASummaryIsRefused() {
+        #expect(SummaryService.parsedProseInsights("TITLE: only a title") == nil)
+        #expect(SummaryService.parsedProseInsights("") == nil)
     }
 }
