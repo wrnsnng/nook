@@ -143,7 +143,9 @@ final class LibraryAnswerService: ObservableObject {
                 return LibraryAnswer(
                     text: "",
                     citations: [],
-                    refusedReason: "There are no notes to search yet."
+                    refusedReason: LibraryNoteAggregation.partition(notes).omitted.isEmpty
+                        ? "There are no notes to search yet."
+                        : "No notes can be searched until the copies with a shared ID are reviewed."
                 )
             }
 
@@ -342,7 +344,7 @@ final class LibraryAnswerService: ObservableObject {
 
     /// Splits a note into labelled passages small enough to embed and cite.
     nonisolated static func chunks(from notes: [MeetingNote]) -> [LibraryChunk] {
-        notes.flatMap { note in
+        LibraryNoteAggregation.partition(notes).eligible.flatMap { note in
             var chunks: [LibraryChunk] = []
 
             func add(_ label: String, _ text: String) {

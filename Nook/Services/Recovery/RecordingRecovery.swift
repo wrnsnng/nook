@@ -32,7 +32,22 @@ struct OrphanedRecording: Identifiable, Hashable, Sendable {
 
     var captures: [URL] {
         urls.filter { $0.pathExtension.lowercased() == "mp4" }
-            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+            .sorted {
+                let first = Self.capturePart($0)
+                let second = Self.capturePart($1)
+                return first == second
+                    ? $0.lastPathComponent < $1.lastPathComponent
+                    : first < second
+            }
+    }
+
+    /// Capture names resumed segments numerically. Lexical filename order
+    /// put the tenth sitting before the second when recovering a long call.
+    private static func capturePart(_ url: URL) -> Int {
+        let stem = url.deletingPathExtension().lastPathComponent
+        guard let marker = stem.range(of: ".part-", options: .backwards)
+        else { return 0 }
+        return Int(stem[marker.upperBound...]) ?? .max
     }
 
     /// True when extracted audio is all that is left, with no capture beside
@@ -71,6 +86,10 @@ struct RecoveryCleanupFailure: Identifiable, Hashable, Sendable {
 /// Finds, recovers, and removes recordings that never became notes.
 @MainActor
 final class RecordingRecovery: ObservableObject {
+    typealias AudioExtraction = @MainActor ([URL], URL) async throws -> Void
+    typealias AudioTranscription = @MainActor (URL, String) async throws -> [TranscriptSegment]
+    typealias TranscriptSummary = @MainActor ([TranscriptSegment], String) async -> MeetingInsights
+
     @Published private(set) var orphans: [OrphanedRecording] = []
     @Published private(set) var cleanupFailures: [RecoveryCleanupFailure] = []
     @Published private(set) var isWorking = false
@@ -99,17 +118,41 @@ final class RecordingRecovery: ObservableObject {
     private let store: MarkdownStore
     private let trashItem: (URL) throws -> Void
     private var reloadCancellable: AnyCancellable?
-    private let transcriber = TranscriptionService()
-    private let summarizer = SummaryService()
+    private var recoveryTask: Task<Void, Never>?
+    private let extractAudio: AudioExtraction
+    private let transcribeAudio: AudioTranscription
+    private let summarizeTranscript: TranscriptSummary
 
     init(
         store: MarkdownStore,
+        extractAudio: @escaping AudioExtraction = { sources, destination in
+            try await AudioExtractor.extractAudio(from: sources, to: destination)
+        },
+        transcribeAudio: AudioTranscription? = nil,
+        summarizeTranscript: TranscriptSummary? = nil,
         trashItem: @escaping (URL) throws -> Void = { url in
             try FileManager.default.trashItem(at: url, resultingItemURL: nil)
         }
     ) {
         self.store = store
         self.trashItem = trashItem
+        self.extractAudio = extractAudio
+        let transcriber = TranscriptionService()
+        if let transcribeAudio {
+            self.transcribeAudio = transcribeAudio
+        } else {
+            self.transcribeAudio = { url, locale in
+                try await transcriber.transcribe(audioURL: url, localeIdentifier: locale)
+            }
+        }
+        let summarizer = SummaryService()
+        if let summarizeTranscript {
+            self.summarizeTranscript = summarizeTranscript
+        } else {
+            self.summarizeTranscript = { transcript, title in
+                await summarizer.summarize(transcript: transcript, fallbackTitle: title)
+            }
+        }
         // MarkdownStore publishes notes before it clears isLoading. Scanning
         // from that transition is the one place that cannot observe the old
         // note set after an asynchronous reload.
@@ -258,13 +301,25 @@ final class RecordingRecovery: ObservableObject {
     /// recording exactly where it was.
     func recover(_ orphan: OrphanedRecording, localeIdentifier: String) {
         guard !isWorking else { return }
+        let location: RecoveryLocation
+        do {
+            location = try recoveryLocation(for: orphan)
+            try requireRecoverable(orphan.id, at: location)
+        } catch {
+            message = error.localizedDescription
+            return
+        }
         isWorking = true
         message = nil
 
-        Task { @MainActor [weak self] in
+        recoveryTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            defer { self.isWorking = false }
+            defer {
+                self.isWorking = false
+                self.recoveryTask = nil
+            }
             do {
+                try self.requireRecoverable(orphan.id, at: location)
                 let audioURL: URL
                 if let existing = orphan.extractedAudio {
                     audioURL = existing
@@ -277,31 +332,25 @@ final class RecordingRecovery: ObservableObject {
                     // audio up by the note's identifier, so a meeting whose
                     // first segment was a resumed part would otherwise extract
                     // to a name nothing could find again.
-                    let destination = self.store.recordingsDirectory()
+                    let destination = location.recordingsDirectory
                         .appendingPathComponent("\(orphan.id.uuidString).m4a")
-                    try await AudioExtractor.extractAudio(
-                        from: orphan.captures,
-                        to: destination
-                    )
+                    try await self.extractAudio(orphan.captures, destination)
+                    try self.requireRecoverable(orphan.id, at: location)
                     audioURL = destination
                 }
 
                 let transcript = TranscriptAssembler.coalesce(
-                    try await self.transcriber.transcribe(
-                        audioURL: audioURL,
-                        localeIdentifier: localeIdentifier
-                    )
+                    try await self.transcribeAudio(audioURL, localeIdentifier)
                 )
+                try self.requireRecoverable(orphan.id, at: location)
                 guard !transcript.isEmpty else {
                     throw RecoveryError.noSpeechFound
                 }
 
                 let fallbackTitle = "Recovered meeting \(orphan.dateLabel)"
-                let insights = await self.summarizer.summarize(
-                    transcript: transcript,
-                    fallbackTitle: fallbackTitle
-                )
-                let recordingsDirectory = self.store.recordingsDirectory()
+                let insights = await self.summarizeTranscript(transcript, fallbackTitle)
+                try self.requireRecoverable(orphan.id, at: location)
+                let recordingsDirectory = location.recordingsDirectory
                 // Anything typed into the meeting's notes while it was running
                 // was written beside the recording. It is the only part of a
                 // stranded meeting the user wrote themselves, and rebuilding
@@ -324,7 +373,10 @@ final class RecordingRecovery: ObservableObject {
                     personalNotes: liveNotes,
                     transcript: transcript
                 )
-                _ = try self.store.save(note)
+                _ = try self.store.save(note, validatingBeforeCommit: {
+                    try self.requireRecoverable(orphan.id, at: location)
+                })
+                try self.requireCurrentLocation(location)
 
                 // With retention on, the extracted audio is this note's kept
                 // audio, exactly as it would be had the meeting finished
@@ -362,6 +414,52 @@ final class RecordingRecovery: ObservableObject {
             }
         }
     }
+
+    private struct RecoveryLocation {
+        let libraryURL: URL
+        let recordingsDirectory: URL
+        let generation: Int
+    }
+
+    private func recoveryLocation(for orphan: OrphanedRecording) throws -> RecoveryLocation {
+        guard let first = orphan.urls.first else { throw RecoveryError.nothingToRecover }
+        let directory = first.deletingLastPathComponent().standardizedFileURL
+        let library = store.storageURL.standardizedFileURL
+        guard directory == library.appendingPathComponent(".recordings", isDirectory: true)
+                .standardizedFileURL,
+              orphan.urls.allSatisfy({
+                  $0.isFileURL && $0.deletingLastPathComponent().standardizedFileURL == directory
+              })
+        else { throw RecoveryError.recordingLocationChanged }
+        return RecoveryLocation(
+            libraryURL: library,
+            recordingsDirectory: directory,
+            generation: store.storageGeneration
+        )
+    }
+
+    private func requireCurrentLocation(_ location: RecoveryLocation) throws {
+        // Checking only the final URL would miss A -> B -> A while a model
+        // worked. Any actual folder change ends this recovery's ownership.
+        guard store.storageGeneration == location.generation,
+              store.storageURL.standardizedFileURL == location.libraryURL
+        else { throw RecoveryError.recordingLocationChanged }
+    }
+
+    private func requireRecoverable(_ id: UUID, at location: RecoveryLocation) throws {
+        try requireCurrentLocation(location)
+        // A restored note can arrive while extraction or a model is awaited.
+        // Recovery owns no revision of that document: allowing save to adopt
+        // its URL and revision by UUID would authorize replacing the user's
+        // restored writing. Any saved copy ends this attempt's orphan status.
+        guard !store.notes.contains(where: { $0.id == id }) else {
+            throw RecoveryError.noteAlreadySaved
+        }
+    }
+
+    #if DEBUG
+    var recoveryTaskForTesting: Task<Void, Never>? { recoveryTask }
+    #endif
 
     /// Keeps failed post-recovery cleanup visible until the files are gone.
     ///
@@ -459,6 +557,8 @@ final class RecordingRecovery: ObservableObject {
     enum RecoveryError: LocalizedError {
         case nothingToRecover
         case noSpeechFound
+        case recordingLocationChanged
+        case noteAlreadySaved
 
         var errorDescription: String? {
             switch self {
@@ -466,6 +566,10 @@ final class RecordingRecovery: ObservableObject {
                 "That recording has no audio Nook can read."
             case .noSpeechFound:
                 "No speech was found in that recording, so there is nothing to write down."
+            case .recordingLocationChanged:
+                "The notes folder changed. Nook kept the recording and typed notes in their original folder. Select that folder to recover this meeting."
+            case .noteAlreadySaved:
+                "A note for this recording is already in the library. Nook left it unchanged and kept the recording and typed notes. Review the existing note before trying recovery again."
             }
         }
     }

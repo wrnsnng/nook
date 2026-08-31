@@ -1,33 +1,45 @@
 import Foundation
 
-/// A decode cache keyed by file modification date.
+/// Reuses decoding only for the same canonical file and exact content bytes.
 ///
-/// Every app activation used to re-read and re-decode every Markdown file,
-/// regex-cleaning whole transcripts each time, even when nothing on disk had
-/// changed. Entries survive only while their file's timestamp matches, so an
-/// edit through any route invalidates itself.
+/// Reloads still read bytes off the main actor. Modification dates can survive
+/// an external edit, so they cannot establish freshness. Matching a content
+/// revision skips the expensive Markdown decoding and transcript cleanup.
 final class NoteDecodeCache: @unchecked Sendable {
     private struct Entry {
-        let modified: Date
+        let revision: Data
         let note: MeetingNote
     }
 
     private let lock = NSLock()
     private var entries: [URL: Entry] = [:]
 
-    func note(for url: URL, modified: Date) -> MeetingNote? {
+    func note(for url: URL, revision: Data) -> MeetingNote? {
+        let key = Self.key(for: url)
         lock.lock()
         defer { lock.unlock() }
-        guard let entry = entries[url], entry.modified == modified else {
+        guard let entry = entries[key], entry.revision == revision else {
             return nil
         }
         return entry.note
     }
 
-    func store(_ note: MeetingNote, for url: URL, modified: Date) {
+    func store(_ note: MeetingNote, for url: URL, revision: Data) {
+        let key = Self.key(for: url)
         lock.lock()
         defer { lock.unlock() }
-        entries[url] = Entry(modified: modified, note: note)
+        entries[key] = Entry(revision: revision, note: note)
+    }
+
+    func prune(keeping urls: [URL]) {
+        let retained = Set(urls.map(Self.key(for:)))
+        lock.lock()
+        defer { lock.unlock() }
+        entries = entries.filter { retained.contains($0.key) }
+    }
+
+    private static func key(for url: URL) -> URL {
+        url.standardizedFileURL.resolvingSymlinksInPath()
     }
 
     func clear() {

@@ -123,13 +123,22 @@ struct PrepBriefView: View {
             }
 
             Text(
-                PrepBriefCopy.history(
-                    sittings: brief.sittings.count,
-                    totalDuration: brief.totalDuration
-                )
+                brief.sittings.isEmpty && brief.omittedNoteCount > 0
+                    ? "Earlier notes need review before they can be included."
+                    : PrepBriefCopy.history(
+                        sittings: brief.sittings.count,
+                        totalDuration: brief.totalDuration
+                    )
             )
             .font(NookType.caption)
             .foregroundStyle(.secondary)
+
+            if brief.omittedNoteCount > 0 {
+                Label(LibraryNoteAggregation.omissionMessage, systemImage: "exclamationmark.triangle")
+                    .font(NookType.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             headerActions
                 .padding(.top, 6)
@@ -193,7 +202,7 @@ struct PrepBriefView: View {
                 symbol: "clock.arrow.circlepath",
                 tint: NookPalette.accent
             )
-            ForEach(brief.sittings.prefix(8)) { sitting in
+            ForEach(brief.sittings.prefix(8), id: \.libraryIdentity) { sitting in
                 Button {
                     onSelectNote(sitting.id)
                 } label: {
@@ -308,6 +317,9 @@ struct PrepCard: View {
 
     private var subtitle: String {
         let start = brief.startDate.formatted(date: .omitted, time: .shortened)
+        if brief.sittings.isEmpty && brief.omittedNoteCount > 0 {
+            return "Starts \(start) · review copied notes"
+        }
         return "Starts \(start) · met \(PrepBriefCopy.times(brief.sittings.count))"
     }
 }

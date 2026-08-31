@@ -1,5 +1,22 @@
 import SwiftUI
 
+/// In-place native presentation retains its root view instead of rebuilding it
+/// with the library. Keep new questions and example chips on the current notes,
+/// without replacing the session or its draft during an ordinary reload.
+struct LibraryAskStoreHost: View {
+    @ObservedObject var store: MarkdownStore
+    let session: LibraryAskSession
+    let onSelectNote: (MeetingNote.ID) -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        LibraryAskView(
+            notes: store.notes, onSelectNote: onSelectNote,
+            onClose: onClose, session: session
+        )
+    }
+}
+
 /// Ask a question across the whole library, answered from the user's own
 /// notes with citations back to the meetings they came from.
 struct LibraryAskView: View {
@@ -8,20 +25,19 @@ struct LibraryAskView: View {
     let onSelectNote: (MeetingNote.ID) -> Void
     let onClose: () -> Void
 
-    @StateObject private var service = LibraryAnswerService()
-    @State private var question = ""
-    @State private var answer: LibraryAnswer?
-    @State private var isAnswering = false
-    @State private var askTask: Task<Void, Never>?
-    /// The question the answer in flight belongs to, so a wait of several
-    /// seconds still says what is being looked up.
-    @State private var askedQuestion: String?
+    @StateObject private var session: LibraryAskSession
     @FocusState private var questionFocused: Bool
 
-    private var canAsk: Bool {
-        !question.trimmingCharacters(in: .whitespaces).isEmpty
-            && !isAnswering
-            && !service.isPreparing
+    init(
+        notes: [MeetingNote],
+        onSelectNote: @escaping (MeetingNote.ID) -> Void,
+        onClose: @escaping () -> Void,
+        session: LibraryAskSession? = nil
+    ) {
+        self.notes = notes
+        self.onSelectNote = onSelectNote
+        self.onClose = onClose
+        _session = StateObject(wrappedValue: session ?? LibraryAskSession())
     }
 
     var body: some View {
@@ -31,10 +47,11 @@ struct LibraryAskView: View {
                 systemImage: "sparkle.magnifyingglass"
             )
             .font(NookType.panelTitle)
+            .accessibilityAddTraits(.isHeader)
 
             TextField(
                 "What did we decide about…",
-                text: $question
+                text: $session.question
             )
             .textFieldStyle(.roundedBorder)
             .focused($questionFocused)
@@ -43,42 +60,55 @@ struct LibraryAskView: View {
 
             content
 
+            if !LibraryNoteAggregation.partition(notes).omitted.isEmpty {
+                Label(LibraryNoteAggregation.omissionMessage, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             Spacer(minLength: 0)
 
             HStack(spacing: NookSpacing.medium) {
                 Spacer()
                 Button("Cancel") {
-                    askTask?.cancel()
+                    session.cancel()
                     onClose()
                 }
                 .keyboardShortcut(.cancelAction)
 
                 Button("Ask", action: ask)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(!canAsk)
+                    .disabled(!session.canAsk)
             }
         }
         .padding(20)
         .frame(width: 560)
         .frame(minHeight: 380, alignment: .top)
-        // The field is the only thing to do here, so it starts with the
-        // keyboard rather than asking for a click first.
-        .onAppear { questionFocused = true }
+        // Register initial focus while the native host prepares its key loop,
+        // including when Ask replaces an already attached palette sheet.
+        .defaultFocus($questionFocused, true)
+        // A sheet can disappear through its parent, not only its Cancel button.
+        // Invalidate the response before cancellation reaches asynchronous work.
+        .onDisappear { session.cancel() }
     }
 
     /// Openers built from the user's own recent meetings, so the first thing
     /// a person sees is a question this library can actually answer.
     @ViewBuilder
     private var exampleQuestions: some View {
-        let examples = LibraryAskExamples.questions(for: notes)
+        let examples = LibraryAskExamples.questions(
+            for: LibraryNoteAggregation.partition(notes).eligible
+        )
         if !examples.isEmpty {
             VStack(alignment: .leading, spacing: NookSpacing.xSmall + 2) {
                 Text("Try one of these")
                     .font(NookType.micro.weight(.semibold))
                     .foregroundStyle(.secondary)
+                    .accessibilityAddTraits(.isHeader)
                 ForEach(examples, id: \.self) { example in
                     AskExampleChip(question: example) {
-                        question = example
+                        session.question = example
                         questionFocused = true
                     }
                 }
@@ -88,29 +118,36 @@ struct LibraryAskView: View {
 
     @ViewBuilder
     private var content: some View {
-        if isAnswering || service.isPreparing {
+        if session.isAnswering {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 10) {
-                    ProgressView().controlSize(.small)
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel("Searching your notes on this Mac")
                     Text("Searching your notes on this Mac…")
                         .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
                 }
-                if let askedQuestion {
-                    Text("“\(askedQuestion)”")
-                        .font(NookType.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                // Keep the status and footer reachable even when the submitted
+                // question is much taller than the sheet. Scrolling preserves
+                // the full question rather than truncating its visible text.
+                ScrollView {
+                    submittedQuestion
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .frame(maxHeight: 140)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-        } else if let answer {
-            if let reason = answer.refusedReason {
-                Label(reason, systemImage: "questionmark.circle")
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
+        } else if let answer = session.answer {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    submittedQuestion
+
+                    if let reason = answer.refusedReason {
+                        Label(reason, systemImage: "questionmark.circle")
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
                         Text(answer.text)
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -120,6 +157,7 @@ struct LibraryAskView: View {
                             Text("From your notes")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.secondary)
+                                .accessibilityAddTraits(.isHeader)
                             ForEach(answer.citations) { citation in
                                 Button {
                                     onSelectNote(citation.chunk.noteID)
@@ -136,13 +174,19 @@ struct LibraryAskView: View {
                             }
                         }
                     }
-                    .padding(.bottom, 8)
+
+                    if let error = session.errorMessage {
+                        Label(error, systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(NookPalette.danger)
+                    }
                 }
+                .padding(.bottom, 8)
             }
         } else {
             VStack(alignment: .leading, spacing: 14) {
                 Text(
-                    "Ask anything your meetings covered. Nook searches every note on this Mac and answers from what was actually said, citing the meetings it used."
+                    "Ask anything your meetings covered. Nook searches your notes on this Mac and answers from what was actually said, citing the meetings it used."
                 )
                 .font(NookType.body)
                 .foregroundStyle(.secondary)
@@ -151,36 +195,121 @@ struct LibraryAskView: View {
                 exampleQuestions
             }
         }
+    }
 
-        if let error = service.lastError {
-            Label(error, systemImage: "exclamationmark.triangle")
-                .font(.caption)
-                .foregroundStyle(NookPalette.danger)
+    @ViewBuilder
+    private var submittedQuestion: some View {
+        if let question = session.submittedQuestion {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Your question")
+                    .font(NookType.caption.weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
+                Text(question)
+                    .font(NookType.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
-    /// `.onSubmit` fires on every Return keypress regardless of the button's
-    /// disabled state, so re-entry has to be guarded here rather than only
-    /// at the button. A new question cancels whatever is still in flight
-    /// instead of racing it, which would otherwise let a stale answer land
-    /// after a newer one.
     private func ask() {
-        guard !isAnswering, !service.isPreparing else { return }
-        let currentQuestion = question.trimmingCharacters(in: .whitespaces)
-        guard !currentQuestion.isEmpty else { return }
+        session.ask(notes: notes)
+    }
+}
 
+/// Keeps the submitted question and its outcome together while the field remains
+/// an editable draft. Work may finish after a sheet closes, so neither service
+/// flags nor cancellation alone decide which response is allowed to appear.
+@MainActor
+final class LibraryAskSession: ObservableObject {
+    struct Response: Sendable {
+        let answer: LibraryAnswer
+        var errorMessage: String? = nil
+    }
+
+    typealias Answerer = @MainActor @Sendable (String, [MeetingNote]) async -> Response
+
+    private enum Phase {
+        case ready
+        case searching(question: String)
+        case answered(question: String, response: Response)
+    }
+
+    @Published var question = ""
+    @Published private var phase: Phase = .ready
+    private let answerer: Answerer
+    private var requestID: UUID?
+    private var askTask: Task<Void, Never>?
+
+    init(answerer: Answerer? = nil) {
+        self.answerer = answerer ?? { question, notes in
+            // A request owns its service status and error. A canceled service
+            // can finish late without changing the state of a later question.
+            // The existing on-disk retrieval cache is still shared by location.
+            let service = LibraryAnswerService()
+            let answer = await service.answer(question: question, notes: notes)
+            return Response(answer: answer, errorMessage: service.lastError)
+        }
+    }
+
+    deinit {
         askTask?.cancel()
-        answer = nil
-        askedQuestion = currentQuestion
-        isAnswering = true
-        askTask = Task {
-            let result = await service.answer(
-                question: currentQuestion,
-                notes: notes
-            )
-            guard !Task.isCancelled else { return }
-            self.answer = result
-            self.isAnswering = false
+    }
+
+    var canAsk: Bool {
+        !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isAnswering
+    }
+
+    var isAnswering: Bool {
+        if case .searching = phase { return true }
+        return false
+    }
+
+    var submittedQuestion: String? {
+        switch phase {
+        case .ready: nil
+        case .searching(let question), .answered(let question, _): question
+        }
+    }
+
+    var answer: LibraryAnswer? {
+        guard case .answered(_, let response) = phase else { return nil }
+        return response.answer
+    }
+
+    var errorMessage: String? {
+        guard case .answered(_, let response) = phase else { return nil }
+        return response.errorMessage
+    }
+
+    /// Return can fire even while the Ask button is disabled. Refuse re-entry
+    /// here, preserving any next question the user has already begun drafting.
+    @discardableResult
+    func ask(notes: [MeetingNote]) -> Task<Void, Never>? {
+        guard canAsk else { return nil }
+        let submitted = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        let id = UUID()
+        requestID = id
+        phase = .searching(question: submitted)
+        let answerer = answerer
+        let task = Task { [weak self] in
+            guard !Task.isCancelled, self?.requestID == id else { return }
+            let response = await answerer(submitted, notes)
+            guard !Task.isCancelled, self?.requestID == id else { return }
+            self?.phase = .answered(question: submitted, response: response)
+            self?.askTask = nil
+        }
+        askTask = task
+        return task
+    }
+
+    func cancel() {
+        requestID = nil
+        askTask?.cancel()
+        askTask = nil
+        if isAnswering {
+            phase = .ready
         }
     }
 }

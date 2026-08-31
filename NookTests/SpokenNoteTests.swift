@@ -355,8 +355,8 @@ struct CommandLineAssistantArgumentTests {
         """
 
     @Test
-    func aClaudeRunHasNoToolsNoMCPServersAndNoUserConfiguration() {
-        let arguments = CommandLineAssistant.arguments(
+    func aClaudeRunHasNoToolsNoMCPServersAndNoUserConfiguration() throws {
+        let arguments = try CommandLineAssistant.arguments(
             for: .claude,
             instruction: "Tidy this note.",
             supportedFlagsIn: Self.claudeHelp
@@ -370,8 +370,8 @@ struct CommandLineAssistantArgumentTests {
 
     /// The note is not left behind in a transcript on disk.
     @Test
-    func aClaudeRunLeavesNoSessionFileHoldingTheNote() {
-        let arguments = CommandLineAssistant.arguments(
+    func aClaudeRunLeavesNoSessionFileHoldingTheNote() throws {
+        let arguments = try CommandLineAssistant.arguments(
             for: .claude,
             instruction: "Tidy this note.",
             supportedFlagsIn: Self.claudeHelp
@@ -383,8 +383,8 @@ struct CommandLineAssistantArgumentTests {
     /// The tool list is variadic, so an instruction placed straight after it
     /// would be read as another tool name and never reach the model.
     @Test
-    func theInstructionIsTheLastArgumentAndIsIntroducedByPrintMode() {
-        let arguments = CommandLineAssistant.arguments(
+    func theInstructionIsTheLastArgumentAndIsIntroducedByPrintMode() throws {
+        let arguments = try CommandLineAssistant.arguments(
             for: .claude,
             instruction: "Tidy this note.",
             supportedFlagsIn: Self.claudeHelp
@@ -394,39 +394,74 @@ struct CommandLineAssistantArgumentTests {
         #expect(arguments.dropLast().last == "-p")
     }
 
-    /// An unrecognised flag is a hard exit on both tools, and Nook does not
-    /// control which version somebody has installed.
-    @Test
-    func flagsTheInstalledToolDoesNotAdvertiseAreLeftOff() {
-        let arguments = CommandLineAssistant.arguments(
-            for: .claude,
-            instruction: "Tidy this note.",
-            supportedFlagsIn: "Usage: claude [options]\n  -p, --print\n"
-        )
-
-        #expect(arguments == ["-p", "Tidy this note."])
+    @Test(arguments: [NoteAssistantEngine.claude, .codex])
+    func missingAnyRequiredOptionRefusesTheRun(engine: NoteAssistantEngine) {
+        for flag in requiredFlags(for: engine) {
+            let partialHelp = help(for: engine).split(separator: "\n")
+                .filter { !$0.contains(flag) }.joined(separator: "\n")
+            expectUnsupportedVersion(engine, helpText: partialHelp)
+        }
     }
 
-    /// Nothing is known about the tool, so nothing is assumed about it: a run
-    /// that fails loudly beats one that quietly runs unrestricted.
-    @Test
-    func anUnreadableHelpTextKeepsEveryRestriction() {
-        let arguments = CommandLineAssistant.arguments(
-            for: .claude,
-            instruction: "Tidy this note.",
-            supportedFlagsIn: nil
-        )
+    @Test(arguments: [NoteAssistantEngine.claude, .codex])
+    func unreadableOrEmptyHelpRefusesTheRun(engine: NoteAssistantEngine) {
+        let unavailableHelp: [String?] = [nil, "", "Usage: assistant [options]"]
+        for helpText in unavailableHelp {
+            expectUnsupportedVersion(engine, helpText: helpText)
+        }
+    }
 
-        #expect(arguments.contains("--safe-mode"))
-        #expect(arguments.contains("--strict-mcp-config"))
-        #expect(follows("", "--tools", in: arguments))
+    @Test(arguments: [NoteAssistantEngine.claude, .codex])
+    func longerOptionNamesDoNotEstablishSupport(engine: NoteAssistantEngine) {
+        for flag in requiredFlags(for: engine) {
+            expectUnsupportedVersion(engine, helpText: help(for: engine)
+                .replacingOccurrences(of: flag, with: flag + "-extra"))
+        }
+    }
+
+    @Test(arguments: [NoteAssistantEngine.claude, .codex])
+    func descriptionsMentioningAnOptionDoNotEstablishSupport(engine: NoteAssistantEngine) {
+        for flag in requiredFlags(for: engine) {
+            let misleadingHelp = help(for: engine).split(separator: "\n")
+                .map { $0.contains(flag) ? "  This description mentions \(flag)." : String($0) }
+                .joined(separator: "\n")
+            expectUnsupportedVersion(engine, helpText: misleadingHelp)
+        }
+    }
+
+    private func help(for engine: NoteAssistantEngine) -> String {
+        engine == .claude ? Self.claudeHelp : Self.codexHelp
+    }
+
+    private func requiredFlags(for engine: NoteAssistantEngine) -> [String] {
+        switch engine {
+        case .claude:
+            ["--safe-mode", "--tools", "--strict-mcp-config", "--permission-mode", "--no-session-persistence"]
+        case .codex:
+            ["--skip-git-repo-check", "--sandbox", "--ignore-user-config", "--ignore-rules", "--ephemeral"]
+        case .onDevice:
+            []
+        }
+    }
+
+    private func expectUnsupportedVersion(_ engine: NoteAssistantEngine, helpText: String?) {
+        do {
+            _ = try CommandLineAssistant.arguments(
+                for: engine, instruction: "Tidy this note.", supportedFlagsIn: helpText
+            )
+            Issue.record("An unsupported installation must not receive a note.")
+        } catch NoteAssistantError.unsupportedVersion(let reportedEngine) {
+            #expect(reportedEngine == engine)
+        } catch {
+            Issue.record("Expected an unsupported-version explanation, got \(error).")
+        }
     }
 
     /// Codex cannot switch its tools off, so the sandbox is the limit, and
     /// ignoring the user's config is what keeps their MCP servers out of it.
     @Test
-    func aCodexRunIsReadOnlyAndIgnoresTheUsersOwnConfiguration() {
-        let arguments = CommandLineAssistant.arguments(
+    func aCodexRunIsReadOnlyAndIgnoresTheUsersOwnConfiguration() throws {
+        let arguments = try CommandLineAssistant.arguments(
             for: .codex,
             instruction: "Tidy this note.",
             supportedFlagsIn: Self.codexHelp

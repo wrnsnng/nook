@@ -17,6 +17,46 @@ enum DetailTab: String, CaseIterable, Identifiable {
     }
 }
 
+/// Separate progress text and Cancel retain their own accessibility elements.
+/// The existing write-up returns immediately when the request is canceled.
+struct SummaryRegenerationProgressCard: View {
+    let stage: SummaryStage
+    let onCancel: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        HStack(spacing: 14) {
+            NookPresence(state: .thinking, size: 30)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(RegenerationCopy.headline(for: stage))
+                    .font(NookType.bodyEmphasized)
+                Text(RegenerationCopy.detail(for: stage))
+                    .font(NookType.caption)
+                    .foregroundStyle(.secondary)
+                    .contentTransition(reduceMotion ? .identity : .numericText())
+            }
+            .accessibilityElement(children: .combine)
+            Spacer(minLength: 0)
+            Button("Cancel", action: onCancel)
+                .buttonStyle(.bordered)
+                .accessibilityLabel("Cancel summary regeneration")
+                .help("Keep the current summary and stop accepting this result.")
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            NookPalette.accent.opacity(0.07),
+            in: RoundedRectangle(cornerRadius: NookRadius.surface, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: NookRadius.surface, style: .continuous)
+                .stroke(NookPalette.accent.opacity(0.16), lineWidth: 0.7)
+        }
+        .accessibilityElement(children: .contain)
+    }
+}
+
 struct MeetingDetailView: View {
     @EnvironmentObject private var store: MarkdownStore
     @EnvironmentObject private var markdownDraft: MarkdownDraftController
@@ -30,10 +70,8 @@ struct MeetingDetailView: View {
     /// A moment the user asked to see; consumed by the transcript scroll.
     @State private var requestedMomentOffset: TimeInterval?
     /// Kept audio for this note, if any, enabling transcript playback.
-    @State private var playback = AudioPlaybackController()
-    @State private var positionTick: Task<Void, Never>?
-    @State private var copyNotice: String?
-    @State private var copyNoticeSeverity: CopyConfirmationBanner.Severity = .success
+    @StateObject private var playback = AudioPlaybackController()
+    @State private var copyNotice = CopyNoticeState()
     @State private var titleDraft: String
     /// Rename is an intentional mode, rather than a field that is live in
     /// every note. The title that was visible when the mode began is the
@@ -55,14 +93,9 @@ struct MeetingDetailView: View {
     /// says: an accented or emoji-bearing note would otherwise report a
     /// number larger than anything a person could count in it.
     @State private var markdownCharacterCount = 0
-    /// Whether the regeneration pass over this note's transcript is running,
-    /// and which stage it has reached, so waiting reads as progress instead
-    /// of a dead button.
-    @State private var regenerationStage: SummaryStage?
-    /// Button-driven work is kept explicitly so navigation can cancel it.
-    /// Without this handle, the old detail view could finish after another
-    /// note had taken over the shared Markdown draft controller.
-    @State private var regenerationTask: Task<Void, Never>?
+    /// Request identity protects progress and saves even when cancellation or
+    /// a folder change reaches this view after the underlying model returns.
+    @StateObject private var regeneration = SummaryRegenerationSession()
     /// The note's checkbox lines as they exist on disk right now. Checkbox
     /// state is deliberately absent from the decoded model, so ticking from
     /// here needs the file's own truth to stay aligned with the sidebar.
@@ -76,7 +109,11 @@ struct MeetingDetailView: View {
     /// row's accessibility label below.
     @State private var transcriptSourceBadgeIDs: Set<UUID>
 
-    init(note: MeetingNote, initialTab: DetailTab = .notes) {
+    init(
+        note: MeetingNote,
+        initialTab: DetailTab = .notes,
+        initialTranscriptSearch: String = ""
+    ) {
         self.note = note
         let startingTab = note.kind == .spoken
             && note.transcript.isEmpty
@@ -84,6 +121,7 @@ struct MeetingDetailView: View {
             ? .notes
             : initialTab
         _tab = State(initialValue: startingTab)
+        _transcriptSearch = State(initialValue: initialTranscriptSearch)
         _titleDraft = State(initialValue: note.title)
         _titleAtEditStart = State(initialValue: note.title)
         _transcriptSourceBadgeIDs = State(
@@ -117,11 +155,9 @@ struct MeetingDetailView: View {
                 }
             }
         }
-        .overlay(alignment: .top) {
-            if let copyNotice {
-                CopyConfirmationBanner(message: copyNotice, severity: copyNoticeSeverity)
-                    .padding(.top, 12)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+        .nookNotice(copyNotice.current) { id in
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
+                copyNotice.dismiss(id: id)
             }
         }
         .onAppear {
@@ -166,6 +202,17 @@ struct MeetingDetailView: View {
         .onChange(of: note.personalNotes) { _, _ in
             personalNotes.refresh(for: note)
         }
+        .onChange(of: store.storageGeneration) { _, _ in
+            regeneration.cancel()
+        }
+        .onChange(of: note.libraryIdentity) { _, _ in
+            regeneration.cancel()
+        }
+        .onChange(of: regeneration.completion?.id) { _, _ in
+            if let completion = regeneration.completion {
+                finishSummaryRegeneration(completion.result)
+            }
+        }
         .onChange(of: note.title) { oldValue, newValue in
             guard !isEditingTitle else { return }
             if titleDraft == oldValue {
@@ -187,7 +234,7 @@ struct MeetingDetailView: View {
         // Backstop for navigation that races focus loss: the view keeps its
         // own note, so committing here always writes the right file.
         .onDisappear {
-            cancelSummaryRegeneration()
+            regeneration.cancel()
             saveTitle()
             savePersonalNotes()
         }
@@ -917,14 +964,30 @@ struct MeetingDetailView: View {
         AudioPlaybackController.audioURL(for: note)
     }
 
-    /// Whether this row is the one playback is currently inside.
-    private func isPlayingSegment(_ segment: TranscriptSegment) -> Bool {
-        guard let offset = playback.activeOffset else { return false }
-        guard
-            let covering = segmentCovering(offset: offset),
-            covering.id == segment.id
-        else { return false }
-        return true
+    private var playingSegmentID: UUID? {
+        guard let audioOffset = playback.activeOffset,
+              let offset = AudioPlaybackController.transcriptOffset(
+                  for: audioOffset,
+                  in: note
+              )
+        else { return nil }
+        guard let segment = segmentCovering(offset: offset),
+              AudioPlaybackController.audioOffset(for: segment.startTime, in: note) != nil
+        else { return nil }
+        return segment.id
+    }
+
+    private func playAction(
+        for segment: TranscriptSegment,
+        audioURL: URL?
+    ) -> (() -> Void)? {
+        guard let audioURL,
+              let offset = AudioPlaybackController.audioOffset(
+                  for: segment.startTime,
+                  in: note
+              )
+        else { return nil }
+        return { playback.start(url: audioURL, at: offset) }
     }
 
     /// Small transport shown above the transcript while kept audio exists.
@@ -951,18 +1014,25 @@ struct MeetingDetailView: View {
                     : "Play recording from the beginning"
             )
 
-            if let offset = playback.activeOffset {
+            if let audioOffset = playback.activeOffset,
+               let offset = AudioPlaybackController.transcriptOffset(for: audioOffset, in: note),
+               let end = AudioPlaybackController.transcriptOffset(for: playback.duration, in: note) {
                 Text(
-                    "\(Self.clock(offset)) / \(Self.clock(playback.duration))"
+                    "\(Self.clock(offset)) / \(Self.clock(end))"
                 )
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .accessibilityLabel("Playback position")
+                .accessibilityValue(
+                    "\(Self.clock(offset)) of \(Self.clock(end))"
+                )
             }
 
             Spacer()
 
-            Text("Kept audio, on this Mac")
+            Text(note.audioStart > 0
+                 ? "Kept audio starts at \(Self.clock(note.audioStart))"
+                 : "Kept audio, on this Mac")
                 .font(NookType.caption)
                 .foregroundStyle(.secondary)
         }
@@ -980,11 +1050,37 @@ struct MeetingDetailView: View {
     }
 
     private var transcriptView: some View {
-        VStack(spacing: 0) {
+        // Resolve note-wide state once per update rather than scanning the
+        // transcript and touching the filesystem again for every visible row.
+        let segments = filteredTranscript
+        let flaggedIDs = flaggedSegmentIDs
+        let sourceBadgeIDs = transcriptSourceBadgeIDs
+        let activeID = playingSegmentID
+        let audioURL = keptAudioURL
+        return VStack(spacing: 0) {
             transcriptSearchBar
             SoftDivider()
 
-            if filteredTranscript.isEmpty {
+            // Search filters passages, not the recording. Keep its transport
+            // and failures reachable even when no passage matches.
+            if let audioURL {
+                VStack(alignment: .leading, spacing: 0) {
+                    playbackBar(url: audioURL)
+                    if let error = playback.lastError {
+                        Label(error, systemImage: "exclamationmark.circle")
+                            .font(NookType.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.bottom, 12)
+                    }
+                }
+                .padding(.horizontal, 44)
+                .padding(.top, 16)
+                .frame(maxWidth: 880)
+                .frame(maxWidth: .infinity)
+            }
+
+            if segments.isEmpty {
                 ContentUnavailableView {
                     Label("No matching words", systemImage: "text.magnifyingglass")
                 } description: {
@@ -995,58 +1091,52 @@ struct MeetingDetailView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 0) {
-                            if let audioURL = keptAudioURL {
-                                playbackBar(url: audioURL)
-                            }
-                            ForEach(filteredTranscript) { segment in
+                            ForEach(segments) { segment in
                                 TranscriptRow(
                                     segment: segment,
-                                    showsSourceBadge: transcriptSourceBadgeIDs
+                                    showsSourceBadge: sourceBadgeIDs
                                         .contains(segment.id),
-                                    isFlagged: flaggedSegmentIDs.contains(
-                                        segment.id
-                                    ),
-                                    isPlaying: isPlayingSegment(segment),
-                                    playAction: keptAudioURL.map { url in
-                                        { playback.start(
-                                            url: url,
-                                            at: segment.startTime
-                                        ) }
-                                    }
+                                    isFlagged: flaggedIDs.contains(segment.id),
+                                    isPlaying: activeID == segment.id,
+                                    playAction: playAction(
+                                        for: segment,
+                                        audioURL: audioURL
+                                    )
                                 )
                                 .id(segment.id)
                             }
                         }
                         .padding(.horizontal, 44)
-                        .padding(.vertical, 16)
+                        .padding(.top, audioURL == nil ? 16 : 0)
+                        .padding(.bottom, 16)
                         .frame(maxWidth: 880)
                         .frame(maxWidth: .infinity)
                     }
-                    .onChange(of: requestedMomentOffset) { _, newValue in
+                    .onChange(of: requestedMomentOffset, initial: true) { _, newValue in
                         guard let offset = newValue,
                               let target = segmentCovering(offset: offset)
                         else { return }
-                        withAnimation(.easeOut(duration: 0.25)) {
+                        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.25)) {
                             proxy.scrollTo(target.id, anchor: .center)
                         }
-                    }
-                    .onChange(of: playback.isPlaying) { _, playing in
-                        guard playing else { return }
-                        // Keep the published position fresh while playing.
-                        positionTick?.cancel()
-                        positionTick = Task {
-                            while !Task.isCancelled {
-                                try? await Task.sleep(for: .milliseconds(500))
-                                playback.refreshPosition()
-                            }
-                        }
-                    }
-                    .onDisappear {
-                        positionTick?.cancel()
-                        playback.stop()
+                        requestedMomentOffset = nil
                     }
                 }
             }
+        }
+        .task(id: playback.isPlaying) {
+            guard playback.isPlaying else { return }
+            // The lifetime belongs to the whole transcript. Filtering down
+            // to zero passages must not stop and restart the user's recording.
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .milliseconds(500))
+                } catch { return }
+                playback.refreshPosition()
+            }
+        }
+        .onDisappear {
+            playback.stop()
         }
     }
 
@@ -1094,8 +1184,8 @@ struct MeetingDetailView: View {
                 copyTranscript()
             } label: {
                 Label(
-                    copyNotice == "Transcript copied" ? "Copied" : "Copy transcript",
-                    systemImage: copyNotice == "Transcript copied" ? "checkmark" : "doc.on.doc"
+                    copyNotice.current?.message == "Transcript copied" ? "Copied" : "Copy transcript",
+                    systemImage: copyNotice.current?.message == "Transcript copied" ? "checkmark" : "doc.on.doc"
                 )
             }
             .buttonStyle(.borderless)
@@ -1106,23 +1196,48 @@ struct MeetingDetailView: View {
 
     private var markdownView: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Plain Markdown source")
-                        .font(NookType.control)
-                    Text(note.fileURL?.lastPathComponent ?? "Unsaved note")
-                        .font(NookType.code)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Plain Markdown source")
+                            .font(NookType.control)
+                        Text(note.fileURL?.lastPathComponent ?? "Unsaved note")
+                            .font(NookType.code)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer()
+
+                    Text("\(markdownCharacterCount) characters")
+                        .font(NookType.micro.weight(.medium))
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .contentTransition(.numericText())
+
+                    Button("Revert") {
+                        markdownDraft.discardChanges()
+                    }
+                    .buttonStyle(NookButtonStyle())
+                    .disabled(!hasMarkdownChanges)
+
+                    Button("Save") {
+                        saveMarkdown()
+                    }
+                    .buttonStyle(
+                        NookButtonStyle(
+                            tint: NookPalette.accent,
+                            isProminent: true
+                        )
+                    )
+                    .disabled(!hasMarkdownChanges)
+                    .keyboardShortcut(
+                        shortcuts.binding(for: .saveNote).keyEquivalent,
+                        modifiers: shortcuts.binding(for: .saveNote).eventModifiers
+                    )
                 }
 
-                Spacer()
-
-                Text("\(markdownCharacterCount) characters")
-                    .font(NookType.micro.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .contentTransition(.numericText())
-
+                // The recovery instruction must not compete with the filename,
+                // counter, and Save controls for a narrow window's last space.
                 if let statusMessage = markdownDraft.statusMessage {
                     Label(
                         statusMessage,
@@ -1130,30 +1245,12 @@ struct MeetingDetailView: View {
                     )
                     .font(NookType.micro.weight(.semibold))
                     .foregroundStyle(statusMessage == "Saved" ? NookPalette.success : NookPalette.danger)
-                    .lineLimit(2)
-                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .transition(.opacity.combined(with: .scale(
+                        scale: NookMotion.savedStatusScale(reduceMotion: reduceMotion)
+                    )))
                 }
-
-                Button("Revert") {
-                    markdownDraft.discardChanges()
-                }
-                .buttonStyle(NookButtonStyle())
-                .disabled(!hasMarkdownChanges)
-
-                Button("Save") {
-                    saveMarkdown()
-                }
-                .buttonStyle(
-                    NookButtonStyle(
-                        tint: NookPalette.accent,
-                        isProminent: true
-                    )
-                )
-                .disabled(!hasMarkdownChanges)
-                .keyboardShortcut(
-                    shortcuts.binding(for: .saveNote).keyEquivalent,
-                    modifiers: shortcuts.binding(for: .saveNote).eventModifiers
-                )
             }
             .padding(.horizontal, 28)
             .padding(.vertical, 13)
@@ -1164,6 +1261,9 @@ struct MeetingDetailView: View {
             // characters on a wide window, which no one tracks by eye, so the
             // column is capped near a hundred and centred like a page.
             TextEditor(text: $markdownDraft.rawMarkdown)
+                .accessibilityLabel("Markdown source")
+                .accessibilityHint("Edit this note’s Markdown source. Use Save to write your changes or Revert to discard them.")
+                .accessibilityIdentifier("markdownSourceEditor")
                 .font(NookType.code)
                 .lineSpacing(3)
                 .scrollContentBackground(.hidden)
@@ -1200,7 +1300,7 @@ struct MeetingDetailView: View {
             Task {
                 try? await Task.sleep(for: .seconds(2))
                 guard personalNotes.statusMessage == "Saved" else { return }
-                withAnimation(.easeOut(duration: 0.18)) {
+                withAnimation(NookMotion.quickAnimation(reduceMotion: reduceMotion)) {
                     personalNotes.statusMessage = nil
                 }
             }
@@ -1221,14 +1321,14 @@ struct MeetingDetailView: View {
     private func regenerateSummary() {
         guard SummaryRegenerator.isAvailable(for: note),
               !markdownDraft.hasChanges,
-              regenerationTask == nil
+              !regeneration.isRunning
         else { return }
 
         // The save below rewrites the whole file from the store's freshest
         // copy of the note. Words still sitting in the My notes draft would
         // be overwritten by that copy, so they get their save first, and a
         // refused save stops everything rather than losing words.
-        if personalNotes.noteID == note.id, personalNotes.hasChanges {
+        if personalNotes.noteID == note.id, personalNotes.hasExactChanges {
             do {
                 _ = try personalNotes.save(note: note, store: store)
             } catch {
@@ -1240,112 +1340,51 @@ struct MeetingDetailView: View {
             }
         }
 
-        guard let current = store.notes.first(where: { $0.id == note.id }) else {
+        guard let current = store.uniqueNote(id: note.id),
+              current.libraryIdentity == note.libraryIdentity else {
             showCopyNotice("This note is no longer in the library.", severity: .failure)
             return
         }
 
-        // Something visible before the first part reports, which on a long
-        // meeting takes a model round-trip.
-        regenerationStage = .condensing(pass: 1, part: 0, total: 0)
-        regenerationTask = Task { @MainActor in
-            let stageHandler: SummaryStageHandler = { stage in
-                guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    guard !Task.isCancelled else { return }
-                    regenerationStage = stage
-                }
-            }
-            let outcome = await SummaryRegenerator.regenerate(
-                current,
-                using: SummaryService(),
-                onStage: stageHandler
-            )
-            guard !Task.isCancelled else { return }
-            finishSummaryRegeneration(outcome, startingFrom: current)
-        }
+        // Capture the store itself, not this view and its StateObject, so a
+        // noncooperative runner cannot keep a disappeared editor alive.
+        let store = store
+        regeneration.start(
+            note: current,
+            library: {
+                .init(directoryURL: store.storageURL, generation: store.storageGeneration, notes: store.notes)
+            },
+            commit: { try store.save($0) }
+        )
     }
 
-    private var isRegenerating: Bool { regenerationStage != nil }
+    private var isRegenerating: Bool { regeneration.isRunning }
 
     /// The gist prose steps aside while the write-up runs; the lists below
     /// stay, so what the user had remains readable until the new one lands.
     @ViewBuilder
     private var regenerationStatusCard: some View {
-        if let stage = regenerationStage {
-            HStack(spacing: 14) {
-                NookPresence(state: .thinking, size: 30)
-                    .accessibilityHidden(true)
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(RegenerationCopy.headline(for: stage))
-                        .font(NookType.bodyEmphasized)
-                    Text(RegenerationCopy.detail(for: stage))
-                        .font(NookType.caption)
-                        .foregroundStyle(.secondary)
-                        .contentTransition(.numericText())
-                }
-
-                Spacer(minLength: 0)
-            }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                NookPalette.accent.opacity(0.07),
-                in: RoundedRectangle(
-                    cornerRadius: NookRadius.surface,
-                    style: .continuous
-                )
-            )
-            .overlay {
-                RoundedRectangle(
-                    cornerRadius: NookRadius.surface,
-                    style: .continuous
-                )
-                .stroke(NookPalette.accent.opacity(0.16), lineWidth: 0.7)
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(
-                RegenerationCopy.headline(for: stage) + ", "
-                    + RegenerationCopy.detail(for: stage)
-            )
+        if let stage = regeneration.stage {
+            SummaryRegenerationProgressCard(stage: stage, onCancel: regeneration.cancel)
         }
     }
 
-    private func finishSummaryRegeneration(
-        _ outcome: SummaryRegenerator.Outcome,
-        startingFrom starting: MeetingNote
-    ) {
-        regenerationTask = nil
-        regenerationStage = nil
+    private func finishSummaryRegeneration(_ outcome: SummaryRegenerationSession.Result) {
         switch outcome {
-        case .regenerated(let updated):
-            do {
-                guard let latest = store.notes.first(where: { $0.id == updated.id })
-                else {
-                    showCopyNotice(
-                        "This note is no longer in the library.",
-                        severity: .failure
-                    )
-                    return
-                }
-                let merged = SummaryRegenerator.mergingGeneratedFields(
-                    from: updated,
-                    startingFrom: starting,
-                    into: latest
-                )
-                let saved = try store.save(merged)
-                if markdownDraft.noteID == saved.id {
-                    markdownDraft.refresh(for: saved, store: store)
-                }
-                reloadChecklist()
-                showCopyNotice("Summary regenerated")
-            } catch {
-                showCopyNotice(error.localizedDescription, severity: .failure)
+        case .saved(let saved):
+            guard saved.libraryIdentity == note.libraryIdentity,
+                  saved.fileURL?.deletingLastPathComponent().standardizedFileURL
+                    == store.storageURL.standardizedFileURL else { return }
+            if markdownDraft.libraryIdentity == saved.libraryIdentity {
+                markdownDraft.refresh(for: saved, store: store)
             }
+            reloadChecklist()
+            showCopyNotice("Summary regenerated")
+        case .failed(let message):
+            showCopyNotice(message, severity: .failure)
         case .retained(let reason):
             if let reason {
-                showCopyNotice(reason.userSentence, severity: .failure)
+                showCopyNotice(RegenerationCopy.retainedMessage(for: reason), severity: .failure)
             } else {
                 showCopyNotice(
                     "There is no transcript here to summarize.",
@@ -1353,12 +1392,6 @@ struct MeetingDetailView: View {
                 )
             }
         }
-    }
-
-    private func cancelSummaryRegeneration() {
-        regenerationTask?.cancel()
-        regenerationTask = nil
-        regenerationStage = nil
     }
 
     private func beginTitleEditing() {
@@ -1458,7 +1491,7 @@ struct MeetingDetailView: View {
             Task {
                 try? await Task.sleep(for: .seconds(2))
                 guard markdownDraft.statusMessage == "Saved" else { return }
-                withAnimation(.easeOut(duration: 0.18)) {
+                withAnimation(NookMotion.quickAnimation(reduceMotion: reduceMotion)) {
                     markdownDraft.statusMessage = nil
                 }
             }
@@ -1472,8 +1505,9 @@ struct MeetingDetailView: View {
     /// reversible through Finder, while this guard keeps unsaved or external
     /// paths out of the menu action.
     private var canRenameManagedFile: Bool {
+        guard !store.duplicateNoteIDs.contains(note.id) else { return false }
         guard let fileURL = note.fileURL
-            ?? store.notes.first(where: { $0.id == note.id })?.fileURL
+            ?? store.uniqueNote(id: note.id)?.fileURL
         else { return false }
         let standardized = fileURL.standardizedFileURL
         let hasManagedFile = standardized.deletingLastPathComponent()
@@ -1497,11 +1531,20 @@ struct MeetingDetailView: View {
             // A title save can publish just before this menu action runs.
             // Use the store's freshest copy so an explicit file rename uses
             // the title the user just committed, not the header's old value.
-            let current = store.notes.first(where: { $0.id == note.id }) ?? note
-            let saved = try store.renameManagedFile(for: current)
-            if markdownDraft.noteID == saved.id {
-                markdownDraft.refresh(for: saved, store: store)
+            var current = store.notes.first(where: {
+                $0.id == note.id && $0.fileURL?.standardizedFileURL == note.fileURL?.standardizedFileURL
+            }) ?? note
+            // Commit even whitespace-only edits before changing their owner
+            // path. A refused save must leave both the draft and file in place.
+            if personalNotes.noteID == current.id, personalNotes.hasExactChanges {
+                current = try personalNotes.save(note: current, store: store)
             }
+            let saved = try store.renameManagedFile(for: current)
+            // Only this explicit, successful move may rebind clean editors.
+            // An external rename still leaves an unfinished draft at its
+            // captured original path for recovery instead of redirecting it.
+            markdownDraft.prepare(for: saved, store: store)
+            personalNotes.prepare(for: saved, store: store)
             showCopyNotice("File renamed to match title")
         } catch {
             showCopyNotice(error.localizedDescription, severity: .failure)
@@ -1534,18 +1577,15 @@ struct MeetingDetailView: View {
         _ message: String,
         severity: CopyConfirmationBanner.Severity = .success
     ) {
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
-            copyNotice = message
-            copyNoticeSeverity = severity
+        let id = withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
+            copyNotice.show(message, severity: severity)
         }
-        // Failures name a problem worth reading carefully, so they dwell
-        // longer than confirmations.
-        let dwell = severity == .success ? 1.8 : 4.0
+        guard let dwell = copyNotice.current?.expirationDelay else { return }
         Task {
-            try? await Task.sleep(for: .seconds(dwell))
-            guard copyNotice == message else { return }
+            do { try await Task.sleep(for: .seconds(dwell)) }
+            catch { return }
             withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
-                copyNotice = nil
+                copyNotice.expire(id: id)
             }
         }
     }
@@ -1685,12 +1725,15 @@ private struct TranscriptRow: View {
                     .foregroundStyle(.secondary)
             }
             .frame(width: 94, alignment: .trailing)
+            .accessibilityHidden(true)
 
             Text(segment.text)
                 .font(NookType.transcript)
                 .lineSpacing(5)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityLabel("\(segment.source.label): \(segment.text)")
+                .accessibilityValue(segment.timestamp)
 
             if isFlagged {
                 Image(systemName: "flag.fill")
@@ -1718,6 +1761,7 @@ private struct TranscriptRow: View {
                 .accessibilityLabel(
                     "Play recording from \(segment.timestamp)"
                 )
+                .accessibilityValue(isPlaying ? "Currently playing" : "")
             }
         }
         .padding(.vertical, 16)
@@ -1731,9 +1775,9 @@ private struct TranscriptRow: View {
         .overlay(alignment: .bottom) {
             SoftDivider()
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(segment.source.label): \(segment.text)")
-        .accessibilityValue(segment.timestamp)
+        // Keep the passage together without hiding its playback control or
+        // flagged state from VoiceOver.
+        .accessibilityElement(children: .contain)
     }
 }
 

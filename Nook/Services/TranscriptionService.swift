@@ -2,11 +2,63 @@ import AVFoundation
 import CoreMedia
 import Foundation
 import Speech
+import Synchronization
 
 actor TranscriptionService {
+    typealias Operation = @Sendable (URL, String) async throws -> [TranscriptSegment]
+
+    private let operation: Operation
+    private let timeoutOverride: TimeInterval?
+
+    init(operation: Operation? = nil, timeout: TimeInterval? = nil) {
+        self.operation = operation ?? { url, locale in
+            try await Self.transcribeFile(audioURL: url, localeIdentifier: locale)
+        }
+        self.timeoutOverride = timeout
+    }
+
     func transcribe(audioURL: URL, localeIdentifier: String) async throws -> [TranscriptSegment] {
+        try Task.checkCancellation()
+        let seconds = timeoutOverride ?? Self.deadline(for: Self.duration(of: audioURL))
+        let operation = operation
+        let work = Task {
+            try await operation(audioURL, localeIdentifier)
+        }
+        // A Speech sequence or its finalization can stop yielding forever.
+        // The same abandoning deadline as live capture lets the caller retain
+        // its recording and show recovery instead of awaiting a stuck child.
+        let result = await withDeadline(seconds: seconds) { await work.result }
+        guard let result else {
+            work.cancel()
+            try Task.checkCancellation()
+            throw TranscriptionError.timedOut
+        }
+        try Task.checkCancellation()
+        return try result.get()
+    }
+
+    /// Give long recordings more time without letting an unresponsive SDK
+    /// hold processing forever. This is a safety ceiling, not a speed target.
+    static func deadline(for audioDuration: TimeInterval) -> TimeInterval {
+        let duration = audioDuration.isFinite ? max(0, audioDuration) : 0
+        return min(3_600, 120 + duration)
+    }
+
+    private static func duration(of url: URL) -> TimeInterval {
+        guard let file = try? AVAudioFile(forReading: url),
+              file.processingFormat.sampleRate > 0 else { return 0 }
+        return Double(file.length) / file.processingFormat.sampleRate
+    }
+
+    private static func transcribeFile(
+        audioURL: URL,
+        localeIdentifier: String
+    ) async throws -> [TranscriptSegment] {
+        try Task.checkCancellation()
         try await SpeechAssets.requestAuthorization()
+        try Task.checkCancellation()
         let supportedLocale = try await SpeechAssets.supportedLocale(for: localeIdentifier)
+        try Task.checkCancellation()
 
         // Deliberately the same preset the live path uses. This pass only reads
         // `text`, `range`, and `isFinal`, so the alternatives preset added no
@@ -19,12 +71,14 @@ actor TranscriptionService {
             preset: .timeIndexedProgressiveTranscription
         )
         try await SpeechAssets.installIfNeeded(for: [transcriber], locale: supportedLocale)
+        try Task.checkCancellation()
 
         let audioFile = try AVAudioFile(forReading: audioURL)
         let analyzer = SpeechAnalyzer(modules: [transcriber])
         let resultsTask = Task<[TranscriptSegment], Error> {
             var segments: [TranscriptSegment] = []
             for try await result in transcriber.results {
+                try Task.checkCancellation()
                 guard result.isFinal else { continue }
                 let text = String(result.text.characters)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -40,24 +94,49 @@ actor TranscriptionService {
             return segments
         }
 
-        do {
-            let finalTime = try await analyzer.analyzeSequence(from: audioFile)
-            try await analyzer.finalize(through: finalTime)
-            try await analyzer.finalizeAndFinishThroughEndOfInput()
-            return try await resultsTask.value.sorted { $0.startTime < $1.startTime }
-        } catch {
+        let cleanupStarted = Mutex(false)
+        let cancelAnalysis: @Sendable () -> Void = {
+            let shouldStart = cleanupStarted.withLock { started in
+                guard !started else { return false }
+                started = true
+                return true
+            }
+            guard shouldStart else { return }
             resultsTask.cancel()
-            await analyzer.cancelAndFinishNow()
-            throw error
+            // Cleanup is best effort. Waiting for a second stalled framework
+            // call here would undo the deadline above and delay cancellation.
+            Task { await analyzer.cancelAndFinishNow() }
+        }
+
+        return try await withTaskCancellationHandler {
+            do {
+                try Task.checkCancellation()
+                let finalTime = try await analyzer.analyzeSequence(from: audioFile)
+                try Task.checkCancellation()
+                try await analyzer.finalize(through: finalTime)
+                try Task.checkCancellation()
+                try await analyzer.finalizeAndFinishThroughEndOfInput()
+                try Task.checkCancellation()
+                return try await resultsTask.value.sorted { $0.startTime < $1.startTime }
+            } catch {
+                cancelAnalysis()
+                throw error
+            }
+        } onCancel: {
+            // A catch alone is insufficient: a stuck analyze/finalize call
+            // never throws. Stop its result consumer as soon as the caller
+            // leaves, and request analyzer cleanup exactly once.
+            cancelAnalysis()
         }
     }
 
 }
 
-enum TranscriptionError: LocalizedError {
+enum TranscriptionError: LocalizedError, Equatable {
     case permissionDenied
     case unsupportedLocale(String)
     case assetsUnavailable
+    case timedOut
 
     var errorDescription: String? {
         switch self {
@@ -67,6 +146,8 @@ enum TranscriptionError: LocalizedError {
             "On-device transcription is not available for \(locale)."
         case .assetsUnavailable:
             "The on-device speech model is not available. Connect once so macOS can install the language asset."
+        case .timedOut:
+            "Local transcription took too long. Try recovering the recording again."
         }
     }
 }

@@ -15,8 +15,8 @@ settings:
     SWIFT_VERSION: "6.0"
     MACOSX_DEPLOYMENT_TARGET: "26.0"
     CODE_SIGN_STYLE: Automatic
-    MARKETING_VERSION: "1.19.0"
-    CURRENT_PROJECT_VERSION: "35"
+    MARKETING_VERSION: "1.20.0"
+    CURRENT_PROJECT_VERSION: "36"
 packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle

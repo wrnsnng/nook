@@ -2,6 +2,303 @@ import Foundation
 import Testing
 @testable import Nook
 
+@MainActor
+struct PermissionRestartLaunchTests {
+    @Test(arguments: [false, true])
+    func attachmentLaunchWaitsForWindowsAndLibraryInEitherOrder(libraryFirst: Bool) {
+        var gate = LaunchPresentationGate()
+        let claimedBeforeBothReady = gate.claim(
+            windowActionsInstalled: !libraryFirst,
+            libraryIsLoading: !libraryFirst,
+            pendingStartNeedsLibrary: true
+        )
+        #expect(!claimedBeforeBothReady)
+        #expect(!gate.hasPresented)
+        let claimedWhenReady = gate.claim(
+            windowActionsInstalled: true,
+            libraryIsLoading: false,
+            pendingStartNeedsLibrary: true
+        )
+        #expect(claimedWhenReady)
+        #expect(gate.hasPresented)
+        // A duplicate window installation or a later reload cannot present
+        // the launch experience again, even after the pending keys are gone.
+        let claimedAgain = gate.claim(
+            windowActionsInstalled: true,
+            libraryIsLoading: false,
+            pendingStartNeedsLibrary: false
+        )
+        #expect(!claimedAgain)
+    }
+
+    @Test
+    func ordinaryWelcomeDoesNotWaitForTheLibrary() {
+        var gate = LaunchPresentationGate()
+        let claimed = gate.claim(
+            windowActionsInstalled: true,
+            libraryIsLoading: true,
+            pendingStartNeedsLibrary: false
+        )
+        #expect(claimed)
+    }
+
+    @Test
+    func anotherReloadKeepsTheAttachmentLaunchPending() {
+        var gate = LaunchPresentationGate()
+        // A new reload can start after one publication queued the main actor
+        // launch callback. The queued callback must not consume the request.
+        let claimedDuringReload = gate.claim(
+            windowActionsInstalled: true,
+            libraryIsLoading: true,
+            pendingStartNeedsLibrary: true
+        )
+        #expect(!claimedDuringReload)
+        let claimedAfterReload = gate.claim(
+            windowActionsInstalled: true,
+            libraryIsLoading: false,
+            pendingStartNeedsLibrary: true
+        )
+        #expect(claimedAfterReload)
+    }
+
+    @Test
+    func loadingCannotConsumeAnyPersistedAttachmentFields() throws {
+        let domain = "nook.permission-restart.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let id = UUID().uuidString
+        let path = "/nook-fixtures/Library/original.md"
+        defaults.set(true, forKey: "resumeRecordingAfterPermission")
+        defaults.set("Synthetic title", forKey: "resumeRecordingAfterPermissionTitle")
+        defaults.set("Manual", forKey: "resumeRecordingAfterPermissionSource")
+        defaults.set(id, forKey: "resumeRecordingAfterPermissionNoteID")
+        defaults.set(path, forKey: "resumeRecordingAfterPermissionNotePath")
+        let store = MarkdownStore(noteLoader: { _, _ in .success((notes: [], issues: [])) })
+        let coordinator = MeetingCoordinator(store: store, detector: MeetingDetector())
+
+        // This synchronous main actor turn cannot publish the detached load.
+        #expect(store.isLoading)
+        #expect(MeetingCoordinator.pendingStartNeedsLibrary(defaults: defaults))
+        #expect(!coordinator.resumePendingStartAfterPermission(defaults: defaults))
+        #expect(defaults.bool(forKey: "resumeRecordingAfterPermission"))
+        #expect(defaults.string(forKey: "resumeRecordingAfterPermissionTitle") == "Synthetic title")
+        #expect(defaults.string(forKey: "resumeRecordingAfterPermissionSource") == "Manual")
+        #expect(defaults.string(forKey: "resumeRecordingAfterPermissionNoteID") == id)
+        #expect(defaults.string(forKey: "resumeRecordingAfterPermissionNotePath") == path)
+        #expect(coordinator.activeRecordingID == nil)
+        #expect(coordinator.phase == .idle)
+    }
+
+    @Test
+    func aLegacyAttachmentShowsOneRefusalAfterTheLibraryLoads() async throws {
+        let domain = "nook.permission-restart.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        defaults.set(true, forKey: "resumeRecordingAfterPermission")
+        defaults.set("Synthetic title", forKey: "resumeRecordingAfterPermissionTitle")
+        defaults.set("Manual", forKey: "resumeRecordingAfterPermissionSource")
+        defaults.set(UUID().uuidString, forKey: "resumeRecordingAfterPermissionNoteID")
+        let store = MarkdownStore(noteLoader: { _, _ in .success((notes: [], issues: [])) })
+        let coordinator = MeetingCoordinator(store: store, detector: MeetingDetector())
+        var presentations = 0
+        coordinator.onPresentationRequested = { presentations += 1 }
+        while store.isLoading { await Task.yield() }
+
+        #expect(coordinator.resumePendingStartAfterPermission(defaults: defaults))
+        #expect(presentations == 1)
+        #expect(coordinator.activeRecordingID == nil)
+        if case .failed(let message) = coordinator.phase {
+            #expect(message.contains("Open the original note"))
+        } else {
+            Issue.record("The legacy attachment must ask for the original note to be selected.")
+        }
+        #expect(!defaults.bool(forKey: "resumeRecordingAfterPermission"))
+        #expect(defaults.string(forKey: "resumeRecordingAfterPermissionTitle") == nil)
+        #expect(defaults.string(forKey: "resumeRecordingAfterPermissionSource") == nil)
+        #expect(defaults.string(forKey: "resumeRecordingAfterPermissionNoteID") == nil)
+        #expect(defaults.string(forKey: "resumeRecordingAfterPermissionNotePath") == nil)
+        #expect(!coordinator.resumePendingStartAfterPermission(defaults: defaults))
+        #expect(presentations == 1)
+    }
+
+    @Test
+    func unattachedAndInactiveRequestsDoNotNeedTheLibrary() throws {
+        let domain = "nook.permission-restart.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        defaults.set(true, forKey: "resumeRecordingAfterPermission")
+        #expect(!MeetingCoordinator.pendingStartNeedsLibrary(defaults: defaults))
+        defaults.set(UUID().uuidString, forKey: "resumeRecordingAfterPermissionNoteID")
+        #expect(MeetingCoordinator.pendingStartNeedsLibrary(defaults: defaults))
+        defaults.set(false, forKey: "resumeRecordingAfterPermission")
+        #expect(!MeetingCoordinator.pendingStartNeedsLibrary(defaults: defaults))
+    }
+}
+
+/// A recording retains the file the person chose, even if a copied note with
+/// the same frontmatter UUID appears while capture or summarization waits.
+@MainActor
+struct AttachedRecordingOwnershipTests {
+    private let library = URL(fileURLWithPath: "/nook-fixtures/Library", isDirectory: true)
+
+    private func note(id: UUID = UUID(), fileName: String = "original.md") -> MeetingNote {
+        MeetingNote(
+            id: id,
+            title: "Synthetic planning note",
+            startedAt: Date(timeIntervalSince1970: 1_000),
+            endedAt: Date(timeIntervalSince1970: 1_060),
+            sourceApp: "Manual",
+            summary: "The team reviewed a synthetic plan.",
+            transcript: [
+                TranscriptSegment(
+                    startTime: 0,
+                    duration: 12,
+                    text: "The team reviewed a synthetic plan."
+                )
+            ],
+            fileURL: library.appendingPathComponent(fileName)
+        )
+    }
+
+    private func target(
+        for identity: LibraryNoteIdentity,
+        in notes: [MeetingNote],
+        libraryURL: URL? = nil
+    ) -> MeetingNote? {
+        MeetingCoordinator.attachedRecordingTarget(
+            expected: identity,
+            notes: notes,
+            libraryURL: libraryURL ?? library
+        )
+    }
+
+    @Test
+    func theCapturedFileReceivesFreshEditsWithoutChangingOwnership() {
+        let original = note()
+        var current = original
+        current.title = "Title edited while recording"
+        current.personalNotes = "Keep this new handwritten thought."
+        current.fileRevision = Data([2, 3, 4])
+
+        #expect(target(for: original.libraryIdentity, in: [current]) == current)
+    }
+
+    @Test(arguments: [false, true])
+    func aCopyAppearingAfterCaptureStartedRefusesEitherArrayOrder(copyFirst: Bool) {
+        let original = note()
+        let selectedBeforeCapture = original.libraryIdentity
+        #expect(target(for: selectedBeforeCapture, in: [original]) == original)
+        let copy = note(id: original.id, fileName: "copied.md")
+        let refreshed = copyFirst ? [copy, original] : [original, copy]
+
+        #expect(target(for: selectedBeforeCapture, in: refreshed) == nil)
+        #expect(target(for: copy.libraryIdentity, in: refreshed) == nil)
+    }
+
+    @Test
+    func aMissingMovedOrReplacedSourceCannotBeSubstituted() {
+        let original = note()
+        let moved = note(id: original.id, fileName: "moved.md")
+        let replaced = note(fileName: "original.md")
+
+        #expect(target(for: original.libraryIdentity, in: []) == nil)
+        #expect(target(for: original.libraryIdentity, in: [moved]) == nil)
+        #expect(target(for: original.libraryIdentity, in: [replaced]) == nil)
+    }
+
+    @Test
+    func switchingLibrariesCannotAdoptACopyOrUseStaleLibraryEntries() {
+        let original = note()
+        let otherLibrary = URL(fileURLWithPath: "/nook-fixtures/Other", isDirectory: true)
+        var copied = original
+        copied.fileURL = otherLibrary.appendingPathComponent("original.md")
+
+        #expect(target(
+            for: original.libraryIdentity, in: [copied], libraryURL: otherLibrary
+        ) == nil)
+        // Reloading is asynchronous, so old entries can briefly remain after
+        // the active folder has already changed.
+        #expect(target(
+            for: original.libraryIdentity, in: [original], libraryURL: otherLibrary
+        ) == nil)
+        #expect(target(
+            for: copied.libraryIdentity, in: [copied], libraryURL: otherLibrary
+        ) == copied)
+    }
+
+    @Test
+    func unsavedNotesAndDigestsAreNotRecordingDestinations() {
+        var unsaved = note()
+        unsaved.fileURL = nil
+        var digest = note()
+        digest.kind = .digest
+
+        #expect(target(for: unsaved.libraryIdentity, in: [unsaved]) == nil)
+        #expect(target(for: digest.libraryIdentity, in: [digest]) == nil)
+    }
+
+    @Test
+    func permissionRestartKeepsTheSelectedFileIdentity() throws {
+        let original = note()
+        let resumed = try #require(MeetingCoordinator.pendingAttachmentIdentity(
+            noteID: original.id.uuidString,
+            filePath: original.libraryIdentity.filePath
+        ))
+
+        #expect(resumed == original.libraryIdentity)
+        #expect(target(for: resumed, in: [original]) == original)
+        let copy = note(id: original.id, fileName: "copied.md")
+        #expect(target(for: resumed, in: [copy]) == nil)
+        #expect(target(for: resumed, in: [original, copy]) == nil)
+    }
+
+    @Test
+    func legacyAndMalformedPermissionDestinationsRequireASelection() {
+        let id = UUID().uuidString
+        let paths: [String?] = [
+            nil, "", "relative.md", "/nook-fixtures/../other.md", "/bad\0name.md",
+        ]
+        for path in paths {
+            #expect(MeetingCoordinator.pendingAttachmentIdentity(
+                noteID: id, filePath: path
+            ) == nil)
+        }
+        #expect(MeetingCoordinator.pendingAttachmentIdentity(
+            noteID: "not-a-uuid", filePath: "/nook-fixtures/Library/original.md"
+        ) == nil)
+    }
+
+    @Test
+    func neitherSummaryPassWritesIntoARenamedOrCopiedUUID() {
+        let scaffold = note()
+        var otherFile = scaffold
+        otherFile.fileURL = library.appendingPathComponent("different.md")
+        let generated = SummaryResult(
+            insights: MeetingInsights(
+                title: "Synthetic plan review",
+                summary: "The team reviewed a synthetic plan.",
+                keyPoints: ["Review the plan"],
+                decisions: [],
+                actionItems: []
+            ),
+            failure: nil
+        )
+
+        #expect(MeetingCoordinator.mergingTranscriptFirstSummary(
+            generated, scaffold: scaffold, current: otherFile
+        ) == nil)
+        #expect(MeetingCoordinator.mergingAppendedSessionSummary(
+            generated, scaffold: scaffold, current: otherFile
+        ) == nil)
+        #expect(MeetingCoordinator.mergingTranscriptFirstSummary(
+            generated, scaffold: scaffold, current: scaffold
+        ) != nil)
+        #expect(MeetingCoordinator.mergingAppendedSessionSummary(
+            generated, scaffold: scaffold, current: scaffold
+        ) != nil)
+    }
+}
+
 struct RecordingLifecycleTests {
     @Test
     @MainActor
@@ -855,6 +1152,25 @@ struct LiveSummarySchedulingTests {
 @MainActor
 struct SummaryDeadlineTests {
     @Test
+    func cancellingQuitAfterMeetingCleanupRestoresTheOrdinarySummaryBudget() async {
+        let store = MarkdownStore(noteLoader: { _, _ in
+            .success((notes: [], issues: []))
+        })
+        let coordinator = MeetingCoordinator(store: store, detector: MeetingDetector())
+        let ordinaryBudget = coordinator.summaryDeadline(forTranscriptCharacters: 120_000)
+
+        #expect(await coordinator.prepareForApplicationTermination())
+        #expect(coordinator.summaryDeadline(forTranscriptCharacters: 120_000)
+                == MeetingCoordinator.summaryQuitDeadline)
+
+        coordinator.cancelApplicationTermination()
+
+        #expect(coordinator.summaryDeadline(forTranscriptCharacters: 120_000) == ordinaryBudget)
+        #expect(ordinaryBudget > MeetingCoordinator.summaryQuitDeadline)
+        #expect(coordinator.terminationState == .inactive)
+    }
+
+    @Test
     func cancellingADeadlineWaitResumesImmediately() async {
         let signal = DeadlineSignal<Int>()
         var finished = false
@@ -1040,13 +1356,14 @@ struct TranscriptFirstFinalizationTests {
     @Test
     func enrichmentChangesOnlyFieldsStillEqualToTheScaffold() {
         let noteDraft = draft()
-        let scaffold = MeetingCoordinator.transcriptFirstScaffold(
+        var scaffold = MeetingCoordinator.transcriptFirstScaffold(
             for: noteDraft,
             transcript: transcript(),
             personalNotes: "Original notes",
             moments: [MeetingMoment(offset: 4)],
             endedAt: Date(timeIntervalSince1970: 1_020)
         )
+        scaffold.fileURL = URL(fileURLWithPath: "/tmp/original.md")
         var current = scaffold
         current.title = "Renamed while processing"
         current.keyPoints = ["A hand-written point"]
@@ -1061,7 +1378,6 @@ struct TranscriptFirstFinalizationTests {
                 anchor: nil
             )
         ]
-        current.fileURL = URL(fileURLWithPath: "/tmp/renamed.md")
         current.fileModified = Date(timeIntervalSince1970: 1_030)
 
         let merged = MeetingCoordinator.mergingTranscriptFirstSummary(
@@ -1207,6 +1523,332 @@ struct TranscriptFirstFinalizationTests {
                 current: different
             ) == nil
         )
+    }
+}
+
+/// Enrichment holds an older scaffold while another writer can publish a
+/// newer revision. Canonically equal text is not permission to replace that
+/// newer writing. Exercise the final save as well as the in-memory merge.
+@MainActor
+struct RecordingEnrichmentExactEditTests {
+    private enum Field: CaseIterable, Equatable {
+        case title, summary, keyPoints, decisions, actionItems
+    }
+
+    private func directory() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NookEnrichmentExact-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    private func read(_ url: URL) throws -> MeetingNote {
+        let source = try String(contentsOf: url, encoding: .utf8)
+        return try #require(MarkdownCodec.decode(source, fileURL: url))
+    }
+
+    private func result() -> SummaryResult {
+        SummaryResult(insights: MeetingInsights(
+            title: "Generated review",
+            summary: "A newly generated summary.",
+            keyPoints: ["A newly generated point"],
+            decisions: ["A newly generated decision"],
+            actionItems: ["A newly generated action"]
+        ), failure: nil)
+    }
+
+    private func enrich(_ result: SummaryResult, scaffold: MeetingNote, current: MeetingNote, appended: Bool) throws -> MeetingNote {
+        if appended {
+            return try #require(MeetingCoordinator.mergingAppendedSessionSummary(
+                result, scaffold: scaffold, current: current
+            ))
+        }
+        return try #require(MeetingCoordinator.mergingTranscriptFirstSummary(
+            result, scaffold: scaffold, current: current
+        ))
+    }
+
+    private func value(_ field: Field, in note: MeetingNote) -> String {
+        switch field {
+        case .title: note.title
+        case .summary: note.summary
+        case .keyPoints: note.keyPoints.joined(separator: "\n")
+        case .decisions: note.decisions.joined(separator: "\n")
+        case .actionItems: note.actionItems.joined(separator: "\n")
+        }
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func aFreshUnicodeOnlyEditSurvivesEitherDelayedEnrichment(appended: Bool, reverseNormalization: Bool) throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MarkdownStore(noteLoader: { _, _ in .success((notes: [], issues: [])) })
+        store.storageURL = root
+        let before = reverseNormalization ? "Cafe\u{301}" : "Café"
+        let after = reverseNormalization ? "Café" : "Cafe\u{301}"
+        #expect(before == after)
+        #expect(!before.utf8.elementsEqual(after.utf8))
+
+        for field in Field.allCases {
+            let saved = try store.save(MeetingNote(
+                title: "\(before) title", startedAt: Date(timeIntervalSince1970: 1_000),
+                endedAt: Date(timeIntervalSince1970: 1_120), sourceApp: "Synthetic",
+                summary: "\(before) summary", keyPoints: ["\(before) point"],
+                decisions: ["\(before) decision"], actionItems: ["\(before) action"],
+                completedActionItems: ["\(before) action"],
+                personalNotes: "Retain my exact words.\nSecond line.",
+                transcript: [TranscriptSegment(startTime: 0, duration: 0, text: "The review is ready.")]
+            ))
+            let file = try #require(saved.fileURL)
+            let scaffold = try read(file)
+            let pendingResult = result()
+            // The result belongs to the old scaffold. An external edit lands
+            // before that delayed result is applied, then the caller sees its
+            // fresh revision, just as a reload supplies in the real pipeline.
+            var edit = scaffold
+            switch field {
+            case .title: edit.title = "\(after) title"
+            case .summary: edit.summary = "\(after) summary"
+            case .keyPoints: edit.keyPoints = ["\(after) point"]
+            case .decisions: edit.decisions = ["\(after) decision"]
+            case .actionItems: edit.actionItems = ["\(after) action"]
+            }
+            try Data(MarkdownCodec.encode(edit).utf8).write(to: file)
+            let current = try read(file)
+            #expect(current.fileRevision != scaffold.fileRevision)
+            #expect(current.transcript == scaffold.transcript)
+            let merged = try enrich(pendingResult, scaffold: scaffold, current: current, appended: appended)
+            #expect(value(field, in: merged).utf8.elementsEqual(value(field, in: current).utf8))
+            #expect(merged.id == current.id)
+            #expect(merged.fileURL == current.fileURL)
+            #expect(merged.fileRevision == current.fileRevision)
+            #expect(merged.personalNotes.utf8.elementsEqual(current.personalNotes.utf8))
+            if field == .summary {
+                #expect(merged.decisions == pendingResult.insights.decisions)
+            } else {
+                #expect(merged.summary == pendingResult.insights.summary)
+            }
+            let persisted = try store.save(merged)
+            let readBack = try read(file)
+            #expect(value(field, in: readBack).utf8.elementsEqual(value(field, in: current).utf8))
+            #expect(readBack.fileRevision == persisted.fileRevision)
+        }
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func unicodeOnlyTranscriptChangesRejectOldClaims(appended: Bool, reverseNormalization: Bool) throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("Synthetic.md")
+        let before = reverseNormalization ? "Cafe\u{301}" : "Café"
+        let after = reverseNormalization ? "Café" : "Cafe\u{301}"
+        let source = MeetingNote(
+            title: "Synthetic review", startedAt: Date(timeIntervalSince1970: 1_000),
+            endedAt: Date(timeIntervalSince1970: 1_120), sourceApp: "Synthetic",
+            summary: "Keep this summary.",
+            transcript: [TranscriptSegment(startTime: 0, duration: 0, text: "\(before) review.")]
+        )
+        try Data(MarkdownCodec.encode(source).utf8).write(to: file)
+        let scaffold = try read(file)
+        let changed = MarkdownCodec.encode(source).replacingOccurrences(of: before, with: after)
+        let changedBytes = Data(changed.utf8)
+        try changedBytes.write(to: file)
+        let current = try read(file)
+        // Decoded segment IDs remain stable, so canonical array equality
+        // alone cannot notice that the generation input's bytes changed.
+        #expect(current.transcript == scaffold.transcript)
+        #expect(current.fileRevision != scaffold.fileRevision)
+        let merged = try enrich(result(), scaffold: scaffold, current: current, appended: appended)
+        #expect(Data(MarkdownCodec.encode(merged).utf8) == changedBytes)
+        #expect(merged.fileRevision == current.fileRevision)
+        #expect(try Data(contentsOf: file) == changedBytes)
+    }
+}
+
+private actor AppendedAudioTestGate {
+    private var entered = false
+    private var released = false
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func hold() async {
+        entered = true
+        for waiter in entryWaiters { waiter.resume() }
+        entryWaiters = []
+        if released { return }
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func waitUntilHeld() async {
+        if entered { return }
+        await withCheckedContinuation { entryWaiters.append($0) }
+    }
+
+    func release() {
+        released = true
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+@MainActor
+struct AppendedAudioOwnershipTests {
+    private struct Fixture {
+        let root: URL
+        let prior: URL
+        let session: URL
+        let draft: MeetingDraft
+        let priorBytes = Data("Synthetic prior audio.".utf8)
+        let sessionBytes = Data("Synthetic session audio.".utf8)
+        let captureBytes = Data("Synthetic raw capture.".utf8)
+
+        init() throws {
+            root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("NookAppendAudio-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            let id = UUID()
+            prior = root.appendingPathComponent("\(UUID().uuidString).m4a")
+            session = root.appendingPathComponent("\(id.uuidString).m4a")
+            draft = MeetingDraft(
+                id: id, title: "Synthetic append", sourceApp: "Synthetic",
+                startedAt: Date(timeIntervalSince1970: 1_000),
+                recordingURL: root.appendingPathComponent("\(id.uuidString).mp4")
+            )
+            try priorBytes.write(to: prior)
+            try sessionBytes.write(to: session)
+            try captureBytes.write(to: draft.recordingURL)
+        }
+
+        func sources() async throws -> MeetingCoordinator.AppendedAudioSources {
+            try await MeetingCoordinator.inspectAppendedAudio(
+                priorAudioURL: prior, sessionAudioURL: session, measure: { _ in 17 }
+            )
+        }
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func aRecordingChangedDuringMeasurementCannotSupplyTheAppendOffset(changeSession: Bool, replaceFile: Bool) async throws {
+        let fixture = try Fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let gate = AppendedAudioTestGate()
+        let work = Task {
+            try await MeetingCoordinator.inspectAppendedAudio(
+                priorAudioURL: fixture.prior, sessionAudioURL: fixture.session,
+                measure: { _ in await gate.hold(); return 17 }
+            )
+        }
+        await gate.waitUntilHeld()
+        let changed = changeSession ? fixture.session : fixture.prior
+        let newBytes = Data("A different synthetic recording, retained exactly.".utf8)
+        do {
+            try newBytes.write(to: changed, options: replaceFile ? .atomic : [])
+        } catch {
+            await gate.release()
+            _ = try? await work.value
+            throw error
+        }
+        await gate.release()
+        do {
+            _ = try await work.value
+            Issue.record("A measured duration from a changed source must not reach the append.")
+        } catch {
+            #expect(error as? NoteCombiner.CombineError == .audioChanged)
+        }
+        #expect(try Data(contentsOf: changed) == newBytes)
+        #expect(try Data(contentsOf: changeSession ? fixture.prior : fixture.session)
+            == (changeSession ? fixture.priorBytes : fixture.sessionBytes))
+        #expect(try Data(contentsOf: fixture.draft.recordingURL) == fixture.captureBytes)
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func changedAudioIsNotReplacedByACombinationOfOlderBytes(changeSession: Bool, replaceFile: Bool) async throws {
+        let fixture = try Fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let sources = try await fixture.sources()
+        let gate = AppendedAudioTestGate()
+        let oldCombined = fixture.priorBytes + fixture.sessionBytes
+        let work = Task {
+            try await MeetingCoordinator.concatenateAppendedAudio(
+                sources,
+                extract: { inputs, destination in
+                    #expect(inputs == [fixture.prior, fixture.session])
+                    try oldCombined.write(to: destination)
+                    await gate.hold()
+                },
+                validatingBeforeReplacement: {}
+            )
+        }
+        await gate.waitUntilHeld()
+        let changed = changeSession ? fixture.session : fixture.prior
+        let newBytes = Data("Newer synthetic audio must remain at its original path.".utf8)
+        do {
+            try newBytes.write(to: changed, options: replaceFile ? .atomic : [])
+        } catch {
+            await gate.release()
+            _ = try? await work.value
+            throw error
+        }
+        await gate.release()
+        do {
+            try await work.value
+            Issue.record("An old combination must not replace either changed recording.")
+        } catch {
+            #expect(error as? NoteCombiner.CombineError == .audioChanged)
+        }
+        // Exercise the actual cleanup policy used on placement failure. It is
+        // independent of the normal retention preference: the failed append
+        // still owes its original capture and extracted session to recovery.
+        let captureURLs = [fixture.draft.recordingURL]
+        let preserved = MeetingCoordinator.sessionArtifactsAfterAudioFailure(
+            draft: fixture.draft, recordingURLs: captureURLs, sessionAudioURL: fixture.session
+        )
+        let failures = RecordingArtifactCleanup.removeArtifacts(
+            for: fixture.draft, additionalURLs: captureURLs + [fixture.session], preserving: preserved
+        )
+        #expect(failures.isEmpty)
+        #expect(try Data(contentsOf: changed) == newBytes)
+        #expect(try Data(contentsOf: changeSession ? fixture.prior : fixture.session)
+            == (changeSession ? fixture.priorBytes : fixture.sessionBytes))
+        #expect(try Data(contentsOf: fixture.draft.recordingURL) == fixture.captureBytes)
+        let remaining = try FileManager.default.contentsOfDirectory(atPath: fixture.root.path)
+        #expect(!remaining.contains { $0.hasPrefix("combined-") })
+    }
+
+    @Test
+    func losingTheNoteOwnerDuringCombinationLeavesBothRecordings() async throws {
+        let fixture = try Fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let sources = try await fixture.sources()
+        do {
+            try await MeetingCoordinator.concatenateAppendedAudio(
+                sources,
+                extract: { _, destination in
+                    try (fixture.priorBytes + fixture.sessionBytes).write(to: destination)
+                },
+                validatingBeforeReplacement: { throw CocoaError(.fileNoSuchFile) }
+            )
+            Issue.record("A vanished note owner must refuse the audio replacement.")
+        } catch {
+            #expect((error as NSError).code == CocoaError.fileNoSuchFile.rawValue)
+        }
+        #expect(try Data(contentsOf: fixture.prior) == fixture.priorBytes)
+        #expect(try Data(contentsOf: fixture.session) == fixture.sessionBytes)
+    }
+
+    @Test
+    func unchangedAudioStillCombinesAfterItsOwnerIsValidated() async throws {
+        let fixture = try Fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let sources = try await fixture.sources()
+        let combined = fixture.priorBytes + fixture.sessionBytes
+        try await MeetingCoordinator.concatenateAppendedAudio(
+            sources,
+            extract: { _, destination in try combined.write(to: destination) },
+            validatingBeforeReplacement: {}
+        )
+        #expect(try Data(contentsOf: fixture.prior) == combined)
+        #expect(try Data(contentsOf: fixture.session) == fixture.sessionBytes)
+        #expect(sources.priorDuration == 17)
     }
 }
 

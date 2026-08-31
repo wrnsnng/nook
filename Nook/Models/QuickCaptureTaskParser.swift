@@ -9,7 +9,7 @@ import Foundation
 /// capture-assist ladder; anything looser would need the propose-and-diff
 /// treatment before it could ship.
 enum QuickCaptureTaskParser {
-    struct Suggestion: Equatable {
+    struct Suggestion: Equatable, Sendable {
         /// The paragraph verbatim, checkbox prefix included when present.
         let paragraph: String
         let dueDate: Date
@@ -33,6 +33,7 @@ enum QuickCaptureTaskParser {
         calendar: Calendar = .current
     ) -> Suggestion? {
         for paragraph in text.split(separator: "\n").reversed() {
+            guard !Task.isCancelled else { return nil }
             let line = String(paragraph)
             if isChecklistLine(line) { continue }
             guard let cue = firstCue(in: line, now: now, calendar: calendar)
@@ -97,7 +98,7 @@ enum QuickCaptureTaskParser {
             in: text.startIndex..<text.endIndex,
             options: [.byLines]
         ) { line, range, _, _ in
-            if line == paragraph { match = range }
+            if let line, line.utf8.elementsEqual(paragraph.utf8) { match = range }
         }
         return match
     }
@@ -154,11 +155,34 @@ enum QuickCaptureTaskParser {
     /// than to any past-tense word anywhere in the line, because "send the
     /// deck we discussed on Friday" is a real task and must survive.
     private static func mentions(_ lowercased: String, _ cue: String) -> Bool {
-        guard containsWord(lowercased, cue) else { return false }
-        return !readsAsPast(lowercased, cue: cue)
+        guard !Task.isCancelled else { return false }
+        guard let patterns = cuePatterns[cue] else { return false }
+        let range = NSRange(lowercased.startIndex..<lowercased.endIndex, in: lowercased)
+        guard patterns.word.firstMatch(in: lowercased, range: range) != nil else {
+            return false
+        }
+        return !patterns.past.contains {
+            $0.firstMatch(in: lowercased, range: range) != nil
+        }
     }
 
-    private static func readsAsPast(_ lowercased: String, cue: String) -> Bool {
+    private struct CuePatterns: Sendable {
+        let word: NSRegularExpression
+        let past: [NSRegularExpression]
+    }
+
+    /// These fixed expressions used to be compiled for every cue in every
+    /// paragraph on each edit. Keep the same ICU Unicode boundaries and past
+    /// patterns, but compile them once. Regex objects are immutable and safe
+    /// to share between the background consumers of this deterministic parser.
+    private static let cuePatterns: [String: CuePatterns] = Dictionary(
+        uniqueKeysWithValues: [
+            "today", "tonight", "tomorrow", "next week", "sunday", "monday",
+            "tuesday", "wednesday", "thursday", "friday", "saturday"
+        ].map { ($0, patterns(for: $0)) }
+    )
+
+    private static func patterns(for cue: String) -> CuePatterns {
         let cuePattern = NSRegularExpression.escapedPattern(for: cue)
         let pronouns = "(?:we|i|he|she|they|you|it)"
         let pastVerbs = "(?:was|were|had|did|went|met|spoke|talked|discussed"
@@ -174,17 +198,11 @@ enum QuickCaptureTaskParser {
             #"(?<!\p{L})"# + pronouns + #"\s+"# + pastVerbs
                 + #"\s+(?:on\s+)?"# + cuePattern + #"(?!\p{L})"#,
         ]
-        return patterns.contains {
-            lowercased.range(of: $0, options: .regularExpression) != nil
-        }
-    }
-
-    /// Whole-word containment, so "moday" inside "mondayish" nonsense and
-    /// "sun" inside "sunscreen" do not schedule anything.
-    private static func containsWord(_ text: String, _ word: String) -> Bool {
-        text.range(
-            of: #"(?<!\p{L})"# + NSRegularExpression.escapedPattern(for: word) + #"(?!\p{L})"#,
-            options: .regularExpression
-        ) != nil
+        return CuePatterns(
+            word: try! NSRegularExpression(
+                pattern: #"(?<!\p{L})"# + cuePattern + #"(?!\p{L})"#
+            ),
+            past: patterns.map { try! NSRegularExpression(pattern: $0) }
+        )
     }
 }

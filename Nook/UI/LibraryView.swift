@@ -1,10 +1,98 @@
 import AppKit
 import SwiftUI
 
-private enum LibrarySelection: Hashable {
+enum LibrarySelection: Hashable {
     case live
-    case note(MeetingNote.ID)
+    case note(LibraryNoteIdentity)
+    case copies(MeetingNote.ID)
     case prep
+}
+
+extension LibraryLeaveGuard {
+    /// A reload or phase change must not replace an unanswered destination.
+    /// Once that decision settles, every path owes the same editor checks.
+    static func decide(
+        from current: LibrarySelection?,
+        to requested: LibrarySelection?,
+        isConfirmingMarkdown: Bool,
+        hasMarkdownChanges: Bool,
+        hasPersonalNotesChanges: Bool
+    ) -> UnsavedEditDecision? {
+        guard !isConfirmingMarkdown, requested != current else { return nil }
+        return decide(
+            hasMarkdownChanges: hasMarkdownChanges,
+            hasPersonalNotesChanges: hasPersonalNotesChanges
+        )
+    }
+}
+
+/// A scope change must not hide the editor before its leave decision settles.
+/// Keeping the old range until confirmation makes Cancel a true no-op.
+struct LibraryScopeState: Equatable {
+    private(set) var todayOnly = false
+    private(set) var pendingTodayOnly: Bool?
+
+    mutating func request(_ value: Bool, needsConfirmation: Bool) {
+        if needsConfirmation {
+            pendingTodayOnly = value
+        } else {
+            todayOnly = value
+            pendingTodayOnly = nil
+        }
+    }
+
+    mutating func settle(confirmed: Bool) {
+        if confirmed, let pendingTodayOnly { todayOnly = pendingTodayOnly }
+        pendingTodayOnly = nil
+    }
+
+    static func visibleSelection(
+        preserving selected: LibraryNoteIdentity?,
+        in notes: [MeetingNote]
+    ) -> LibraryNoteIdentity? {
+        if let selected, notes.contains(where: { $0.libraryIdentity == selected }) {
+            return selected
+        }
+        return notes.first?.libraryIdentity
+    }
+}
+
+enum LibraryPlaceholderState: Equatable {
+    case loading
+    case loadFailure
+    case emptyToday
+    case noSearchMatches
+    case emptyLibrary
+    case noSelection
+
+    static func choose(
+        isLoading: Bool,
+        hasNotes: Bool,
+        todayOnly: Bool,
+        hasVisibleNotes: Bool,
+        hasSearch: Bool,
+        hasLoadError: Bool
+    ) -> Self {
+        if isLoading { return .loading }
+        if !hasNotes, hasLoadError { return .loadFailure }
+        if todayOnly, !hasVisibleNotes { return .emptyToday }
+        if hasSearch, !hasVisibleNotes { return .noSearchMatches }
+        return hasNotes ? .noSelection : .emptyLibrary
+    }
+}
+
+/// A failed or pending folder reload can leave the previous models visible.
+/// The loader reads direct Markdown children, so saved addresses must belong
+/// to this exact parent before a new Ask or palette session can use them.
+enum LibrarySheetOwnership {
+    static func matchesCurrentFolder(_ notes: [MeetingNote], directoryURL: URL) -> Bool {
+        let directoryPath = directoryURL.standardizedFileURL.path
+        return notes.allSatisfy { note in
+            guard let fileURL = note.fileURL else { return true }
+            return fileURL.deletingLastPathComponent().standardizedFileURL.path
+                == directoryPath
+        }
+    }
 }
 
 struct LibraryNoteGroup: Identifiable {
@@ -37,7 +125,7 @@ enum LibraryNoteGrouping {
     static func filter(
         _ notes: [MeetingNote],
         todayOnly: Bool,
-        matchingIDs: Set<MeetingNote.ID>?,
+        matchingIDs: Set<LibraryNoteIdentity>?,
         calendar: Calendar = .current
     ) -> [MeetingNote] {
         var result = notes
@@ -45,7 +133,7 @@ enum LibraryNoteGrouping {
             result = result.filter { calendar.isDateInToday($0.startedAt) }
         }
         guard let matchingIDs else { return result }
-        return result.filter { matchingIDs.contains($0.id) }
+        return result.filter { matchingIDs.contains($0.libraryIdentity) }
     }
 
     static func group(
@@ -112,25 +200,26 @@ enum LibraryNoteGrouping {
 /// are the same library for grouping purposes, without diffing every note on
 /// every comparison.
 ///
-/// The fingerprint folds in `id`, `fileModified`, and `title`, not just the
-/// newest `fileModified` across the library. The latest-modified-date alone
+/// The fingerprint includes file identity and content revision as well as
+/// display metadata, not just the newest modification date in the library.
+/// The latest-modified-date alone
 /// went stale whenever an edit's new timestamp did not change the overall
 /// maximum: two saves landing in the same tick, or a volume whose
 /// modification dates only carry second granularity, both leave the max
 /// looking identical to the last one cached even though a note's title (say)
-/// really did change. Folding every note's own triple in means a change to
-/// *any* note is visible in the fingerprint regardless of where the library's
-/// maximum sits.
+/// really did change. Folding every note's own identity and revision in means a change to
+/// *any* note is visible, including external edits that preserve timestamps
+/// and copied notes whose UUIDs collide.
 struct LibraryGroupingCacheKey: Equatable {
     let noteCount: Int
     let notesFingerprint: Int
-    let matchingIDs: Set<MeetingNote.ID>?
+    let matchingIDs: Set<LibraryNoteIdentity>?
     let todayOnly: Bool
     let day: Date
 
     init(
         notes: [MeetingNote],
-        matchingIDs: Set<MeetingNote.ID>?,
+        matchingIDs: Set<LibraryNoteIdentity>?,
         todayOnly: Bool,
         now: Date = Date(),
         calendar: Calendar = .current
@@ -149,9 +238,13 @@ struct LibraryGroupingCacheKey: Equatable {
     private static func fingerprint(of notes: [MeetingNote]) -> Int {
         notes.reduce(into: 0) { fingerprint, note in
             var hasher = Hasher()
-            hasher.combine(note.id)
+            hasher.combine(note.libraryIdentity)
+            hasher.combine(note.fileRevision)
             hasher.combine(note.fileModified)
             hasher.combine(note.title)
+            hasher.combine(note.startedAt)
+            // Transient fixtures/unsaved notes have no on-disk revision.
+            if note.fileRevision == nil { hasher.combine(note) }
             fingerprint ^= hasher.finalize()
         }
     }
@@ -167,6 +260,18 @@ struct LibraryGroupingCacheKey: Equatable {
 /// away rather than gone.
 enum LibrarySidebarPolicy {
     static let collapsedOpenActionLimit = 3
+
+    static func emptySearchMessage(
+        query: String,
+        todayOnly: Bool,
+        isLoading: Bool,
+        isSearching: Bool,
+        hasVisibleNotes: Bool
+    ) -> String? {
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !isLoading, !isSearching, !hasVisibleNotes else { return nil }
+        return todayOnly ? "No matching notes today" : "No matching notes"
+    }
 
     static func visibleOpenActions(
         _ entries: [OpenAction],
@@ -195,6 +300,18 @@ enum LibrarySidebarPolicy {
     }
 }
 
+/// Checkpoint completion can publish status without changing any note. Observe
+/// it at the recovery section so typing in Quick Note does not invalidate the
+/// entire Library just to keep the recovery controls current.
+private struct LibraryDraftRecoverySection: View {
+    @EnvironmentObject private var journal: DraftJournal
+    @EnvironmentObject private var controller: DraftRecoveryController
+
+    var body: some View {
+        DraftRecoverySection(controller: controller, journal: journal)
+    }
+}
+
 struct LibraryView: View {
     @EnvironmentObject private var store: MarkdownStore
     @EnvironmentObject private var markdownDraft: MarkdownDraftController
@@ -207,20 +324,31 @@ struct LibraryView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var searchController = LibrarySearchController()
     @StateObject private var openActions = OpenActionsController()
+    @StateObject private var mergeWorkflow = NoteMergeWorkflow()
+    @StateObject private var commandPaletteSheet = CommandPaletteSheetPresenter()
     @State private var selection: LibrarySelection?
     @State private var searchText = ""
     @State private var pendingSelection: LibrarySelection?
     @State private var showsUnsavedChangesAlert = false
-    @State private var copyNotice: String?
-    @State private var copyNoticeSeverity: CopyConfirmationBanner.Severity = .success
+    @State private var copyNotice = CopyNoticeState()
     @State private var showsAskSheet = false
+    /// Answers and queued palette commands belong to the folder they opened
+    /// from. A copied library can contain the same note UUIDs at new paths.
+    @State private var askLibraryURL: URL?
+    @State private var commandPaletteLibraryURL: URL?
+    @State private var commandPaletteAskSession: LibraryAskSession?
     /// The note a second note is being merged into, when the picker shows.
     @State private var mergeTarget: MeetingNote?
+    @State private var pendingMergeTarget: LibraryNoteIdentity?
+    @State private var pendingMergeGeneration: Int?
+    @State private var mergeTask: Task<Void, Never>?
+    @State private var mergeIsStopping = false
     /// The note awaiting Trash confirmation.
     @State private var notePendingDeletion: MeetingNote?
-    @State private var showsCommandPalette = false
+    @State private var commandPalette = CommandPalettePresentation()
     /// Sidebar scope: the whole library or just today's capture.
-    @State private var todayOnly = false
+    @State private var scope = LibraryScopeState()
+    private var todayOnly: Bool { scope.todayOnly }
     /// Mirrors `meeting.phase`, kept current by `MeetingPhaseObserver`. See
     /// that type for why this view reads a plain, rarely-changing `@State`
     /// value here rather than holding the coordinator itself.
@@ -245,7 +373,7 @@ struct LibraryView: View {
 
     init(initialNoteID: MeetingNote.ID? = nil) {
         _selection = State(
-            initialValue: initialNoteID.map(LibrarySelection.note)
+            initialValue: initialNoteID.map(LibrarySelection.copies)
         )
     }
 
@@ -258,8 +386,8 @@ struct LibraryView: View {
     private var groupedNotes: [LibraryNoteGroup] { cachedGroupedNotes }
 
     private var selectedNote: MeetingNote? {
-        guard case .note(let id) = selection else { return nil }
-        return store.notes.first(where: { $0.id == id })
+        guard case .note(let identity) = selection else { return nil }
+        return store.note(matching: identity)
     }
 
     private var currentGroupingCacheKey: LibraryGroupingCacheKey {
@@ -308,43 +436,35 @@ struct LibraryView: View {
         }
         .tint(NookPalette.accent)
         .background {
+            CommandPaletteWindowAnchor(presenter: commandPaletteSheet)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
             // See `MeetingPhaseObserver`: this is the only place in the view
             // that subscribes to the coordinator, so meter ticks land here
             // instead of on the sidebar's grouping and filtering.
             MeetingPhaseObserver(phase: $currentPhase)
             // A hidden accelerator so the palette reaches from anywhere in
             // the window, toolbar focus included.
-            Button("Command Palette") { showsCommandPalette = true }
+            Button("Command Palette", action: presentCommandPalette)
                 .keyboardShortcut(
                     shortcuts.binding(for: .commandPalette).keyEquivalent,
                     modifiers: shortcuts.binding(for: .commandPalette)
                         .eventModifiers
                 )
+                .disabled(!commandPalette.canPresent)
+                .focusable(false)
+                .allowsHitTesting(false)
+                .frame(width: 0, height: 0)
                 .opacity(0)
                 .accessibilityHidden(true)
         }
-        .overlay {
-            if showsCommandPalette {
-                CommandPaletteView(
-                    isPresented: $showsCommandPalette,
-                    openActionEntries: Array(openActions.entries.prefix(6)),
-                    createNote: { template in
-                        createNote(from: template)
-                    },
-                    createWeeklyDigest: { createWeeklyDigest() },
-                    showAskSheet: { showsAskSheet = true },
-                    presentQuickNote: { AppModel.shared.quickNote.present() }
-                )
-            }
-        }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
-                Button {
-                    showsAskSheet = true
-                } label: {
+                Button(action: presentAskSheet) {
                     Label("Ask your library", systemImage: "sparkle.magnifyingglass")
                 }
                 .help("Ask a question across all your notes")
+                .disabled(store.isLoading)
 
                 Button {
                     createWeeklyDigest()
@@ -356,11 +476,27 @@ struct LibraryView: View {
                 LibraryRecordingToolbar(createNote: createNote)
             }
         }
-        .overlay(alignment: .top) {
-            if let copyNotice {
-                CopyConfirmationBanner(message: copyNotice, severity: copyNoticeSeverity)
-                    .padding(.top, 12)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+        .nookNotice(copyNotice.current) { id in
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
+                copyNotice.dismiss(id: id)
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if mergeTask != nil {
+                HStack(spacing: 10) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityHidden(true)
+                    Text(mergeIsStopping ? "Stopping merge…" : "Merging notes on this Mac…")
+                        .font(.callout)
+                    Spacer(minLength: 12)
+                    Button("Cancel Merge", action: cancelMerge)
+                        .disabled(mergeIsStopping)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(Color(nsColor: .windowBackgroundColor))
+                .accessibilityElement(children: .contain)
             }
         }
     }
@@ -375,22 +511,37 @@ struct LibraryView: View {
             chooseInitialSelection()
             Task { await openActions.refresh(store: store) }
         }
+        .onDisappear {
+            invalidateCommandPalette()
+            cancelMerge()
+        }
         .onChange(of: currentGroupingCacheKey) { _, _ in
             refreshLibraryCacheIfNeeded()
         }
-        .onChange(of: store.notes) { _, _ in
-            Task { await openActions.refresh(store: store) }
+        .onChange(of: store.storageURL.standardizedFileURL) { _, _ in
+            // Routine reloads keep a question and its answer visible. Only
+            // changing its library invalidates the session; onDisappear then
+            // cancels Ask's work. Invalidate a palette command even if its
+            // native dismissal is already in progress.
+            askLibraryURL = nil
+            showsAskSheet = false
+            invalidateCommandPalette()
+        }
+        .onChange(of: store.storageGeneration) { _, _ in
+            // A folder switch can return to the original path before SwiftUI
+            // renders again. The store generation still invalidates the job.
+            mergeTarget = nil
+            cancelMerge()
         }
         .onReceive(
             NotificationCenter.default.publisher(for: .nookOpenMeetingNote)
         ) { notification in
-            guard let requestedID = notification.object as? MeetingNote.ID else {
-                return
+            if let identity = notification.object as? LibraryNoteIdentity {
+                guard store.note(matching: identity) != nil else { return }
+                requestSelection(.note(identity))
+            } else if let requestedID = notification.object as? MeetingNote.ID {
+                requestNote(id: requestedID)
             }
-            guard store.notes.contains(where: { $0.id == requestedID }) else {
-                return
-            }
-            requestSelection(.note(requestedID))
         }
         .onReceive(
             NotificationCenter.default.publisher(for: .nookOpenPrepBrief)
@@ -402,26 +553,38 @@ struct LibraryView: View {
         // selection beats stranding the detail pane on a vanished surface.
         .onChange(of: prep.current) { _, brief in
             if brief == nil, selection == .prep {
-                selection = restoredOrFirstSelection(in: store.notes)
+                requestSelection(restoredOrFirstSelection(in: store.notes))
             }
         }
         .onChange(of: store.notes) { _, notes in
+            // Share one array change observation for the derived sidebar
+            // state and selection. Separate handlers repeated change tracking
+            // over the same library snapshot on each publication.
+            Task { await openActions.refresh(store: store) }
             searchController.update(query: searchText, notes: notes)
             guard !notes.isEmpty else {
-                if !presentsLiveActivity { selection = nil }
+                if !presentsLiveActivity { requestSelection(nil) }
                 return
             }
-            if case .note(let id) = selection,
-               !notes.contains(where: { $0.id == id }) {
-                selection = restoredOrFirstSelection(in: notes)
+            if case .note(let identity) = selection,
+               !notes.contains(where: { $0.libraryIdentity == identity }) {
+                if let renamed = store.uniqueNote(id: identity.noteID) {
+                    requestSelection(.note(renamed.libraryIdentity))
+                } else {
+                    requestSelection(restoredOrFirstSelection(in: notes))
+                }
+            } else if case .copies(let id) = selection,
+                      let unique = store.uniqueNote(id: id) {
+                requestSelection(.note(unique.libraryIdentity))
             } else if selection == nil, !presentsLiveActivity {
-                selection = restoredOrFirstSelection(in: notes)
+                requestSelection(restoredOrFirstSelection(in: notes))
             }
         }
         .onChange(of: searchText) { _, query in
             searchController.update(query: query, notes: store.notes)
         }
         .onChange(of: searchController.matchingIDs) { _, _ in
+            refreshLibraryCacheIfNeeded()
             synchronizeSelectionWithSearch()
         }
         .onChange(of: currentPhase) { _, phase in
@@ -435,10 +598,10 @@ struct LibraryView: View {
                     requestSelection(.live)
                 case .completed:
                     store.reload()
-                    selection = restoredOrFirstSelection(in: store.notes)
+                    requestSelection(restoredOrFirstSelection(in: store.notes))
                 case .idle:
                     if selection == .live {
-                        selection = restoredOrFirstSelection(in: store.notes)
+                        requestSelection(restoredOrFirstSelection(in: store.notes))
                     }
                 case .detected:
                     break
@@ -460,6 +623,7 @@ struct LibraryView: View {
                 target: target,
                 candidates: store.notes.filter {
                     $0.id != target.id && $0.kind != .digest
+                        && !store.duplicateNoteIDs.contains($0.id)
                 }
             ) { absorbed in
                 mergeNotes(absorbed, into: target)
@@ -483,15 +647,17 @@ struct LibraryView: View {
             }
         } message: {
             Text(
-                "The Markdown file moves to the Trash and can be restored from there. Kept audio stays until its retention expires."
+                "The Markdown file moves to the Trash and can be restored from there. Unsaved edits and recovery copies for this note are also discarded. Kept audio remains available in Recovery until you delete it there."
             )
         }
         .sheet(isPresented: $showsAskSheet) {
+            let sourceLibrary = askLibraryURL
             LibraryAskView(
                 notes: store.notes,
                 onSelectNote: { noteID in
                     showsAskSheet = false
-                    requestSelection(.note(noteID))
+                    guard sourceLibrary == store.storageURL.standardizedFileURL else { return }
+                    requestNote(id: noteID)
                 },
                 onClose: { showsAskSheet = false }
             )
@@ -509,10 +675,154 @@ struct LibraryView: View {
             }
             Button("Cancel", role: .cancel) {
                 pendingSelection = nil
+                pendingMergeTarget = nil
+                pendingMergeGeneration = nil
+                scope.settle(confirmed: false)
             }
         } message: {
             Text("This meeting has edits that haven’t been written to its Markdown file.")
         }
+    }
+
+    private func presentAskSheet() {
+        guard libraryIsReadyForSheet() else { return }
+        askLibraryURL = store.storageURL.standardizedFileURL
+        showsAskSheet = true
+    }
+
+    private func presentCommandPalette() {
+        guard commandPalette.canPresent, commandPaletteSheet.canPresent,
+              libraryIsReadyForSheet() else { return }
+        let presentationID = UUID()
+        let sourceLibrary = store.storageURL.standardizedFileURL
+        commandPaletteLibraryURL = sourceLibrary
+        commandPalette.present()
+        let presented = Binding(
+            get: {
+                commandPaletteSheet.isCurrent(presentationID) && commandPalette.isPresented
+            },
+            set: { isPresented in
+                // A closing hosted view cannot dismiss a later presentation.
+                guard commandPaletteSheet.isCurrent(presentationID),
+                      !commandPalette.isShowingDestination else { return }
+                commandPalette.isPresented = isPresented
+                if !isPresented { commandPaletteSheet.dismiss(id: presentationID) }
+            }
+        )
+        let content = CommandPaletteOpenActionsHost(openActions: openActions) { entries in
+            CommandPaletteView(
+                isPresented: presented,
+                openActionEntries: entries,
+                createNote: { template in createNote(from: template) },
+                createWeeklyDigest: { createWeeklyDigest() },
+                showAskSheet: presentAskSheet,
+                presentQuickNote: { AppModel.shared.quickNote.present() },
+                onSelectCommand: { command in
+                    guard commandPaletteSheet.isCurrent(presentationID),
+                          commandPalette.isPresented else { return .keepPresented }
+                    guard sourceLibrary == store.storageURL.standardizedFileURL else {
+                        invalidateCommandPalette()
+                        return .keepPresented
+                    }
+                    if command.destination == .askLibrary {
+                        if presentAskInCommandPalette(id: presentationID, sourceLibrary: sourceLibrary) {
+                            return .keepPresented
+                        }
+                        commandPalette.cancel()
+                        return .dismiss
+                    }
+                    commandPalette.select(command)
+                    return .dismiss
+                }
+            )
+        }
+        .environmentObject(store)
+        .environmentObject(meeting)
+        .environmentObject(shortcuts)
+
+        let didPresent = commandPaletteSheet.present(
+            id: presentationID,
+            content: AnyView(content),
+            onDismiss: {
+                commandPaletteAskSession?.cancel()
+                commandPaletteAskSession = nil
+                let command = commandPalette.takeDismissedCommand()
+                let originalLibrary = commandPaletteLibraryURL
+                commandPaletteLibraryURL = nil
+                guard originalLibrary == store.storageURL.standardizedFileURL else { return }
+                command?.perform()
+            },
+            onInvalidation: {
+                commandPaletteAskSession?.cancel()
+                commandPaletteAskSession = nil
+                commandPaletteLibraryURL = nil
+                commandPalette.cancel()
+            }
+        )
+        if !didPresent {
+            commandPaletteLibraryURL = nil
+            commandPalette.cancel()
+            _ = commandPalette.takeDismissedCommand()
+        }
+    }
+
+    private func presentAskInCommandPalette(id: UUID, sourceLibrary: URL) -> Bool {
+        guard libraryIsReadyForSheet(), commandPalette.showDestination() else { return false }
+        let session = LibraryAskSession()
+        commandPaletteAskSession = session
+        let content = LibraryAskStoreHost(
+            store: store,
+            session: session,
+            onSelectNote: { noteID in
+                closeCommandPaletteAsk(id: id, sourceLibrary: sourceLibrary, selecting: noteID)
+            },
+            onClose: { closeCommandPaletteAsk(id: id, sourceLibrary: sourceLibrary) }
+        )
+        return commandPaletteSheet.replaceContent(
+            id: id, content: AnyView(content), title: "Ask your library"
+        )
+    }
+
+    private func closeCommandPaletteAsk(
+        id: UUID, sourceLibrary: URL, selecting noteID: MeetingNote.ID? = nil
+    ) {
+        guard commandPaletteSheet.isCurrent(id), commandPalette.isShowingDestination else { return }
+        commandPaletteAskSession?.cancel()
+        let command = noteID.map { noteID in
+            CommandPaletteItem(
+                id: "ask-citation-\(noteID.uuidString)", symbol: "doc.text",
+                title: "Open cited note", subtitle: nil, destination: .note(noteID),
+                perform: {
+                    guard sourceLibrary == store.storageURL.standardizedFileURL else { return }
+                    requestNote(id: noteID)
+                }
+            )
+        }
+        commandPalette.finishDestination(with: command)
+        commandPaletteSheet.dismiss(id: id)
+    }
+
+    private func invalidateCommandPalette() {
+        commandPaletteAskSession?.cancel()
+        commandPaletteAskSession = nil
+        commandPaletteLibraryURL = nil
+        commandPalette.cancel()
+        commandPaletteSheet.invalidate()
+    }
+
+    private func libraryIsReadyForSheet() -> Bool {
+        guard !store.isLoading else {
+            showCopyNotice("Your notes are still loading. Try again when loading finishes.", severity: .info)
+            return false
+        }
+        // Check on invocation, not every view update or editor keystroke.
+        guard LibrarySheetOwnership.matchesCurrentFolder(
+            store.notes, directoryURL: store.storageURL
+        ) else {
+            showCopyNotice("The displayed notes belong to another folder. Retry loading this library before continuing.", severity: .info)
+            return false
+        }
+        return true
     }
 
     /// Selection as the `List` drives it, routed through the same guard a
@@ -525,10 +835,17 @@ struct LibraryView: View {
         )
     }
 
+    private var scopeSelection: Binding<Bool> {
+        Binding(
+            get: { todayOnly },
+            set: { requestScopeChange($0) }
+        )
+    }
+
     private var sidebar: some View {
         List(selection: listSelection) {
             Section {
-                Picker("Range", selection: $todayOnly) {
+                Picker("Range", selection: scopeSelection) {
                     Text("All").tag(false)
                     Text("Today").tag(true)
                 }
@@ -543,6 +860,7 @@ struct LibraryView: View {
                 recovery: recovery,
                 localeIdentifier: meeting.localeIdentifier
             )
+            LibraryDraftRecoverySection()
 
             LibraryLiveSection(selection: selection)
 
@@ -596,23 +914,49 @@ struct LibraryView: View {
                 }
             }
 
+            // Keep search feedback in the list's flow. An empty-state overlay
+            // covered standing sections and suggested the query was wrong
+            // even when its matches were only outside the Today range.
+            if searchController.isSearching, !store.isLoading {
+                Section("Search results") {
+                    ProgressView("Searching…")
+                        .controlSize(.small)
+                        .font(.caption)
+                }
+            } else if let message = LibrarySidebarPolicy.emptySearchMessage(
+                query: searchText,
+                todayOnly: todayOnly,
+                isLoading: store.isLoading,
+                isSearching: searchController.isSearching,
+                hasVisibleNotes: !filteredNotes.isEmpty
+            ) {
+                Section("Search results") {
+                    Label(message, systemImage: "magnifyingglass")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityLabel(message)
+                }
+            }
+
             ForEach(groupedNotes) { group in
                 Section {
-                    ForEach(group.notes) { note in
+                    ForEach(group.notes, id: \.libraryIdentity) { note in
                         // Plain rows, not buttons: the List owns selection now,
                         // so arrow keys and type-select reach these the way
                         // they reach any other sidebar. A button in the row
                         // would swallow the click before the List saw it.
                         MeetingRow(
                             note: note,
-                            isSelected: selection == .note(note.id)
+                            isSelected: selection == .note(note.libraryIdentity),
+                            showsFileIdentity: store.duplicateNoteIDs.contains(note.id)
                         )
-                        .tag(LibrarySelection.note(note.id))
+                        .tag(LibrarySelection.note(note.libraryIdentity))
                         // Nook's own selection fill rather than the system's:
                         // it is a deeper blue chosen so white row text keeps
                         // AA contrast in an inactive window too.
                         .listRowBackground(
-                            selection == .note(note.id)
+                            selection == .note(note.libraryIdentity)
                                 ? NookPalette.sidebarSelection
                                 : Color.clear
                         )
@@ -636,14 +980,16 @@ struct LibraryView: View {
                                 }
                                 .disabled(
                                     currentPhase.isRecording || isProcessing
+                                        || store.duplicateNoteIDs.contains(note.id)
                                 )
                                 .help(
                                     "Appends the next recording to this note instead of creating a new one"
                                 )
                                 Button("Merge another note into this") {
-                                    mergeTarget = note
+                                    requestMergePicker(for: note)
                                 }
-                                .disabled(isProcessing)
+                                .disabled(mergeTask != nil)
+                                .disabled(isProcessing || store.duplicateNoteIDs.contains(note.id))
                             }
                             Divider()
                             Button("Move to Trash", role: .destructive) {
@@ -663,14 +1009,6 @@ struct LibraryView: View {
             placement: .sidebar,
             prompt: "Search every word"
         )
-        .overlay {
-            if searchController.isSearching {
-                ProgressView("Searching…")
-                    .controlSize(.small)
-            } else if !searchText.isEmpty, filteredNotes.isEmpty {
-                ContentUnavailableView.search(text: searchText)
-            }
-        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             sidebarFooter
         }
@@ -745,10 +1083,22 @@ struct LibraryView: View {
             pool,
             showingAll: openActionsShowAll
         )
-        if !pool.isEmpty {
+        if !pool.isEmpty || openActions.lastError != nil {
             Section {
                 if openActionsExpanded {
                     openActionRows(visible: visible, pool: pool)
+                }
+                if let message = openActions.lastError {
+                    Label {
+                        Text(message)
+                            .lineLimit(nil)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle")
+                    }
+                        .font(.caption)
+                        .foregroundStyle(NookPalette.danger)
+                        .help(message)
                 }
             } header: {
                 collapsibleSectionHeader(
@@ -775,11 +1125,14 @@ struct LibraryView: View {
                         }
                     },
                     onSelect: {
-                        requestSelection(.note(entry.noteID))
+                        requestNote(id: entry.noteID)
                     },
                     onSendToReminders: {
+                        let generation = store.storageGeneration
                         Task {
-                            await openActions.sendToReminders(entry)
+                            await openActions.sendToReminders(
+                                entry, store: store, expectedGeneration: generation
+                            )
                         }
                     },
                     onSetDue: { date in
@@ -825,11 +1178,6 @@ struct LibraryView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            if let message = openActions.lastError {
-                Label(message, systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(NookPalette.danger)
-            }
         }
     }
 
@@ -841,7 +1189,7 @@ struct LibraryView: View {
             PrepBriefView(
                 brief: brief,
                 onSelectNote: { noteID in
-                    requestSelection(.note(noteID))
+                    requestNote(id: noteID)
                 },
                 // Named after the event so the note joins the rest of the
                 // series rather than arriving as an unrelated "Meeting
@@ -856,12 +1204,83 @@ struct LibraryView: View {
                     : nil
             )
         } else if let selectedNote {
-            MeetingDetailView(note: selectedNote)
-                .id(selectedNote.id)
+            if store.duplicateNoteIDs.contains(selectedNote.id) {
+                DuplicateNotePreview(
+                    note: selectedNote,
+                    retainedDraftText: markdownDraft.hasChanges
+                        && markdownDraft.libraryIdentity == selectedNote.libraryIdentity
+                        ? markdownDraft.rawMarkdown : nil,
+                    onReloadLibrary: { store.reload() }
+                )
+                    .id(selectedNote.libraryIdentity)
+            } else {
+                MeetingDetailView(note: selectedNote)
+                    .id(selectedNote.libraryIdentity)
+            }
+        } else if store.isLoading {
+            libraryPlaceholder
+        } else if case .copies(let id) = selection {
+            DuplicateNoteChooser(
+                notes: store.notes.filter { $0.id == id },
+                onSelect: { requestSelection(.note($0)) }
+            )
         } else {
+            libraryPlaceholder
+        }
+    }
+
+    @ViewBuilder
+    private var libraryPlaceholder: some View {
+        switch LibraryPlaceholderState.choose(
+            isLoading: store.isLoading,
+            hasNotes: !store.notes.isEmpty,
+            todayOnly: todayOnly,
+            hasVisibleNotes: !filteredNotes.isEmpty,
+            hasSearch: !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            hasLoadError: store.lastError != nil
+        ) {
+        case .loading:
+            VStack(spacing: 12) {
+                ProgressView("Loading notes…")
+                Text("Reading your local notes folder.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Loading notes from your local folder")
+        case .loadFailure:
+            ContentUnavailableView {
+                Label("Your notes couldn’t be loaded", systemImage: "doc.badge.ellipsis")
+            } description: {
+                Text("Retry loading the library or inspect the notes folder in Finder.")
+            } actions: {
+                Button("Retry") { store.reload() }
+                Button("Open Notes Folder") { store.openStorageDirectory() }
+            }
+        case .emptyToday:
+            ContentUnavailableView {
+                Label(
+                    searchText.isEmpty ? "No notes today" : "No matching notes today",
+                    systemImage: "calendar"
+                )
+            } description: {
+                Text("Change the range to All to see your whole library.")
+            } actions: {
+                Button("Show All Notes") { requestScopeChange(false) }
+            }
+        case .noSearchMatches:
+            ContentUnavailableView.search(text: searchText)
+        case .emptyLibrary:
             EmptyLibraryView {
                 AppModel.shared.meeting.startManualMeeting()
             }
+        case .noSelection:
+            ContentUnavailableView(
+                "Choose a note",
+                systemImage: "doc.text",
+                description: Text("Select a note from the sidebar to review it.")
+            )
         }
     }
 
@@ -913,25 +1332,69 @@ struct LibraryView: View {
     /// starting by itself moves the selection to the live pane, so leaving My
     /// notes unaccounted for meant a recording could delete a half-typed
     /// follow-up while the user was still typing it.
-    private func requestSelection(_ requestedSelection: LibrarySelection?) {
-        guard requestedSelection != selection else { return }
-        let selectedID: MeetingNote.ID?
-        if case .note(let id) = selection {
-            selectedID = id
-        } else {
-            selectedID = nil
+    private func requestNote(id: MeetingNote.ID) {
+        switch LibraryNoteResolution.resolve(id, in: store.notes) {
+        case .unique(let identity): requestSelection(.note(identity))
+        case .ambiguous: requestSelection(.copies(id))
+        case .missing:
+            showCopyNotice("This note is no longer in the selected folder.", severity: .info)
         }
+    }
 
-        switch LibraryLeaveGuard.decide(
-            hasMarkdownChanges: markdownDraft.hasChanges
-                && markdownDraft.noteID == selectedID,
+    private func requestScopeChange(_ requestedScope: Bool) {
+        guard requestedScope != todayOnly, !showsUnsavedChangesAlert else { return }
+        let target = selectionForScope(requestedScope)
+        // The editor can stay put when its file also belongs to the new range.
+        // There is no leave decision to ask about in that case.
+        if target == selection {
+            scope.request(requestedScope, needsConfirmation: false)
+            refreshLibraryCacheIfNeeded()
+        } else {
+            requestSelection(target, changingScopeTo: requestedScope)
+        }
+    }
+
+    private func selectionForScope(_ requestedScope: Bool) -> LibrarySelection? {
+        switch selection {
+        case .live, .prep:
+            // These standing sections are visible in both date ranges.
+            return selection
+        default:
+            let visible = LibraryNoteGrouping.filter(
+                store.notes, todayOnly: requestedScope,
+                matchingIDs: searchController.matchingIDs
+            )
+            let current: LibraryNoteIdentity?
+            if case .note(let identity) = selection { current = identity }
+            else { current = nil }
+            return LibraryScopeState.visibleSelection(preserving: current, in: visible)
+                .map(LibrarySelection.note)
+        }
+    }
+
+    private func requestSelection(
+        _ requestedSelection: LibrarySelection?,
+        changingScopeTo requestedScope: Bool? = nil
+    ) {
+        // A background reload must not replace the destination of a question
+        // the user is already answering, including its pending date range.
+        guard let decision = LibraryLeaveGuard.decide(
+            from: selection,
+            to: requestedSelection,
+            isConfirmingMarkdown: showsUnsavedChangesAlert,
+            hasMarkdownChanges: markdownDraft.hasChanges,
             // Not `hasChanges`: a parked draft belongs to whichever note
-            // refused it, which may not be `selectedID` at all, so leaving
+            // refused it, which may not be the selected file, so leaving
             // must account for it explicitly rather than only for what is
             // live in the field right now.
             hasPersonalNotesChanges: personalNotesDraft.hasUnwrittenNotes
-        ) {
+        ) else { return }
+        switch decision {
         case .leave:
+            if let requestedScope {
+                scope.request(requestedScope, needsConfirmation: false)
+                refreshLibraryCacheIfNeeded()
+            }
             selection = requestedSelection
         case .saveFirst:
             // Written rather than queried: this field has one destination and
@@ -942,19 +1405,29 @@ struct LibraryView: View {
                 showCopyNotice(failure, severity: .failure)
                 return
             }
+            if let requestedScope {
+                scope.request(requestedScope, needsConfirmation: false)
+                refreshLibraryCacheIfNeeded()
+            }
             selection = requestedSelection
         case .askAboutMarkdown:
             pendingSelection = requestedSelection
+            if let requestedScope {
+                scope.request(requestedScope, needsConfirmation: true)
+            }
             showsUnsavedChangesAlert = true
         }
     }
 
     private func saveDraftAndContinue() {
-        guard let noteID = markdownDraft.noteID,
-              let note = store.notes.first(where: { $0.id == noteID })
+        guard let identity = markdownDraft.libraryIdentity,
+              let note = store.note(matching: identity)
         else {
             markdownDraft.statusMessage = "The original note is no longer in this folder."
             pendingSelection = nil
+            pendingMergeTarget = nil
+            pendingMergeGeneration = nil
+            scope.settle(confirmed: false)
             return
         }
         do {
@@ -963,18 +1436,55 @@ struct LibraryView: View {
         } catch {
             markdownDraft.statusMessage = error.localizedDescription
             pendingSelection = nil
+            pendingMergeTarget = nil
+            pendingMergeGeneration = nil
+            scope.settle(confirmed: false)
         }
     }
 
     private func applyPendingSelection() {
+        if pendingMergeTarget != nil,
+           pendingMergeGeneration != store.storageGeneration {
+            pendingMergeTarget = nil
+            pendingMergeGeneration = nil
+            pendingSelection = nil
+            scope.settle(confirmed: false)
+            showCopyNotice(NoteMergeError.libraryChanged.localizedDescription, severity: .failure)
+            return
+        }
         // The alert settled the Markdown question. The notes field is still
         // owed a write before the pane holding it is replaced; its words
         // outlive the view either way, so a refusal is reported rather than
         // blocking the selection the user already confirmed.
         if let failure = personalNotesDraft.saveIfNeeded(store: store) {
             showCopyNotice(failure, severity: .failure)
+            if scope.pendingTodayOnly != nil || pendingMergeTarget != nil {
+                scope.settle(confirmed: false)
+                pendingSelection = nil
+                pendingMergeTarget = nil
+                pendingMergeGeneration = nil
+                return
+            }
         }
-        selection = pendingSelection
+        if let identity = pendingMergeTarget {
+            pendingMergeTarget = nil
+            pendingMergeGeneration = nil
+            pendingSelection = nil
+            scope.settle(confirmed: false)
+            openPreparedMergePicker(for: identity)
+            return
+        }
+        // Saving can publish a different library snapshot. Resolve the range
+        // again instead of selecting a file removed while the alert was open.
+        let next: LibrarySelection?
+        if let requestedScope = scope.pendingTodayOnly {
+            next = selectionForScope(requestedScope)
+        } else {
+            next = pendingSelection
+        }
+        scope.settle(confirmed: true)
+        refreshLibraryCacheIfNeeded()
+        selection = next
         pendingSelection = nil
     }
 
@@ -985,28 +1495,25 @@ struct LibraryView: View {
             return
         }
         if case .note(let selectedID) = selection,
-           filteredNotes.contains(where: { $0.id == selectedID }) {
+           filteredNotes.contains(where: { $0.libraryIdentity == selectedID }) {
             return
         }
-        requestSelection(filteredNotes.first.map { .note($0.id) })
+        requestSelection(filteredNotes.first.map { .note($0.libraryIdentity) })
     }
 
     private func showCopyNotice(
         _ message: String,
         severity: CopyConfirmationBanner.Severity = .success
     ) {
-        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
-            copyNotice = message
-            copyNoticeSeverity = severity
+        let id = withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
+            copyNotice.show(message, severity: severity)
         }
-        // Failures name a problem the user may need to read carefully, so
-        // they stay up longer than confirmations.
-        let dwell = severity == .success ? 1.8 : 4.0
+        guard let dwell = copyNotice.current?.expirationDelay else { return }
         Task {
-            try? await Task.sleep(for: .seconds(dwell))
-            guard copyNotice == message else { return }
+            do { try await Task.sleep(for: .seconds(dwell)) }
+            catch { return }
             withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
-                copyNotice = nil
+                copyNotice.expire(id: id)
             }
         }
     }
@@ -1018,7 +1525,7 @@ struct LibraryView: View {
     private func createNote(from template: NoteTemplate) {
         do {
             let note = try store.createTemplatedNote(from: template)
-            selection = .note(note.id)
+            requestSelection(.note(note.libraryIdentity))
         } catch {
             store.lastError = error.localizedDescription
         }
@@ -1031,28 +1538,44 @@ struct LibraryView: View {
     /// Clicking again for the same week updates that digest in place rather
     /// than leaving a new, near-duplicate file behind each time.
     private func createWeeklyDigest() {
-        let window = DigestBuilder.period()
-        guard !DigestBuilder.coveredMeetings(from: store.notes).isEmpty else {
+        let now = Date()
+        let notes = store.notes
+        let libraryURL = store.storageURL.standardizedFileURL
+        let omittedCount = DigestBuilder.omittedMeetingCount(from: notes, now: now)
+        guard !DigestBuilder.coveredMeetings(from: notes, now: now).isEmpty else {
             showCopyNotice(
-                "No meetings from the last seven days to include yet.",
+                omittedCount > 0
+                    ? "No meetings can be included until the copies with a shared ID are reviewed."
+                    : "No meetings from the last seven days to include yet.",
                 severity: .info
             )
             return
         }
-        let existing = store.notes.first {
-            $0.kind == .digest
-                && $0.startedAt >= window.start
-                && $0.startedAt <= window.end
+        let existing: MeetingNote?
+        do {
+            existing = try DigestBuilder.replacement(in: notes, now: now)
+        } catch {
+            showCopyNotice(error.localizedDescription, severity: .failure)
+            return
         }
         Task {
             let digest = await DigestBuilder.build(
-                from: store.notes,
+                from: notes,
+                now: now,
                 id: existing?.id ?? UUID(),
-                fileURL: existing?.fileURL
+                fileURL: existing?.fileURL,
+                replacing: existing
             )
             do {
+                guard store.storageURL.standardizedFileURL == libraryURL else {
+                    throw DigestBuildError.changedReplacement
+                }
+                try DigestBuilder.validateReplacement(existing, in: store.notes, now: now)
                 let saved = try store.save(digest)
-                requestSelection(.note(saved.id))
+                requestSelection(.note(saved.libraryIdentity))
+                if omittedCount > 0 {
+                    showCopyNotice(LibraryNoteAggregation.omissionMessage, severity: .info)
+                }
             } catch {
                 showCopyNotice(
                     error.localizedDescription,
@@ -1062,64 +1585,75 @@ struct LibraryView: View {
         }
     }
 
-    /// Folds one saved note into another and removes what it absorbed.
-    ///
-    /// The merged note is saved before the absorbed file is trashed, so a
-    /// failure anywhere leaves both originals on disk rather than half of one.
+    private func requestMergePicker(for note: MeetingNote) {
+        guard mergeTask == nil, !showsUnsavedChangesAlert,
+              libraryIsReadyForSheet() else { return }
+        if markdownDraft.hasChanges {
+            pendingMergeTarget = note.libraryIdentity
+            pendingMergeGeneration = store.storageGeneration
+            pendingSelection = nil
+            showsUnsavedChangesAlert = true
+            return
+        }
+        openPreparedMergePicker(for: note.libraryIdentity)
+    }
+
+    private func openPreparedMergePicker(for identity: LibraryNoteIdentity) {
+        guard mergeTask == nil, libraryIsReadyForSheet() else { return }
+        do {
+            try NoteMergeWorkflow.settleDrafts(
+                store: store, markdown: markdownDraft, personal: personalNotesDraft
+            )
+            guard let current = store.uniqueNote(id: identity.noteID),
+                  current.libraryIdentity == identity else {
+                throw NoteMergeError.sourceChanged
+            }
+            try store.validateMergeSource(
+                current, directory: store.storageURL, generation: store.storageGeneration
+            )
+            // Saving an editor may have changed either merge input. Capture
+            // the picker target only once those exact writes have completed.
+            mergeTarget = current
+        } catch {
+            showCopyNotice(error.localizedDescription, severity: .failure)
+        }
+    }
+
     private func mergeNotes(_ absorbed: MeetingNote, into target: MeetingNote) {
-        Task {
+        guard mergeTask == nil else { return }
+        let generation = store.storageGeneration
+        mergeIsStopping = false
+        mergeTask = Task { @MainActor in
+            defer {
+                mergeTask = nil
+                mergeIsStopping = false
+            }
             do {
-                let result = try await NoteCombiner.merge(
-                    absorbed,
-                    into: target,
-                    recordingsDirectory: store.recordingsDirectory(),
-                    summarizer: SummaryService()
+                let completion = try await mergeWorkflow.merge(
+                    absorbed, into: target, store: store,
+                    markdown: markdownDraft, personal: personalNotesDraft,
+                    expectedGeneration: generation
                 )
-                // Markdown first. Until the merged note is on disk every file
-                // this touches can still be left exactly as it was, so a
-                // failure up to here means the merge can simply be tried
-                // again. Joining the audio is the irreversible half and runs
-                // only once the text is safe.
-                let saved = try store.save(result.merged)
-                var audioProblem: String?
-                do {
-                    try await result.commitAudio()
-                } catch {
-                    audioProblem = error.localizedDescription
+                if generation == store.storageGeneration,
+                   store.note(matching: completion.saved.libraryIdentity) != nil {
+                    requestSelection(.note(completion.saved.libraryIdentity))
                 }
-                // The merge itself is done either way: leaving the absorbed
-                // note behind would show the same conversation twice.
-                store.delete(result.absorbed)
-                requestSelection(.note(saved.id))
-                if let audioProblem {
-                    showCopyNotice(
-                        "Merged into “\(saved.title)”, but the recordings could not be joined: \(audioProblem)",
-                        severity: .failure
-                    )
-                } else {
-                    showCopyNotice(mergeNotice(for: result.audioOutcome, title: saved.title))
-                }
+                showCopyNotice(
+                    completion.notice,
+                    severity: completion.hasPartialSuccess ? .failure : .success
+                )
+            } catch is CancellationError {
+                showCopyNotice("Merge cancelled before the combined note was saved.", severity: .info)
             } catch {
-                store.lastError = error.localizedDescription
+                showCopyNotice(error.localizedDescription, severity: .failure)
             }
         }
     }
 
-    /// Names the note that survived, because it is not always the one the
-    /// user picked: the combined note is filed under whichever meeting
-    /// started first.
-    private func mergeNotice(
-        for audioOutcome: NoteCombiner.AudioOutcome,
-        title: String
-    ) -> String {
-        switch audioOutcome {
-        case .concatenated:
-            "Merged into “\(title)”. Both recordings were joined into one, and the other note moved to the Trash."
-        case .adoptedFromAbsorbed:
-            "Merged into “\(title)”. The other note's recording came with it, and that note moved to the Trash."
-        case .targetOnly, .none:
-            "Merged into “\(title)”. The other note moved to the Trash."
-        }
+    private func cancelMerge() {
+        guard let mergeTask else { return }
+        mergeIsStopping = true
+        mergeTask.cancel()
     }
 
     /// Picks a note when there is nothing else to show yet.
@@ -1133,6 +1667,13 @@ struct LibraryView: View {
     /// `.onChange(of: currentPhase)` below, moving the selection to `.live`
     /// exactly the way any later phase transition does.
     private func chooseInitialSelection() {
+        // Reopening the library restores its own dirty editor without asking
+        // to leave it, but must not redirect an already presented question.
+        guard !showsUnsavedChangesAlert else { return }
+        if case .copies(let id) = selection,
+           let unique = store.uniqueNote(id: id) {
+            selection = .note(unique.libraryIdentity)
+        }
         guard selection == nil else { return }
         selection = restoredOrFirstSelection(in: store.notes)
     }
@@ -1140,12 +1681,15 @@ struct LibraryView: View {
     private func restoredOrFirstSelection(
         in notes: [MeetingNote]
     ) -> LibrarySelection? {
+        let visible = LibraryNoteGrouping.filter(
+            notes, todayOnly: todayOnly, matchingIDs: searchController.matchingIDs
+        )
         if markdownDraft.hasChanges,
-           let noteID = markdownDraft.noteID,
-           notes.contains(where: { $0.id == noteID }) {
-            return .note(noteID)
+           let identity = markdownDraft.libraryIdentity,
+           notes.contains(where: { $0.libraryIdentity == identity }) {
+            return .note(identity)
         }
-        return notes.first.map { .note($0.id) }
+        return visible.first.map { .note($0.libraryIdentity) }
     }
 }
 
@@ -1266,6 +1810,7 @@ private struct LibraryLiveSection: View {
 /// its destructive confirmation local to the controls that can trigger it.
 private struct LibraryRecoverySection: View {
     @ObservedObject var recovery: RecordingRecovery
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let localeIdentifier: String
     @State private var pendingDeletion: OrphanedRecording?
     @State private var showsAll = false
@@ -1286,7 +1831,7 @@ private struct LibraryRecoverySection: View {
 
                 if recovery.orphans.count > visibleOrphans.count {
                     Button("Show \(recovery.orphans.count - visibleOrphans.count) more recordings") {
-                        withAnimation(.easeInOut(duration: 0.2)) {
+                        withAnimation(NookMotion.quickAnimation(reduceMotion: reduceMotion)) {
                             showsAll = true
                         }
                     }
@@ -1299,7 +1844,7 @@ private struct LibraryRecoverySection: View {
                 } else if showsAll,
                           recovery.orphans.count > Self.visibleOrphanLimit {
                     Button("Show fewer recordings") {
-                        withAnimation(.easeInOut(duration: 0.2)) {
+                        withAnimation(NookMotion.quickAnimation(reduceMotion: reduceMotion)) {
                             showsAll = false
                         }
                     }
@@ -1534,6 +2079,7 @@ private func librarySidebarSectionHeader(_ title: String) -> some View {
 private struct MeetingRow: View {
     let note: MeetingNote
     let isSelected: Bool
+    var showsFileIdentity = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 11) {
@@ -1544,6 +2090,14 @@ private struct MeetingRow: View {
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(primaryTextColor)
                     .lineLimit(1)
+
+                if showsFileIdentity, let file = note.fileURL {
+                    Label(file.lastPathComponent, systemImage: "doc.on.doc")
+                        .font(.caption)
+                        .foregroundStyle(secondaryTextColor)
+                        .lineLimit(2)
+                        .help(file.path)
+                }
 
                 if !note.summary.trimmingCharacters(
                     in: .whitespacesAndNewlines

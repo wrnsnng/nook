@@ -27,6 +27,8 @@ struct NookApp: App {
                 .environmentObject(appModel.personalNotesDraft)
                 .environmentObject(appModel.prep)
                 .environmentObject(appModel.recovery)
+                .environmentObject(appModel.draftJournal)
+                .environmentObject(appModel.draftRecovery)
                 .environmentObject(shortcuts)
                 .frame(minWidth: 900, minHeight: 580)
                 .background(NookWindowBridge(role: .library))
@@ -106,7 +108,15 @@ struct NookApp: App {
         .windowToolbarStyle(.unifiedCompact(showsTitle: false))
 
         Settings {
-            SettingsView()
+            SettingsView(
+                storageLocations: { directory in
+                    StorageInventoryLocation.current(
+                        notesDirectory: directory,
+                        draftsDirectory: appModel.draftJournal.directoryURL
+                    )
+                },
+                reviewStorageInLibrary: { appModel.openLibrary() }
+            )
                 .environmentObject(appModel.store)
                 .environmentObject(appModel.detector)
                 .environmentObject(appModel.meeting)

@@ -169,21 +169,29 @@ struct NotchPanelView: View {
                     .monospacedDigit()
                     .contentTransition(.numericText())
 
-                Circle()
-                    .fill(
+                Group {
+                    if meeting.isPaused {
+                        Image(systemName: "pause.fill")
+                            .font(.system(size: 6, weight: .bold))
+                    } else {
+                        Circle()
+                    }
+                }
+                .foregroundStyle(
+                    meeting.isPaused
+                        ? NookPalette.warning
+                        : NookPalette.danger
+                )
+                .frame(width: 6, height: 6)
+                .shadow(
+                    color: (
                         meeting.isPaused
                             ? NookPalette.warning
                             : NookPalette.danger
-                    )
-                    .frame(width: 6, height: 6)
-                    .shadow(
-                        color: (
-                            meeting.isPaused
-                                ? NookPalette.warning
-                                : NookPalette.danger
-                        ).opacity(0.45),
-                        radius: 3
-                    )
+                    ).opacity(0.45),
+                    radius: 3
+                )
+                .accessibilityHidden(true)
             }
             .foregroundStyle(.white.opacity(isHovering ? 1 : 0.86))
             .frame(width: 86, height: geometry.topInset)
@@ -645,11 +653,15 @@ struct NotchPanelView: View {
                 .disabled(meeting.pauseTransitionInFlight)
 
                 CompactMeetingControl(
-                    symbol: "flag.fill",
+                    symbol: meeting.momentAcknowledgedAt == nil
+                        ? "flag.fill" : "checkmark",
                     label: "Flag this moment",
                     tint: meeting.momentAcknowledgedAt == nil
                         ? nil : NookPalette.success,
                     action: meeting.flagMoment
+                )
+                .accessibilityValue(
+                    meeting.momentAcknowledgedAt == nil ? "" : "Moment flagged"
                 )
 
                 CompactMeetingControl(
@@ -897,9 +909,13 @@ private struct PanelTextButtonStyle: ButtonStyle {
     var isPrimary = false
 
     @Environment(\.isFocused) private var isFocused
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+        let feedback = PanelPressFeedback(
+            surface: .text, isPressed: configuration.isPressed, reduceMotion: reduceMotion
+        )
+        return configuration.label
             .font(NookType.metadata)
             .labelStyle(.titleAndIcon)
             .foregroundStyle(foreground)
@@ -907,22 +923,18 @@ private struct PanelTextButtonStyle: ButtonStyle {
             .frame(minHeight: 30)
             .background {
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(
-                        .white.opacity(
-                            configuration.isPressed ? 0.10 : 0.001
-                        )
-                    )
+                    .fill(.white.opacity(feedback.backgroundOpacity))
             }
             .contentShape(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
             )
-            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .scaleEffect(feedback.scale)
             .nookFocusRing(
                 RoundedRectangle(cornerRadius: 9, style: .continuous),
                 isVisible: isFocused
             )
             .animation(
-                NookMotion.settle(over: 0.12),
+                feedback.animation,
                 value: configuration.isPressed
             )
     }
@@ -944,27 +956,31 @@ private struct PanelIconButtonStyle: ButtonStyle {
     var sideLength: CGFloat = 30
 
     @Environment(\.isFocused) private var isFocused
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+        let feedback = PanelPressFeedback(
+            surface: .icon, isPressed: configuration.isPressed, reduceMotion: reduceMotion
+        )
+        return configuration.label
             .font(.system(size: 11, weight: .semibold))
             .labelStyle(.iconOnly)
             .foregroundStyle(foreground)
             .frame(width: sideLength, height: sideLength)
             .background(
-                .white.opacity(configuration.isPressed ? 0.12 : 0.045),
+                .white.opacity(feedback.backgroundOpacity),
                 in: RoundedRectangle(cornerRadius: 7, style: .continuous)
             )
             .contentShape(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
             )
-            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .scaleEffect(feedback.scale)
             .nookFocusRing(
                 RoundedRectangle(cornerRadius: 9, style: .continuous),
                 isVisible: isFocused
             )
             .animation(
-                NookMotion.settle(over: 0.12),
+                feedback.animation,
                 value: configuration.isPressed
             )
     }
@@ -978,11 +994,15 @@ private struct PanelIconButtonStyle: ButtonStyle {
 
 private struct HiddenRecordingIndicatorStyle: ButtonStyle {
     @Environment(\.isFocused) private var isFocused
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .opacity(configuration.isPressed ? 0.82 : 1)
-            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+        let feedback = PanelPressFeedback(
+            surface: .hiddenIndicator, isPressed: configuration.isPressed, reduceMotion: reduceMotion
+        )
+        return configuration.label
+            .opacity(feedback.contentOpacity)
+            .scaleEffect(feedback.scale)
             // The one control on a hidden panel, and the only way back to the
             // recording without a pointer. It gets the same focus ring the
             // other panel styles do; without it a keyboard user could reach it
@@ -992,9 +1012,41 @@ private struct HiddenRecordingIndicatorStyle: ButtonStyle {
                 isVisible: isFocused
             )
             .animation(
-                NookMotion.settle(over: 0.12),
+                feedback.animation,
                 value: configuration.isPressed
             )
+    }
+}
+
+/// Reduce Motion removes the transform, not the acknowledgment of a press.
+/// Keeping those decisions together preserves each panel control's existing
+/// feedback while making both preferences use the same nonmoving colors.
+struct PanelPressFeedback {
+    enum Surface: CaseIterable, Sendable {
+        case text, icon, hiddenIndicator
+    }
+
+    let scale: CGFloat
+    let backgroundOpacity: Double
+    let contentOpacity: Double
+    let animation: Animation?
+
+    init(surface: Surface, isPressed: Bool, reduceMotion: Bool) {
+        let pressedScale: CGFloat
+        switch surface {
+        case .text:
+            pressedScale = 0.98
+            backgroundOpacity = isPressed ? 0.10 : 0.001
+        case .icon:
+            pressedScale = 0.96
+            backgroundOpacity = isPressed ? 0.12 : 0.045
+        case .hiddenIndicator:
+            pressedScale = 0.985
+            backgroundOpacity = 0
+        }
+        scale = isPressed && !reduceMotion ? pressedScale : 1
+        contentOpacity = surface == .hiddenIndicator && isPressed ? 0.82 : 1
+        animation = reduceMotion ? nil : NookMotion.settle(over: 0.12)
     }
 }
 

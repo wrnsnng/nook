@@ -77,6 +77,12 @@ enum NookPalette {
         light: NSColor(red: 0.32, green: 0.55, blue: 0.92, alpha: 1),
         dark: NSColor(red: 0.64, green: 0.80, blue: 1.00, alpha: 1)
     )
+    /// The dark accent is deliberately light enough for text and icons. A
+    /// filled button needs dark ink on that same color; white was only 2.3:1.
+    static let prominentButtonForeground = adaptive(
+        light: .white,
+        dark: NSColor(red: 0.04, green: 0.10, blue: 0.18, alpha: 1)
+    )
     /// A deliberately deeper selection color so white sidebar text retains
     /// AA contrast in both active and inactive windows.
     static let sidebarSelection = adaptive(
@@ -245,6 +251,26 @@ enum NookRadius {
     static let surface: CGFloat = 14
 }
 
+/// Custom chrome cannot inherit the system control's stronger contrast border.
+enum NookOutline {
+    struct Metrics {
+        let opacity: Double
+        let width: CGFloat
+    }
+
+    static func button(isProminent: Bool, contrast: ColorSchemeContrast) -> Metrics {
+        contrast == .increased
+            ? Metrics(opacity: 0.45, width: 1.5)
+            : Metrics(opacity: isProminent ? 0.04 : 0.09, width: 0.6)
+    }
+
+    static func divider(contrast: ColorSchemeContrast) -> Metrics {
+        contrast == .increased
+            ? Metrics(opacity: 0.45, width: 1)
+            : Metrics(opacity: 0.09, width: 0.5)
+    }
+}
+
 enum NookMotion {
     static let quick = Animation.easeOut(duration: 0.18)
     static let spatial = Animation.timingCurve(
@@ -269,6 +295,20 @@ enum NookMotion {
     static func glide(over duration: Double) -> Animation {
         .timingCurve(0.16, 1, 0.30, 1, duration: duration)
     }
+
+    static func quickAnimation(reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : quick
+    }
+
+    // Suppress the transform itself as well as its animation. An inherited
+    // transaction must not make a reduced-motion control shrink or reflow.
+    static func pressedScale(isPressed: Bool, reduceMotion: Bool) -> CGFloat {
+        isPressed && !reduceMotion ? 0.98 : 1
+    }
+
+    static func savedStatusScale(reduceMotion: Bool) -> CGFloat {
+        reduceMotion ? 1 : 0.96
+    }
 }
 
 struct NookButtonStyle: ButtonStyle {
@@ -280,11 +320,14 @@ struct NookButtonStyle: ButtonStyle {
     /// system focus ring for them. Keyboard users would otherwise have no way
     /// to see which control Return or Space will act on.
     @Environment(\.isFocused) private var isFocused
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorSchemeContrast) private var contrast
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+        let outline = NookOutline.button(isProminent: isProminent, contrast: contrast)
+        return configuration.label
             .font(NookType.control)
-            .foregroundStyle(foregroundStyle)
+            .foregroundStyle(foregroundColor)
             .padding(.horizontal, 12)
             .frame(minHeight: 32)
             .background {
@@ -292,7 +335,7 @@ struct NookButtonStyle: ButtonStyle {
                     cornerRadius: NookRadius.control,
                     style: .continuous
                 )
-                    .fill(backgroundStyle(configuration: configuration))
+                    .fill(backgroundColor(isPressed: configuration.isPressed))
             }
             .overlay {
                 RoundedRectangle(
@@ -300,8 +343,8 @@ struct NookButtonStyle: ButtonStyle {
                     style: .continuous
                 )
                     .stroke(
-                        .primary.opacity(isProminent ? 0.04 : 0.09),
-                        lineWidth: 0.6
+                        .primary.opacity(outline.opacity),
+                        lineWidth: outline.width
                     )
             }
             .nookFocusRing(
@@ -318,31 +361,27 @@ struct NookButtonStyle: ButtonStyle {
                 )
             )
             .opacity(isEnabled ? 1 : 0.42)
-            .scaleEffect(configuration.isPressed ? 0.98 : 1)
-            .animation(NookMotion.quick, value: configuration.isPressed)
+            .scaleEffect(NookMotion.pressedScale(isPressed: configuration.isPressed, reduceMotion: reduceMotion))
+            .animation(NookMotion.quickAnimation(reduceMotion: reduceMotion), value: configuration.isPressed)
     }
 
-    private var foregroundStyle: AnyShapeStyle {
+    var foregroundColor: Color {
         if isProminent {
-            return AnyShapeStyle(Color.white)
+            return NookPalette.prominentButtonForeground
         }
         if let tint {
-            return AnyShapeStyle(tint)
+            return tint
         }
-        return AnyShapeStyle(.primary)
+        return .primary
     }
 
-    private func backgroundStyle(
-        configuration: Configuration
-    ) -> AnyShapeStyle {
+    func backgroundColor(isPressed: Bool) -> Color {
         if isProminent, let tint {
-            return AnyShapeStyle(
-                tint.opacity(configuration.isPressed ? 0.78 : 1)
-            )
+            // Keep the pressed fill strong enough for its text. At 0.78,
+            // white text on the light accent fell below 4.5:1 over paper.
+            return tint.opacity(isPressed ? 0.86 : 1)
         }
-        return AnyShapeStyle(
-            .primary.opacity(configuration.isPressed ? 0.13 : 0.055)
-        )
+        return .primary.opacity(isPressed ? 0.13 : 0.055)
     }
 }
 
@@ -524,9 +563,77 @@ struct NookSectionLabel: View {
     }
 }
 
-/// A transient notice floating over library and detail surfaces. The severity
-/// exists because a failure written into a success banner reads as a
-/// confirmation, which is worse than showing nothing.
+/// A notice's identity, rather than its wording, owns dismissal. Repeating the
+/// same operation must not let the previous operation's timer erase its result.
+struct CopyNoticeState {
+    struct Notice: Identifiable {
+        let id: UUID
+        let message: String
+        let severity: CopyConfirmationBanner.Severity
+
+        var expirationDelay: TimeInterval? {
+            switch severity {
+            case .success: 1.8
+            case .info: 4
+            case .failure: nil
+            }
+        }
+    }
+
+    private(set) var current: Notice?
+
+    @discardableResult
+    mutating func show(_ message: String, severity: CopyConfirmationBanner.Severity) -> UUID {
+        let notice = Notice(id: UUID(), message: message, severity: severity)
+        current = notice
+        return notice.id
+    }
+
+    mutating func dismiss(id: UUID) {
+        guard current?.id == id else { return }
+        current = nil
+    }
+
+    mutating func expire(id: UUID) {
+        guard current?.id == id, current?.expirationDelay != nil else { return }
+        current = nil
+    }
+}
+
+/// Reserve space for the notice instead of covering the title or its controls.
+/// Only the banner gets a new identity when messages change: replacing the
+/// content would also replace its native editor, focus and unsaved selection.
+private struct NookNoticePresentation: ViewModifier {
+    let notice: CopyNoticeState.Notice?
+    let onDismiss: (UUID) -> Void
+
+    func body(content: Content) -> some View {
+        VStack(spacing: 0) {
+            if let notice {
+                CopyConfirmationBanner(message: notice.message, severity: notice.severity) {
+                    onDismiss(notice.id)
+                }
+                .id(notice.id)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+            content
+        }
+    }
+}
+
+extension View {
+    func nookNotice(
+        _ notice: CopyNoticeState.Notice?,
+        onDismiss: @escaping (UUID) -> Void
+    ) -> some View {
+        modifier(NookNoticePresentation(notice: notice, onDismiss: onDismiss))
+    }
+}
+
+/// Failures stay available until dismissed so the user has time to read and
+/// act on the full explanation. Large messages scroll within a bounded height.
 struct CopyConfirmationBanner: View {
     enum Severity {
         case success
@@ -536,29 +643,66 @@ struct CopyConfirmationBanner: View {
 
     let message: String
     var severity: Severity = .success
+    var onDismiss: (() -> Void)? = nil
+    @State private var measuredMessageHeight: CGFloat = 0
+
+    private static let maximumMessageHeight: CGFloat = 120
 
     var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            // Measure rendered lines rather than character count: long paths,
+            // wide glyphs and larger text must leave Dismiss reachable.
+            if measuredMessageHeight > Self.maximumMessageHeight {
+                ScrollView {
+                    messageLabel
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(height: Self.maximumMessageHeight)
+                .accessibilityLabel("Full notice message")
+            } else {
+                messageLabel
+            }
+            if severity == .failure, let onDismiss {
+                Button("Dismiss", action: onDismiss)
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.primary)
+                    .fixedSize()
+                    .accessibilityLabel("Dismiss error message")
+            }
+        }
+        .padding(.horizontal, 13)
+        .padding(.vertical, 8)
+        .frame(minHeight: 34)
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(
+                cornerRadius: NookRadius.control,
+                style: .continuous
+            )
+        )
+        .overlay {
+            RoundedRectangle(
+                cornerRadius: NookRadius.control,
+                style: .continuous
+            )
+                .stroke(.primary.opacity(0.09), lineWidth: 0.5)
+        }
+        .shadow(color: .black.opacity(0.12), radius: 12, y: 5)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var messageLabel: some View {
         Label(message, systemImage: symbolName)
             .font(.callout.weight(.semibold))
             .foregroundStyle(foregroundStyle)
-            .padding(.horizontal, 13)
-            .frame(height: 34)
-            .background(
-                .regularMaterial,
-                in: RoundedRectangle(
-                    cornerRadius: NookRadius.control,
-                    style: .continuous
-                )
-            )
-            .overlay {
-                RoundedRectangle(
-                    cornerRadius: NookRadius.control,
-                    style: .continuous
-                )
-                    .stroke(.primary.opacity(0.09), lineWidth: 0.5)
+            .fixedSize(horizontal: false, vertical: true)
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.size.height
+            } action: { height in
+                measuredMessageHeight = height
             }
-            .shadow(color: .black.opacity(0.12), radius: 12, y: 5)
             .accessibilityElement(children: .combine)
+            .accessibilityLabel(message)
     }
 
     private var symbolName: String {
@@ -579,10 +723,13 @@ struct CopyConfirmationBanner: View {
 }
 
 struct SoftDivider: View {
+    @Environment(\.colorSchemeContrast) private var contrast
+
     var body: some View {
+        let outline = NookOutline.divider(contrast: contrast)
         Rectangle()
-            .fill(.primary.opacity(0.09))
-            .frame(height: 0.5)
+            .fill(.primary.opacity(outline.opacity))
+            .frame(height: outline.width)
             .accessibilityHidden(true)
     }
 }

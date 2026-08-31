@@ -168,4 +168,56 @@ struct QuickCaptureTaskParserTests {
                 == "Tomorrow"
         )
     }
+
+    @Test
+    func cueBoundariesKeepTheirUnicodeLetterSemantics() {
+        let boundaries: [(String, before: Bool, after: Bool)] = [
+            ("", true, true), (" ", true, true), ("\t", true, true),
+            ("\u{00A0}", true, true), ("\u{200B}", true, true),
+            ("\u{0301}", true, true), ("👩🏽‍💻", true, true),
+            ("_", true, true), ("9", true, true),
+            ("é", false, false), ("中", false, false),
+            // The parser's existing ICU boundary is a letter boundary, not
+            // a grapheme boundary. A trailing combining mark is not a letter.
+            ("e\u{0301}", true, false)
+        ]
+        for (boundary, before, after) in boundaries {
+            #expect((suggestion(boundary + "tomorrow") != nil) == before)
+            #expect((suggestion("tomorrow" + boundary) != nil) == after)
+        }
+    }
+
+    @Test
+    func datePrecedenceAndExactMultiwordCuesStayPredictable() {
+        #expect(suggestion("Friday or tomorrow")?.cueLabel == "Tomorrow")
+        #expect(suggestion("Tomorrow or tonight")?.cueLabel == "Today")
+        #expect(suggestion("Saturday then Monday")?.cueLabel == "Monday")
+        #expect(suggestion("Plan next\tweek") == nil)
+        #expect(suggestion("Plan next\u{00A0}week") == nil)
+        #expect(suggestion("Plan next  week") == nil)
+    }
+
+    @Test
+    func pastCueRejectionKeepsUnicodeWhitespaceAndAnchoring() {
+        for space in [" ", "\t", "\u{00A0}", "\u{2003}"] {
+            #expect(suggestion("last\(space)friday") == nil)
+            #expect(suggestion("monday\(space)we\(space)agreed") == nil)
+            #expect(suggestion("we\(space)agreed\(space)on\(space)tuesday") == nil)
+        }
+        #expect(suggestion("Send what we discussed by friday")?.cueLabel == "Friday")
+        #expect(suggestion("We met last friday, send this tomorrow")?.cueLabel == "Tomorrow")
+    }
+
+    @Test
+    func applyingRequiresTheExactParagraphBytes() {
+        let original = "Caf\u{00E9} tomorrow"
+        let changed = "Cafe\u{0301} tomorrow"
+        let target = suggestion(original)!
+        #expect(original == changed)
+        #expect(Data(QuickCaptureTaskParser.applying(target, to: changed).utf8) == Data(changed.utf8))
+        let twoLines = original + "\n" + changed
+        let applied = QuickCaptureTaskParser.applying(target, to: twoLines)
+        #expect(applied.hasPrefix("- [ ] " + original))
+        #expect(Data(applied.split(separator: "\n").last!.utf8) == Data(changed.utf8))
+    }
 }

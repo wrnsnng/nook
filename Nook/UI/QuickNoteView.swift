@@ -5,40 +5,29 @@ struct QuickNoteView: View {
     @EnvironmentObject private var note: QuickNoteController
     @EnvironmentObject private var dictation: DictationCoordinator
     @EnvironmentObject private var shortcuts: ShortcutStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The paragraph the user declined; it stays declined until the words
     /// change.
     @State private var dismissedSuggestion: String?
     @State private var showsFilingPicker = false
-    /// The parsed task suggestion for the note's current words, recomputed
-    /// only when `note.text` actually changes. The pad's body also
-    /// re-evaluates on every dictation audio-level tick while listening
-    /// (`isHearing`/`dictation.volatileText`); parsing the whole buffer for a
-    /// due-date cue on each of those, when typing had not happened, was pure
-    /// waste.
-    @State private var cachedSuggestion: QuickCaptureTaskParser.Suggestion?
-
     private var taskSuggestion: QuickCaptureTaskParser.Suggestion? {
-        guard let cachedSuggestion,
-              cachedSuggestion.paragraph != dismissedSuggestion
+        guard let suggestion = note.taskSuggestion,
+              !suggestion.paragraph.utf8.elementsEqual(dismissedSuggestion?.utf8 ?? "".utf8)
         else {
             return nil
         }
-        return cachedSuggestion
-    }
-
-    private func refreshTaskSuggestion() {
-        cachedSuggestion = QuickCaptureTaskParser.suggestion(in: note.text)
+        return suggestion
     }
 
     /// What is worth saying above the bar right now, at most two things.
     private var rows: [QuickNotePadRow] {
         QuickNotePadLayout.rows(
-            outboundProvider: note.engine.provider,
-            notice: note.message,
-            noticeIsFailure: !note.messageIsAdvisory,
+            outboundProvider: note.outboundEngine?.provider,
+            notice: note.message ?? note.recoveryWarning ?? note.filingCompletionMessage,
+            noticeIsFailure: note.message == nil || !note.messageIsAdvisory,
             hearing: isHearing ? dictation.volatileText : nil,
             hasSuggestion: taskSuggestion != nil,
-            hasAssistant: !note.availableEngines.isEmpty
+            hasAssistant: !note.availableEngines.isEmpty || note.isWorking
         )
     }
 
@@ -60,10 +49,11 @@ struct QuickNoteView: View {
         .background { closeShortcut }
         // Escape leaves the pad the way every other exit does, by saving.
         .onExitCommand { note.done() }
-        .onAppear { refreshTaskSuggestion() }
-        .onChange(of: note.text) { _, _ in
+        .onAppear { note.refreshTaskSuggestion() }
+        // String equality folds canonically equivalent Unicode. The exact
+        // revision also schedules saves for a byte-changing Unicode edit.
+        .onChange(of: note.textRevision) { _, _ in
             note.scheduleSave()
-            refreshTaskSuggestion()
         }
         .onChange(of: note.isContinuous) { _, continuous in
             guard note.isFrontmost else { return }
@@ -84,6 +74,7 @@ struct QuickNoteView: View {
         NookNotesEditor(
             text: $note.text,
             placeholder: "Type, or hold your dictation shortcut and talk.",
+            focusToken: note.editorFocusToken,
             contentInsets: EdgeInsets(
                 top: NookSpacing.medium,
                 leading: NookSpacing.large,
@@ -121,14 +112,14 @@ struct QuickNoteView: View {
                         .frame(height: NookSpacing.hairline)
                 }
         }
-        .animation(NookMotion.quick, value: rows)
+        .animation(NookMotion.quickAnimation(reduceMotion: reduceMotion), value: rows)
     }
 
     @ViewBuilder
     private func rowView(_ row: QuickNotePadRow) -> some View {
         switch row {
-        case .outbound(let provider):
-            outboundRow(provider: provider)
+        case .outbound:
+            outboundRow
         case .notice(let text, let isFailure):
             noticeRow(text, isFailure: isFailure)
         case .hearing(let text):
@@ -151,24 +142,25 @@ struct QuickNoteView: View {
     /// user believing Nook's usual promise still holds while it no longer does.
     /// One line rather than a bordered box: a standing fact drawn as an alert
     /// is an alarm that never stops, and those stop being read.
-    private func outboundRow(provider: String) -> some View {
+    private var outboundRow: some View {
         HStack(spacing: NookSpacing.xSmall) {
             Image(systemName: "arrow.up.forward.app.fill")
                 .foregroundStyle(NookPalette.warning)
                 .accessibilityHidden(true)
 
-            Text("Actions send this note to \(provider).")
+            Text(note.outboundMessage)
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .accessibilityLabel(
-                    "Warning. Actions send this note to \(provider)."
-                )
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityLabel("Warning. \(note.outboundMessage)")
 
-            Button("Keep on this Mac") {
+            Button(note.isStoppingAssistant ? "Stopping…" : "Keep on this Mac") {
                 note.selectEngine(.onDevice)
             }
             .buttonStyle(.borderless)
-            .help("Switch back to the on-device model, which sends nothing.")
+            .disabled(note.isStoppingAssistant)
+            .help(note.runningEngine?.leavesTheMac == true
+                  ? "Stop accepting this assistant’s result and request cancellation. Text already sent cannot be recalled."
+                  : "Switch back to the on-device model, which sends nothing.")
 
             Spacer(minLength: 0)
         }
@@ -179,23 +171,41 @@ struct QuickNoteView: View {
     /// things. Drawing the second one in warning colours told people something
     /// had gone wrong when nothing had.
     private func noticeRow(_ text: String, isFailure: Bool) -> some View {
-        Label {
-            Text(text)
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
-        } icon: {
-            Image(
-                systemName: isFailure
-                    ? "exclamationmark.triangle.fill"
-                    : "info.circle"
+        VStack(alignment: .leading, spacing: NookSpacing.xSmall) {
+            Label {
+                Text(text)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            } icon: {
+                Image(
+                    systemName: isFailure
+                        ? "exclamationmark.triangle.fill"
+                        : "info.circle"
+                )
+            }
+            .foregroundStyle(
+                isFailure
+                    ? AnyShapeStyle(NookPalette.warning)
+                    : AnyShapeStyle(.secondary)
             )
+
+            if note.message == nil, note.recoveryWarning == nil,
+               note.filingCompletionMessage == text {
+                HStack(spacing: NookSpacing.medium) {
+                    Button("Review in Library") {
+                        note.reviewFilingTargetsInLibrary()
+                    }
+                    .help("Open Library without saving or closing this quick note.")
+                    .accessibilityHint("Review the earlier saved copy while keeping this quick note open.")
+                    Button("Dismiss") { note.dismissFilingCompletion() }
+                        .accessibilityLabel("Dismiss filing notice")
+                        .help("Dismiss this notice without changing any saved file.")
+                }
+                .buttonStyle(.borderless)
+            }
         }
         .font(NookType.caption)
-        .foregroundStyle(
-            isFailure
-                ? AnyShapeStyle(NookPalette.warning)
-                : AnyShapeStyle(.secondary)
-        )
+        .accessibilityElement(children: .contain)
         .transition(.opacity)
     }
 
@@ -237,10 +247,7 @@ struct QuickNoteView: View {
                 .foregroundStyle(.secondary)
 
             Button("Make task") {
-                note.text = QuickCaptureTaskParser.applying(
-                    suggestion,
-                    to: note.text
-                )
+                note.applyTaskSuggestion(suggestion)
                 dismissedSuggestion = suggestion.paragraph
             }
             .buttonStyle(.borderless)
@@ -344,7 +351,7 @@ struct QuickNoteView: View {
     /// the Mac are the same fact, so they belong to one control.
     @ViewBuilder
     private func engineControl(showsTitle: Bool) -> some View {
-        if note.availableEngines.count > 1 {
+        if note.canChooseAssistant {
             Menu {
                 ForEach(note.availableEngines) { engine in
                     Button {
@@ -371,9 +378,10 @@ struct QuickNoteView: View {
             .menuStyle(.button)
             .buttonStyle(.bordered)
             .fixedSize()
-            .help(note.engine.detail)
-            .accessibilityLabel("Assistant: \(note.engine.title)")
-            .accessibilityValue(note.engine.detail)
+            .help(note.selectedAssistantDescription)
+            .accessibilityLabel(note.isSelectedAssistantAvailable
+                                 ? "Assistant: \(note.engine.title)" : "Choose an assistant")
+            .accessibilityValue(note.selectedAssistantDescription)
             .accessibilityHint("Choose which assistant runs note actions.")
         } else if !note.availableEngines.isEmpty {
             // With one engine there is no choice to offer. A disabled menu
@@ -393,9 +401,10 @@ struct QuickNoteView: View {
     @ViewBuilder
     private func engineLabel(showsTitle: Bool) -> some View {
         let label = Label {
-            Text(note.engine.title)
+            Text(note.isSelectedAssistantAvailable ? note.engine.title : "Choose assistant")
         } icon: {
-            Image(systemName: symbol(for: note.engine))
+            Image(systemName: note.isSelectedAssistantAvailable
+                  ? symbol(for: note.engine) : "exclamationmark.circle")
                 .foregroundStyle(
                     note.engine.leavesTheMac
                         ? AnyShapeStyle(NookPalette.warning)
@@ -416,7 +425,7 @@ struct QuickNoteView: View {
     /// look like a toolbar for four unrelated things.
     @ViewBuilder
     private func actionsMenu(showsTitle: Bool) -> some View {
-        if !note.availableEngines.isEmpty {
+        if !note.availableEngines.isEmpty || note.isWorking {
             Menu {
                 Section("Using \(note.engine.title)") {
                     ForEach(NoteAction.allCases) { action in
@@ -434,11 +443,11 @@ struct QuickNoteView: View {
             .menuStyle(.button)
             .buttonStyle(.bordered)
             .fixedSize()
-            .disabled(!canAct)
+            .disabled(!note.canRunAction)
             .help(actionsHelp)
             .accessibilityLabel("Note actions")
-            .accessibilityValue("Using \(note.engine.title)")
-            .accessibilityHint("Choose an action to change or add to this note.")
+            .accessibilityValue(note.actionStatusDescription)
+            .accessibilityHint(note.actionAvailabilityHint)
         }
     }
 
@@ -466,8 +475,9 @@ struct QuickNoteView: View {
     }
 
     private var actionsHelp: String {
-        if let running = note.runningAction {
-            return "\(running.title) is running."
+        if note.isWorking || note.isPreparingForTermination
+            || !note.isSelectedAssistantAvailable || note.text.isEmpty {
+            return "\(note.actionStatusDescription) \(note.actionAvailabilityHint)"
         }
         return "Tidy up, summarise, find actions, or expand, using "
             + "\(note.engine.title)."
@@ -576,14 +586,14 @@ struct QuickNoteView: View {
             shortcuts.binding(for: .quickNoteDiscard).keyEquivalent,
             modifiers: shortcuts.binding(for: .quickNoteDiscard).eventModifiers
         )
-        .disabled(note.text.isEmpty)
+        .disabled(!note.canDiscard)
         .help(
             "Discard this note. "
                 + shortcuts.binding(for: .quickNoteDiscard).spokenDescription
                 + "."
         )
         .accessibilityLabel("Discard this note")
-        .accessibilityHint("Remove this quick note. Longer notes ask for confirmation.")
+        .accessibilityHint("Remove this quick note. A confirmation may be required.")
     }
 
     /// Saves and closes. Return belongs to the editor, so this is on
@@ -630,33 +640,50 @@ struct QuickNoteView: View {
     }
 
     private var filingPicker: some View {
-        VStack(alignment: .leading, spacing: NookSpacing.xSmall) {
+        let choices = note.filingChoices
+        return VStack(alignment: .leading, spacing: NookSpacing.xSmall) {
             Text("Add these words to")
                 .font(NookType.control)
-            if note.recentMeetingTargets.isEmpty {
-                Text("No meetings have been recorded yet.")
+            if note.hasOmittedDuplicateMeetings {
+                Text("Meetings with a shared note ID are not listed. Review the copies in Library before filing into them.")
+                    .font(NookType.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Review Copies in Library") {
+                    showsFilingPicker = false
+                    note.reviewFilingTargetsInLibrary()
+                }
+                .buttonStyle(.borderless)
+                .help("Open Library without saving or closing this quick note.")
+                .accessibilityHint("Keeps this quick note and its unsaved words open while you review the copied files.")
+            } else if choices.isEmpty {
+                Text("No meetings are available for filing.")
                     .font(NookType.caption)
                     .foregroundStyle(.secondary)
             }
-            ForEach(note.recentMeetingTargets) { meeting in
+            ForEach(choices) { choice in
                 Button {
                     showsFilingPicker = false
-                    note.fileIntoMeeting(meeting)
+                    note.fileIntoMeeting(choice.note)
                 } label: {
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(meeting.title)
+                        Text(choice.title)
                             .lineLimit(1)
-                        Text(
-                            meeting.startedAt.formatted(
-                                date: .abbreviated,
-                                time: .shortened
-                            )
-                        )
-                        .font(NookType.caption)
-                        .foregroundStyle(.secondary)
+                        Text(choice.dateLabel)
+                            .font(NookType.caption)
+                            .foregroundStyle(.secondary)
+                        if let filename = choice.disambiguatingFilename {
+                            Text(verbatim: filename)
+                                .font(NookType.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                                .truncationMode(.middle)
+                        }
                     }
                 }
                 .buttonStyle(QuickNotePickerRowStyle())
+                .accessibilityLabel(choice.accessibilityLabel)
+                .help(choice.note.fileURL?.path ?? choice.accessibilityLabel)
             }
 
             Divider()
@@ -683,7 +710,7 @@ struct QuickNoteView: View {
                 .monospacedDigit()
                 .lineLimit(1)
                 .accessibilityLabel(statusText(.full))
-                .animation(NookMotion.quick, value: text)
+                .animation(NookMotion.quickAnimation(reduceMotion: reduceMotion), value: text)
         }
     }
 
@@ -691,18 +718,16 @@ struct QuickNoteView: View {
     /// shown once a save has actually landed and nothing has been typed since,
     /// so it is a fact rather than a reassurance.
     private func statusText(_ detail: StatusDetail) -> String {
-        guard note.wordCount > 0 else { return "" }
+        guard detail != .hidden else { return "" }
         let saved = note.lastSavedAt != nil && !note.hasUnsavedEdits
-        let words = "\(note.wordCount) word\(note.wordCount == 1 ? "" : "s")"
+        guard let count = note.wordCount else { return saved ? "Saved" : "" }
+        guard count > 0 else { return "" }
+        let words = "\(count) word\(count == 1 ? "" : "s")"
         switch detail {
         case .full: return saved ? "\(words) · Saved" : words
         case .short: return saved ? "Saved" : words
         case .hidden: return ""
         }
-    }
-
-    private var canAct: Bool {
-        !note.text.isEmpty && !note.isWorking && !note.availableEngines.isEmpty
     }
 
     private func symbol(for engine: NoteAssistantEngine) -> String {
@@ -732,6 +757,7 @@ private struct QuickNotePickerRowStyle: ButtonStyle {
         let configuration: Configuration
         @State private var isHovering = false
         @Environment(\.isFocused) private var isFocused
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
         private var shape: RoundedRectangle {
             RoundedRectangle(
@@ -749,7 +775,7 @@ private struct QuickNotePickerRowStyle: ButtonStyle {
                 .nookFocusRing(shape, isVisible: isFocused)
                 .contentShape(.rect)
                 .onHover { isHovering = $0 }
-                .animation(NookMotion.quick, value: isHovering)
+                .animation(NookMotion.quickAnimation(reduceMotion: reduceMotion), value: isHovering)
         }
 
         private var fill: Color {

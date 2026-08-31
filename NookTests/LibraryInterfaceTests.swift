@@ -124,7 +124,130 @@ struct LibraryInterfaceTests {
         #expect(sections.flatMap(\.items).count == 1)
     }
 
+    @Test
+    func paletteReturnStillOpensTheChosenFileAfterReloadReordersCopies() {
+        let sharedID = UUID()
+        let first = LibraryNoteIdentity(
+            noteID: sharedID, fileURL: URL(fileURLWithPath: "/synthetic/first.md")
+        )
+        let second = LibraryNoteIdentity(
+            noteID: sharedID, fileURL: URL(fileURLWithPath: "/synthetic/second.md")
+        )
+        var openedFile: LibraryNoteIdentity?
+        let items = [first, second].map { identity in
+            CommandPaletteItem(
+                id: "note-\(identity.navigationKey)", symbol: "doc",
+                title: "Copied meeting", subtitle: identity.filePath,
+                destination: .note(sharedID),
+                perform: { openedFile = identity }
+            )
+        }
+        var selection = CommandPaletteSelection()
+        selection.select(items[1])
+
+        let reloaded = Array(items.reversed())
+        selection.refresh(in: reloaded)
+        selection.selectedItem(in: reloaded)?.perform()
+
+        #expect(openedFile == second)
+        #expect(selection.itemID == items[1].id)
+    }
+
+    @Test
+    func removingTheHighlightedPaletteFileRequiresAnotherChoiceBeforeReturn() {
+        var openedReplacement = false
+        let removed = paletteItem("note-removed")
+        let replacement = CommandPaletteItem(
+            id: "note-replacement", symbol: "doc", title: "Other file",
+            subtitle: nil, destination: .note(UUID()),
+            perform: { openedReplacement = true }
+        )
+        var selection = CommandPaletteSelection()
+        selection.select(removed)
+        selection.refresh(in: [replacement])
+        selection.selectedItem(in: [replacement])?.perform()
+        // Another background publication must not re-arm Return either.
+        selection.refresh(in: [replacement])
+        selection.selectedItem(in: [replacement])?.perform()
+
+        #expect(selection.itemID == nil)
+        #expect(!openedReplacement)
+
+        selection.move(1, in: [replacement])
+        selection.selectedItem(in: [replacement])?.perform()
+        #expect(openedReplacement)
+    }
+
+    @Test
+    func typingANewPaletteQueryChoosesItsFirstResult() {
+        var selection = CommandPaletteSelection()
+        selection.select(paletteItem("previous-query-result"))
+        let results = [paletteItem("first-match"), paletteItem("second-match")]
+
+        selection.refresh(in: results, selectFirst: true)
+
+        #expect(selection.selectedItem(in: results)?.id == "first-match")
+        selection.refresh(in: [], selectFirst: true)
+        #expect(selection.selectedItem(in: results) == nil)
+    }
+
+    @Test
+    func equallyDatedCopiesKeepTheSamePaletteOrderRegardlessOfFolderEnumeration() {
+        var first = note("Copied meeting", daysAgo: 0)
+        first.fileURL = URL(fileURLWithPath: "/synthetic/a.md")
+        var second = first
+        second.fileURL = URL(fileURLWithPath: "/synthetic/b.md")
+
+        for query in ["", "copied"] {
+            let forward = CommandPaletteNoteOrder.ordered([first, second], matching: query)
+            let reversed = CommandPaletteNoteOrder.ordered([second, first], matching: query)
+            #expect(forward.map(\.libraryIdentity) == [first.libraryIdentity, second.libraryIdentity])
+            #expect(reversed.map(\.libraryIdentity) == forward.map(\.libraryIdentity))
+        }
+    }
+
     // MARK: - Ask examples
+
+    @Test(arguments: [
+        "/synthetic/Other/meeting.md",
+        "/synthetic/Notes Copy/meeting.md",
+        "/synthetic/Notes/archive/meeting.md"
+    ])
+    func librarySheetsRefuseSavedNotesFromOtherFoldersEvenWithMatchingIDs(
+        otherPath: String
+    ) {
+        var current = note("Current meeting", daysAgo: 0)
+        current.fileURL = URL(fileURLWithPath: "/synthetic/Notes/current.md")
+        var previous = current
+        previous.fileURL = URL(fileURLWithPath: otherPath)
+
+        #expect(!LibrarySheetOwnership.matchesCurrentFolder(
+            [current, previous], directoryURL: URL(fileURLWithPath: "/synthetic/Notes", isDirectory: true)
+        ))
+        #expect(!LibrarySheetOwnership.matchesCurrentFolder(
+            [previous], directoryURL: URL(fileURLWithPath: "/synthetic/Notes", isDirectory: true)
+        ))
+    }
+
+    @Test
+    func librarySheetsAcceptStandardizedAddressesInTheSameFolder() {
+        var current = note("Current meeting", daysAgo: 0)
+        current.fileURL = URL(fileURLWithPath: "/synthetic/Notes/./current.md")
+
+        #expect(LibrarySheetOwnership.matchesCurrentFolder(
+            [current], directoryURL: URL(fileURLWithPath: "/synthetic/Notes/", isDirectory: true)
+        ))
+    }
+
+    @Test
+    func librarySheetsAllowUnsavedModelsAndAnEmptyCurrentFolder() {
+        let unsaved = note("Unsaved note", daysAgo: 0)
+        let directory = URL(fileURLWithPath: "/synthetic/Notes", isDirectory: true)
+
+        #expect(unsaved.fileURL == nil)
+        #expect(LibrarySheetOwnership.matchesCurrentFolder([unsaved], directoryURL: directory))
+        #expect(LibrarySheetOwnership.matchesCurrentFolder([], directoryURL: directory))
+    }
 
     private func note(
         _ title: String,
@@ -238,9 +361,218 @@ struct LibraryInterfaceTests {
         let searched = LibraryNoteGrouping.filter(
             notes,
             todayOnly: false,
-            matchingIDs: [yesterday.id]
+            matchingIDs: [yesterday.libraryIdentity]
         )
         #expect(searched.map(\.id) == [yesterday.id])
+    }
+
+    @Test
+    func sidebarSearchFeedbackNamesTheRangeWhenAMatchIsFromYesterday() {
+        let yesterday = timedNote(
+            "Research review 0001",
+            startedAt: Calendar.current.date(byAdding: .day, value: -1, to: Date())!
+        )
+        let matches: Set<LibraryNoteIdentity> = [yesterday.libraryIdentity]
+        let todayResults = LibraryNoteGrouping.filter(
+            [yesterday], todayOnly: true, matchingIDs: matches
+        )
+        let allResults = LibraryNoteGrouping.filter(
+            [yesterday], todayOnly: false, matchingIDs: matches
+        )
+
+        #expect(LibrarySidebarPolicy.emptySearchMessage(
+            query: "Research review 0001", todayOnly: true,
+            isLoading: false, isSearching: false,
+            hasVisibleNotes: !todayResults.isEmpty
+        ) == "No matching notes today")
+        #expect(LibrarySidebarPolicy.emptySearchMessage(
+            query: "Research review 0001", todayOnly: false,
+            isLoading: false, isSearching: false,
+            hasVisibleNotes: !allResults.isEmpty
+        ) == nil)
+        #expect(LibrarySidebarPolicy.emptySearchMessage(
+            query: "An absent note", todayOnly: false,
+            isLoading: false, isSearching: false, hasVisibleNotes: false
+        ) == "No matching notes")
+    }
+
+    @Test
+    func sidebarDoesNotClaimMissingMatchesWhileSearchingOrLoading() {
+        for state in [(isLoading: true, isSearching: false),
+                      (isLoading: false, isSearching: true)] {
+            #expect(LibrarySidebarPolicy.emptySearchMessage(
+                query: "Research", todayOnly: true,
+                isLoading: state.isLoading, isSearching: state.isSearching,
+                hasVisibleNotes: false
+            ) == nil)
+        }
+        #expect(LibrarySidebarPolicy.emptySearchMessage(
+            query: " \n\t", todayOnly: true,
+            isLoading: false, isSearching: false, hasVisibleNotes: false
+        ) == nil)
+    }
+
+    @Test
+    func cancellingADirtyScopeChangeKeepsTheOriginalRange() {
+        for initialTodayOnly in [false, true] {
+            var scope = LibraryScopeState()
+            scope.request(initialTodayOnly, needsConfirmation: false)
+            let decision = LibraryLeaveGuard.decide(
+                hasMarkdownChanges: true, hasPersonalNotesChanges: false
+            )
+            scope.request(!initialTodayOnly, needsConfirmation: decision == .askAboutMarkdown)
+
+            // The range remains unchanged while Save, Discard, or Cancel is
+            // being chosen, so the original editor's row stays visible.
+            #expect(scope.todayOnly == initialTodayOnly)
+            scope.settle(confirmed: false)
+
+            #expect(scope.todayOnly == initialTodayOnly)
+            #expect(scope.pendingTodayOnly == nil)
+        }
+    }
+
+    @Test
+    func reloadsAndPhaseChangesKeepTheEditorWhileItsScopeDecisionIsOpen() {
+        var original = timedNote("Yesterday's draft", startedAt: Date())
+        original.fileURL = URL(fileURLWithPath: "/synthetic/original.md")
+        var otherCopy = original
+        otherCopy.fileURL = URL(fileURLWithPath: "/synthetic/other-copy.md")
+        let today = timedNote("Today's note", startedAt: Date())
+        let selected: LibrarySelection? = .note(original.libraryIdentity)
+        var scope = LibraryScopeState()
+        scope.request(true, needsConfirmation: true)
+
+        // An empty reload used to clear the editor directly. A subsequent
+        // reload or completed meeting could then replace it before Cancel.
+        let automaticProposals: [LibrarySelection?] = [
+            nil, .note(otherCopy.libraryIdentity), .note(today.libraryIdentity), .live
+        ]
+        for proposal in automaticProposals {
+            let decision = LibraryLeaveGuard.decide(
+                from: selected, to: proposal, isConfirmingMarkdown: true,
+                hasMarkdownChanges: true, hasPersonalNotesChanges: true
+            )
+            // No decision means requestSelection returns before replacing
+            // either the editor identity or its pending destination/range.
+            #expect(decision == nil)
+            #expect(!scope.todayOnly)
+            #expect(scope.pendingTodayOnly == true)
+        }
+        scope.settle(confirmed: false)
+
+        #expect(selected == .note(original.libraryIdentity))
+        #expect(!scope.todayOnly)
+        #expect(scope.pendingTodayOnly == nil)
+    }
+
+    @Test
+    func aReloadOrCompletedMeetingStillAsksBeforeLeavingANewDirtyEditor() {
+        let original = timedNote("Original", startedAt: Date())
+        let replacement = timedNote("Replacement", startedAt: Date())
+        let proposals: [LibrarySelection?] = [nil, .note(replacement.libraryIdentity)]
+        for proposal in proposals {
+            #expect(LibraryLeaveGuard.decide(
+                from: .note(original.libraryIdentity), to: proposal,
+                isConfirmingMarkdown: false,
+                hasMarkdownChanges: true, hasPersonalNotesChanges: false
+            ) == .askAboutMarkdown)
+            #expect(LibraryLeaveGuard.decide(
+                from: .note(original.libraryIdentity), to: proposal,
+                isConfirmingMarkdown: false,
+                hasMarkdownChanges: false, hasPersonalNotesChanges: true
+            ) == .saveFirst)
+            #expect(LibraryLeaveGuard.decide(
+                from: .note(original.libraryIdentity), to: proposal,
+                isConfirmingMarkdown: false,
+                hasMarkdownChanges: false, hasPersonalNotesChanges: false
+            ) == .leave)
+        }
+    }
+
+    @Test
+    func confirmingTodaySelectsAVisibleFileInsteadOfThePreviousDaysNote() {
+        let calendar = Calendar.current
+        let now = Date()
+        let today = timedNote("Today's note", startedAt: now)
+        let yesterday = timedNote(
+            "Yesterday's note",
+            startedAt: calendar.date(byAdding: .day, value: -1, to: now)!
+        )
+        var scope = LibraryScopeState()
+        scope.request(true, needsConfirmation: true)
+        scope.settle(confirmed: true)
+        let visible = LibraryNoteGrouping.filter(
+            [yesterday, today], todayOnly: scope.todayOnly, matchingIDs: nil,
+            calendar: calendar
+        )
+
+        let selected = LibraryScopeState.visibleSelection(
+            preserving: yesterday.libraryIdentity, in: visible
+        )
+
+        #expect(scope.todayOnly)
+        #expect(selected == today.libraryIdentity)
+        #expect(!visible.contains { $0.libraryIdentity == yesterday.libraryIdentity })
+    }
+
+    @Test
+    func aScopeChangeKeepsTheExactSelectedFileWhenItIsStillVisible() {
+        var first = timedNote("Same note ID", startedAt: Date())
+        first.fileURL = URL(fileURLWithPath: "/synthetic/first.md")
+        var second = first
+        second.fileURL = URL(fileURLWithPath: "/synthetic/second.md")
+
+        #expect(LibraryScopeState.visibleSelection(
+            preserving: second.libraryIdentity, in: [first, second]
+        ) == second.libraryIdentity)
+        #expect(LibraryScopeState.visibleSelection(
+            preserving: second.libraryIdentity, in: []
+        ) == nil)
+    }
+
+    @Test
+    func anEmptyTodayRangeOffersAllNotesInsteadOfFirstRecording() {
+        let state = LibraryPlaceholderState.choose(
+            isLoading: false, hasNotes: true, todayOnly: true,
+            hasVisibleNotes: false, hasSearch: false, hasLoadError: false
+        )
+        var scope = LibraryScopeState()
+        scope.request(true, needsConfirmation: false)
+        scope.request(false, needsConfirmation: false)
+
+        #expect(state == .emptyToday)
+        #expect(!scope.todayOnly)
+    }
+
+    @Test
+    func loadingNeverClaimsAnEmptyLibraryBeforeTheFilesArrive() {
+        for todayOnly in [false, true] {
+            #expect(LibraryPlaceholderState.choose(
+                isLoading: true, hasNotes: false, todayOnly: todayOnly,
+                hasVisibleNotes: false, hasSearch: false, hasLoadError: false
+            ) == .loading)
+        }
+        #expect(LibraryPlaceholderState.choose(
+            isLoading: false, hasNotes: false, todayOnly: false,
+            hasVisibleNotes: false, hasSearch: false, hasLoadError: false
+        ) == .emptyLibrary)
+    }
+
+    @Test
+    func failedLoadingAndFilteredResultsDoNotOfferFirstRecording() {
+        #expect(LibraryPlaceholderState.choose(
+            isLoading: false, hasNotes: false, todayOnly: false,
+            hasVisibleNotes: false, hasSearch: false, hasLoadError: true
+        ) == .loadFailure)
+        #expect(LibraryPlaceholderState.choose(
+            isLoading: false, hasNotes: true, todayOnly: false,
+            hasVisibleNotes: false, hasSearch: true, hasLoadError: false
+        ) == .noSearchMatches)
+        #expect(LibraryPlaceholderState.choose(
+            isLoading: false, hasNotes: true, todayOnly: false,
+            hasVisibleNotes: true, hasSearch: false, hasLoadError: false
+        ) == .noSelection)
     }
 
     @Test
@@ -333,7 +665,7 @@ struct LibraryInterfaceTests {
         ))
         #expect(base != LibraryGroupingCacheKey(
             notes: original,
-            matchingIDs: [original[0].id],
+            matchingIDs: [original[0].libraryIdentity],
             todayOnly: false,
             now: stamp
         ))

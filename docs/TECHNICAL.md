@@ -277,10 +277,18 @@ original notes and recordings untouched.
 
 ### `NoteDecodeCache`
 
-A decode cache keyed by each file's modification date. Every app activation
-used to re-read and re-decode every Markdown file, even when nothing on disk
-had changed; entries now survive only while their file's timestamp matches,
-so an edit through any route invalidates itself automatically.
+A decode cache keyed by canonical file path and SHA-256 content revision.
+Reloads read exact bytes off the main actor and reuse parsed models only when
+those bytes still match. This detects external edits that preserve modification
+dates while avoiding repeated Markdown parsing and transcript cleanup.
+
+Search documents and library rows use `LibraryNoteIdentity`, which combines
+the stored UUID with its file path. Finder copies keep separate row identities
+without changing their frontmatter. Conflicting UUIDs open a file-specific
+read-only review; UUID-only links require an explicit choice. Recording,
+summary, and action-item mutations retain their captured file owner across
+asynchronous work. Duplicate groups are omitted from library-wide aggregation
+with an explanation rather than silently counting one conversation twice.
 
 ### `RecordingRecovery`
 

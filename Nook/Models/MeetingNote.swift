@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// What a note in the library came from.
@@ -125,13 +126,25 @@ struct MeetingNote: Identifiable, Hashable, Sendable {
     /// Sections and loose lines the file carries that no field models. Kept so
     /// re-encoding a hand-edited note cannot delete somebody's writing.
     var extraSections: [ExtraSection] = []
-    var fileURL: URL?
+    private var fileAddress: FileAddress
+    var fileURL: URL? {
+        get { fileAddress.url }
+        set { fileAddress = FileAddress(noteID: id, url: newValue) }
+    }
+    var libraryIdentity: LibraryNoteIdentity { fileAddress.identity }
     /// The file's modification date when this note was last read or written.
     ///
-    /// The store compares it against the file before a whole-note save, so an
-    /// edit made in another app between load and save is refused rather than
-    /// overwritten from a model that predates it.
+    /// Used for library ordering and cache freshness, never as permission to
+    /// overwrite the file. Only the content revision authorizes a save.
     var fileModified: Date?
+    /// The exact bytes this value was read from, represented by a small digest.
+    /// Another editor can preserve the modification date or write within the
+    /// same second, so a timestamp cannot authorize replacing the document.
+    var fileRevision: Data?
+
+    static func contentRevision(_ contents: Data) -> Data {
+        Data(SHA256.hash(data: contents))
+    }
 
     init(
         id: UUID = UUID(),
@@ -152,7 +165,8 @@ struct MeetingNote: Identifiable, Hashable, Sendable {
         audioStart: TimeInterval = 0,
         extraSections: [ExtraSection] = [],
         fileURL: URL? = nil,
-        fileModified: Date? = nil
+        fileModified: Date? = nil,
+        fileRevision: Data? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -171,8 +185,33 @@ struct MeetingNote: Identifiable, Hashable, Sendable {
         self.sessions = sessions
         self.audioStart = audioStart
         self.extraSections = extraSections
-        self.fileURL = fileURL
+        self.fileAddress = FileAddress(noteID: id, url: fileURL)
         self.fileModified = fileModified
+        self.fileRevision = fileRevision
+    }
+
+    /// Foundation can query the filesystem when standardizing a bridged URL.
+    /// Capture that work at the address boundary instead of repeating it for
+    /// every list ID, row and grouping fingerprint. Keep the original URL for
+    /// writes, and replace this value on every assignment, including optional
+    /// URL writeback and assignments that compare equal to the previous URL.
+    private struct FileAddress: Hashable, Sendable {
+        let url: URL?
+        let identity: LibraryNoteIdentity
+
+        init(noteID: UUID, url: URL?) {
+            self.url = url
+            self.identity = LibraryNoteIdentity(noteID: noteID, fileURL: url)
+        }
+
+        // The cache is not another piece of note content. Synthesized note
+        // equality and hashing must keep the original URL's semantics, even
+        // when two spellings normalize to the same navigation identity.
+        static func == (lhs: Self, rhs: Self) -> Bool { lhs.url == rhs.url }
+
+        func hash(into hasher: inout Hasher) {
+            hasher.combine(url)
+        }
     }
 
     /// Whether this note carries nothing a reader would recognise as content.

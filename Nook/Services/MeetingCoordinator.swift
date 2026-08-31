@@ -150,7 +150,7 @@ final class MeetingCoordinator: ObservableObject {
     /// part the user had written themselves.
     @Published var liveNotes = "" {
         didSet {
-            guard liveNotes != oldValue else { return }
+            guard !liveNotes.utf8.elementsEqual(oldValue.utf8) else { return }
             scheduleLiveNotesSave()
         }
     }
@@ -217,17 +217,24 @@ final class MeetingCoordinator: ObservableObject {
     /// each of those sites is what keeps the two from drifting apart.
     private var activeDraft: MeetingDraft? {
         didSet {
-            guard activeRecordingID != activeDraft?.id else { return }
-            activeRecordingID = activeDraft?.id
-            if activeDraft == nil {
-                // Any write still queued belongs to a meeting that is over.
-                // Letting it land would recreate a file cleanup has just
-                // removed, and leave it behind as litter nobody looks for.
+            if oldValue?.id != activeDraft?.id
+                || oldValue?.recordingURL != activeDraft?.recordingURL {
+                // A queued write belongs to the captured recording, including
+                // when a failed start is replaced by another session. It must
+                // not land after that owner's artifacts have been removed.
                 liveNotesSaveTask?.cancel()
                 liveNotesSaveTask = nil
             }
+            guard activeRecordingID != activeDraft?.id else { return }
+            activeRecordingID = activeDraft?.id
+            if activeDraft == nil {
+                activeAttachmentIdentity = nil
+            }
         }
     }
+    /// Kept independently of the capture format. A copied UUID or changed
+    /// notes folder cannot take ownership while an audio/model await runs.
+    private var activeAttachmentIdentity: LibraryNoteIdentity?
     private var liveNotesSaveTask: Task<Void, Never>?
     private var elapsedTask: Task<Void, Never>?
     private var meterTask: Task<Void, Never>?
@@ -333,11 +340,64 @@ final class MeetingCoordinator: ObservableObject {
     func continueRecording(into note: MeetingNote) {
         guard activeDraft == nil, processingTask == nil else { return }
         guard note.kind != .digest else { return }
+        guard Self.attachedRecordingTarget(
+            expected: note.libraryIdentity, notes: store.notes, libraryURL: store.storageURL
+        ) != nil else {
+            refuseUnavailableAttachment()
+            return
+        }
         startRecording(
             title: note.title,
             sourceApp: note.sourceApp,
-            attaching: note.id
+            attaching: note.libraryIdentity
         )
+    }
+
+    /// Pure ownership policy shared by initial continuation, permission
+    /// retries, and processing after suspension. A UUID-only match is unsafe
+    /// even when one of the copies happens to be first in the library.
+    static func attachedRecordingTarget(
+        expected: LibraryNoteIdentity,
+        notes: [MeetingNote],
+        libraryURL: URL
+    ) -> MeetingNote? {
+        guard let file = expected.fileURL,
+              file.deletingLastPathComponent().standardizedFileURL == libraryURL.standardizedFileURL,
+              LibraryNoteResolution.resolve(expected.noteID, in: notes) == .unique(expected),
+              let target = notes.first(where: { $0.libraryIdentity == expected }),
+              target.kind != .digest else { return nil }
+        return target
+    }
+
+    /// Legacy restart requests without a path do not identify a destination.
+    static func pendingAttachmentIdentity(noteID: String, filePath: String?) -> LibraryNoteIdentity? {
+        guard let id = UUID(uuidString: noteID), let filePath,
+              filePath.hasPrefix("/"), !filePath.contains("\0") else { return nil }
+        let url = URL(fileURLWithPath: filePath)
+        guard url.standardizedFileURL.path == filePath else { return nil }
+        return LibraryNoteIdentity(noteID: id, fileURL: url)
+    }
+
+    private static let unavailableAttachmentMessage =
+        "The original note is missing, moved, or has a duplicate identity. Open the original note in its notes folder before recording into it again."
+
+    private func refuseUnavailableAttachment() {
+        pendingStartRequest = nil
+        requiredPermission = nil
+        phase = .failed(Self.unavailableAttachmentMessage)
+        onPresentationRequested?()
+    }
+
+    private func requireAttachedTarget(for draft: MeetingDraft) throws -> MeetingNote {
+        guard let attachment = activeAttachmentIdentity,
+              draft.attachedNoteID == attachment.noteID,
+              let target = Self.attachedRecordingTarget(
+                  expected: attachment, notes: store.notes, libraryURL: store.storageURL
+              ), let file = target.fileURL,
+              FileManager.default.fileExists(atPath: file.path) else {
+            throw DurableMeetingNoteUnavailable(reason: Self.unavailableAttachmentMessage)
+        }
+        return target
     }
 
     /// Closes out a meeting whose capture the system ended.
@@ -447,6 +507,12 @@ final class MeetingCoordinator: ObservableObject {
         return true
     }
 
+    /// A final draft-save decision can keep the app open after recording
+    /// cleanup succeeded. Later meetings must regain their normal deadlines.
+    func cancelApplicationTermination() {
+        isTerminating = false
+    }
+
     var canCancelProcessing: Bool {
         guard case .processing(let step) = phase,
               step != .discarding,
@@ -483,7 +549,7 @@ final class MeetingCoordinator: ObservableObject {
         alert.alertStyle = .warning
         alert.messageText = "Discard this meeting?"
         let transcriptFirstNoteExists = activeDraft.flatMap { draft in
-            store.notes.first(where: { $0.id == draft.id })
+            store.uniqueNote(id: draft.id)
         }?.fileURL.map { FileManager.default.fileExists(atPath: $0.path) }
             ?? false
         alert.informativeText = transcriptFirstNoteExists
@@ -696,36 +762,51 @@ final class MeetingCoordinator: ObservableObject {
         }
     }
 
+    static func pendingStartNeedsLibrary(defaults: UserDefaults = .standard) -> Bool {
+        defaults.bool(forKey: PermissionResumeKey.shouldResume)
+            && defaults.string(forKey: PermissionResumeKey.attachedNoteID) != nil
+    }
+
+    /// True means a pending request supplied the launch presentation, either
+    /// by starting capture or explaining why its attachment must be reselected.
     @discardableResult
-    func resumePendingStartAfterPermission() -> Bool {
-        let defaults = UserDefaults.standard
+    func resumePendingStartAfterPermission(defaults: UserDefaults = .standard) -> Bool {
         guard defaults.bool(forKey: PermissionResumeKey.shouldResume) else {
+            return false
+        }
+        guard !store.isLoading || !Self.pendingStartNeedsLibrary(defaults: defaults) else {
+            // A cold launch has no notes until its detached reload publishes.
+            // Leave every key intact so that publication can resume the request.
             return false
         }
 
         let title = defaults.string(forKey: PermissionResumeKey.title)
         let sourceApp = defaults.string(forKey: PermissionResumeKey.sourceApp)
         let attachedNoteID = defaults.string(forKey: PermissionResumeKey.attachedNoteID)
-            .flatMap { UUID(uuidString: $0) }
+        let attachedNotePath = defaults.string(forKey: PermissionResumeKey.attachedNotePath)
         defaults.removeObject(forKey: PermissionResumeKey.shouldResume)
         defaults.removeObject(forKey: PermissionResumeKey.title)
         defaults.removeObject(forKey: PermissionResumeKey.sourceApp)
         defaults.removeObject(forKey: PermissionResumeKey.attachedNoteID)
+        defaults.removeObject(forKey: PermissionResumeKey.attachedNotePath)
 
         guard let title, let sourceApp else { return false }
-        // The note may have been deleted or its folder moved while the
-        // permission relaunch was pending. Recording unattached loses the
-        // attachment but never the words.
-        if let attachedNoteID,
-           store.notes.first(where: { $0.id == attachedNoteID }) == nil {
-            startRecording(title: title, sourceApp: sourceApp)
-            return true
+        var attachment: LibraryNoteIdentity?
+        if let attachedNoteID {
+            guard let captured = Self.pendingAttachmentIdentity(
+                noteID: attachedNoteID, filePath: attachedNotePath
+            ), let target = Self.attachedRecordingTarget(
+                expected: captured, notes: store.notes, libraryURL: store.storageURL
+            ), let file = target.fileURL,
+               FileManager.default.fileExists(atPath: file.path) else {
+                // Older requests stored only a UUID. It cannot prove which
+                // file the person chose, so require a fresh explicit choice.
+                refuseUnavailableAttachment()
+                return true
+            }
+            attachment = captured
         }
-        startRecording(
-            title: title,
-            sourceApp: sourceApp,
-            attaching: attachedNoteID
-        )
+        startRecording(title: title, sourceApp: sourceApp, attaching: attachment)
         return true
     }
 
@@ -789,14 +870,25 @@ final class MeetingCoordinator: ObservableObject {
     private func startRecording(
         title: String,
         sourceApp: String,
-        attaching attachedNoteID: UUID? = nil
+        attaching attachment: LibraryNoteIdentity? = nil
     ) {
         guard activeDraft == nil, processingTask == nil else { return }
+        if let attachment {
+            guard let target = Self.attachedRecordingTarget(
+                expected: attachment, notes: store.notes, libraryURL: store.storageURL
+            ), let file = target.fileURL,
+               FileManager.default.fileExists(atPath: file.path) else {
+                refuseUnavailableAttachment()
+                return
+            }
+        }
         pendingStartRequest = PendingStartRequest(
             title: title,
             sourceApp: sourceApp,
-            attachedNoteID: attachedNoteID
+            attachment: attachment
         )
+        activeAttachmentIdentity = attachment
+        let attachedNoteID = attachment?.noteID
         requiredPermission = nil
         let id = UUID()
         let url = store.recordingsDirectory().appendingPathComponent("\(id.uuidString).mp4")
@@ -845,6 +937,9 @@ final class MeetingCoordinator: ObservableObject {
                 try Task.checkCancellation()
                 try await SpeechAssets.requestAuthorization()
                 try Task.checkCancellation()
+                if draft.attachedNoteID != nil {
+                    _ = try requireAttachedTarget(for: draft)
+                }
                 try await capture.start(
                     to: url,
                     permissionsAreReady: true
@@ -895,7 +990,7 @@ final class MeetingCoordinator: ObservableObject {
         startRecording(
             title: request.title,
             sourceApp: request.sourceApp,
-            attaching: request.attachedNoteID
+            attaching: request.attachment
         )
     }
 
@@ -905,13 +1000,15 @@ final class MeetingCoordinator: ObservableObject {
         defaults.set(true, forKey: PermissionResumeKey.shouldResume)
         defaults.set(request.title, forKey: PermissionResumeKey.title)
         defaults.set(request.sourceApp, forKey: PermissionResumeKey.sourceApp)
-        if let attachedNoteID = request.attachedNoteID {
+        if let attachment = request.attachment {
             defaults.set(
-                attachedNoteID.uuidString,
+                attachment.noteID.uuidString,
                 forKey: PermissionResumeKey.attachedNoteID
             )
+            defaults.set(attachment.filePath, forKey: PermissionResumeKey.attachedNotePath)
         } else {
             defaults.removeObject(forKey: PermissionResumeKey.attachedNoteID)
+            defaults.removeObject(forKey: PermissionResumeKey.attachedNotePath)
         }
     }
 
@@ -956,6 +1053,13 @@ final class MeetingCoordinator: ObservableObject {
 
     static let summaryQuitDeadline: TimeInterval = 25
 
+    func summaryDeadline(forTranscriptCharacters characters: Int) -> TimeInterval {
+        Self.summaryDeadline(
+            forTranscriptCharacters: characters,
+            isTerminating: isTerminating
+        )
+    }
+
     /// Summarizes within a bound, falling back to the deterministic insights
     /// and saying so when the deadline wins.
     private func summarizedWithinDeadline(
@@ -964,10 +1068,7 @@ final class MeetingCoordinator: ObservableObject {
         attention: SummaryAttention? = nil
     ) async -> SummaryResult {
         let characters = transcript.reduce(0) { $0 + $1.text.count }
-        let seconds = Self.summaryDeadline(
-            forTranscriptCharacters: characters,
-            isTerminating: isTerminating
-        )
+        let seconds = summaryDeadline(forTranscriptCharacters: characters)
         let progressGeneration = beginSummaryProgress()
         let result = await withDeadline(seconds: seconds) {
             [weak self, summarizer] () -> SummaryResult in
@@ -1090,37 +1191,55 @@ final class MeetingCoordinator: ObservableObject {
         scaffold: MeetingNote,
         current: MeetingNote?
     ) -> MeetingNote? {
-        guard let current, current.id == scaffold.id else { return nil }
+        guard let current, current.libraryIdentity == scaffold.libraryIdentity else { return nil }
         guard result.failure == nil else { return current }
         // The model was grounded in the scaffold transcript. If that source
         // changed while it worked, keeping the current note is safer than
         // applying claims that no longer have the same evidence.
-        guard current.transcript == scaffold.transcript else { return current }
+        guard exactTranscriptMatches(current.transcript, scaffold.transcript) else { return current }
 
         var merged = current
-        if current.title == scaffold.title {
+        if current.title.utf8.elementsEqual(scaffold.title.utf8) {
             merged.title = result.insights.title
         }
-        if current.summary == scaffold.summary {
+        if current.summary.utf8.elementsEqual(scaffold.summary.utf8) {
             merged.summary = result.insights.summary
         }
-        if current.keyPoints == scaffold.keyPoints {
+        if exactStringsMatch(current.keyPoints, scaffold.keyPoints) {
             merged.keyPoints = result.insights.keyPoints
         }
-        if current.decisions == scaffold.decisions {
+        if exactStringsMatch(current.decisions, scaffold.decisions) {
             merged.decisions = result.insights.decisions
         }
-        if current.actionItems == scaffold.actionItems,
-           current.completedActionItems == scaffold.completedActionItems {
+        if exactStringsMatch(current.actionItems, scaffold.actionItems),
+           exactStringsMatch(current.completedActionItems.sorted(), scaffold.completedActionItems.sorted()) {
             merged.actionItems = result.insights.actionItems
         }
         return merged
     }
 
+    /// A refreshed file revision does not give a delayed model ownership of
+    /// a Unicode-only edit. Swift's canonical equality hides those changes,
+    /// including strings inside arrays and completed-action sets.
+    private static func exactStringsMatch(_ left: [String], _ right: [String]) -> Bool {
+        left.count == right.count
+            && zip(left, right).allSatisfy { $0.utf8.elementsEqual($1.utf8) }
+    }
+
+    private static func exactTranscriptMatches(
+        _ left: [TranscriptSegment], _ right: [TranscriptSegment]
+    ) -> Bool {
+        // Preserve the existing identity/timing/source check as well as exact
+        // wording: a normalization edit is still a changed generation input.
+        left == right && zip(left, right).allSatisfy {
+            $0.text.utf8.elementsEqual($1.text.utf8)
+        }
+    }
+
     /// Reads the durable Markdown itself rather than trusting an in-memory
     /// model left over from before a failed save or an external deletion.
-    /// Candidate order lets an explicit filename rename win while retaining
-    /// the original scaffold path as a last read-back check.
+    /// Candidates are restricted to the captured scaffold owner. A same-UUID
+    /// copy or renamed path cannot stand in for its original destination.
     private static func persistedNote(
         id: UUID,
         candidateURLs: [URL?]
@@ -1209,8 +1328,8 @@ final class MeetingCoordinator: ObservableObject {
 
             // A recording started from an existing note joins that note
             // instead of creating one; everything downstream differs.
-            if let attachedNoteID = draft.attachedNoteID,
-               let target = store.notes.first(where: { $0.id == attachedNoteID }) {
+            if draft.attachedNoteID != nil {
+                let target = try requireAttachedTarget(for: draft)
                 let (saved, cleanupFailures) = try await appendFinalizedSession(
                     to: target,
                     draft: draft,
@@ -1251,7 +1370,11 @@ final class MeetingCoordinator: ObservableObject {
             try Task.checkCancellation()
 
             phase = .processing(.saving)
-            let current = store.notes.first(where: { $0.id == savedScaffold.id })
+            let current = Self.attachedRecordingTarget(
+                expected: savedScaffold.libraryIdentity,
+                notes: store.notes,
+                libraryURL: store.storageURL
+            )
             let currentFileExists = current?.fileURL.map {
                 FileManager.default.fileExists(atPath: $0.path)
             } ?? false
@@ -1267,7 +1390,7 @@ final class MeetingCoordinator: ObservableObject {
                 // which would create a second note from the same captions.
                 persistedCandidate = (try? store.save(merged)) ?? current
             }
-            let freshest = store.notes.first { $0.id == savedScaffold.id }
+            let freshest = store.note(matching: savedScaffold.libraryIdentity)
             guard let saved = Self.persistedNote(
                 id: savedScaffold.id,
                 candidateURLs: [
@@ -1399,6 +1522,10 @@ final class MeetingCoordinator: ObservableObject {
         guard transcript.reduce(0, { $0 + $1.text.count }) >= 40 else {
             return false
         }
+        if draft.attachedNoteID != nil,
+           (try? requireAttachedTarget(for: draft)) == nil {
+            return false
+        }
 
         phase = .processing(.summarizing)
         let attention = SummaryAttention(
@@ -1418,8 +1545,8 @@ final class MeetingCoordinator: ObservableObject {
 
         do {
             let saved: MeetingNote
-            if let attachedNoteID = draft.attachedNoteID,
-               let target = store.notes.first(where: { $0.id == attachedNoteID }) {
+            if draft.attachedNoteID != nil {
+                let target = try requireAttachedTarget(for: draft)
                 saved = try store.save(
                     Self.appendingLiveCaptions(
                         transcript: transcript,
@@ -1582,20 +1709,19 @@ final class MeetingCoordinator: ObservableObject {
         sessionAudioURL: URL,
         recordingURLs: [URL]
     ) async throws -> (note: MeetingNote, cleanupFailures: [URL]) {
+        _ = try requireAttachedTarget(for: draft)
         let recordingsDirectory = store.recordingsDirectory()
         let priorAudioURL = recordingsDirectory
             .appendingPathComponent("\(target.id.uuidString).m4a")
-        let priorAudioExists = FileManager.default.fileExists(
-            atPath: priorAudioURL.path
+        let audio = try await Self.inspectAppendedAudio(
+            priorAudioURL: priorAudioURL,
+            sessionAudioURL: sessionAudioURL
         )
-        let priorAudioDuration = priorAudioExists
-            ? await NoteSessionAppend.audioDuration(of: priorAudioURL)
-            : nil
-        guard let currentTarget = store.notes.first(where: { $0.id == target.id })
-        else {
-            throw DurableMeetingNoteUnavailable(
-                reason: "The note this recording belonged to is no longer available."
-            )
+        let priorAudioExists = audio.prior.exists
+        let priorAudioDuration = audio.priorDuration
+        let currentTarget = try requireAttachedTarget(for: draft)
+        guard currentTarget.libraryIdentity == target.libraryIdentity else {
+            throw DurableMeetingNoteUnavailable(reason: Self.unavailableAttachmentMessage)
         }
         // A file that exists but cannot be measured cannot be concatenated
         // safely either, so it is treated like absent audio rather than
@@ -1646,7 +1772,10 @@ final class MeetingCoordinator: ObservableObject {
         try Task.checkCancellation()
         let saved: MeetingNote
         do {
-            saved = try store.save(appended)
+            saved = try store.save(appended) {
+                _ = try self.requireAttachedTarget(for: draft)
+                try audio.validate()
+            }
         } catch {
             throw DurableMeetingNoteUnavailable(
                 reason: "Nook could not append the transcript to its existing note."
@@ -1662,8 +1791,8 @@ final class MeetingCoordinator: ObservableObject {
         do {
             try await placeKeptAudio(
                 plan,
-                priorAudioURL: priorAudioURL,
-                sessionAudioURL: sessionAudioURL,
+                for: draft,
+                audio: audio,
                 asideURL: recordingsDirectory.appendingPathComponent(
                     "\(target.id.uuidString)-unreadable-\(draft.id.uuidString).m4a"
                 )
@@ -1682,16 +1811,25 @@ final class MeetingCoordinator: ObservableObject {
             if !stranded.isListedByRecoveryScan {
                 audioFailures.append(stranded.strandedURL)
             }
-            if keepAudio { preserve.insert(sessionAudioURL) }
+            preserve.formUnion(Self.sessionArtifactsAfterAudioFailure(
+                draft: draft, recordingURLs: recordingURLs, sessionAudioURL: sessionAudioURL
+            ))
         } catch {
             // The note is already saved, so audio that would not move is
             // reported like any other file the user may have to handle, not
-            // turned into a failed meeting. It is also kept rather than swept
-            // up, because keeping it was the point.
+            // turned into a failed meeting. A changed audio source is not
+            // covered by the saved timeline, so retain the session's captures
+            // too, even when normal retention was off. Recovery must still
+            // have the originals rather than only a replacement at one path.
             audioFailures.append(sessionAudioURL)
-            if keepAudio { preserve.insert(sessionAudioURL) }
+            preserve.formUnion(Self.sessionArtifactsAfterAudioFailure(
+                draft: draft, recordingURLs: recordingURLs, sessionAudioURL: sessionAudioURL
+            ))
         }
 
+        // Audio placement can suspend. Keep the raw recording if the saved
+        // destination was deleted, copied, or its library changed meanwhile.
+        _ = try requireAttachedTarget(for: draft)
         let cleanupFailures = RecordingArtifactCleanup.removeArtifacts(
             for: draft,
             additionalURLs: recordingURLs + [sessionAudioURL],
@@ -1750,7 +1888,11 @@ final class MeetingCoordinator: ObservableObject {
                   self.appendedSummaryTokens[noteID] == token,
                   let result,
                   !result.usedFallback,
-                  let current = self.store.notes.first(where: { $0.id == noteID }),
+                  let current = Self.attachedRecordingTarget(
+                      expected: scaffold.libraryIdentity,
+                      notes: self.store.notes,
+                      libraryURL: self.store.storageURL
+                  ),
                   let merged = Self.mergingAppendedSessionSummary(
                       result,
                       scaffold: scaffold,
@@ -1773,28 +1915,28 @@ final class MeetingCoordinator: ObservableObject {
         scaffold: MeetingNote,
         current: MeetingNote?
     ) -> MeetingNote? {
-        guard let current, current.id == scaffold.id else { return nil }
+        guard let current, current.libraryIdentity == scaffold.libraryIdentity else { return nil }
         guard result.failure == nil else { return current }
-        guard current.transcript == scaffold.transcript else { return current }
+        guard exactTranscriptMatches(current.transcript, scaffold.transcript) else { return current }
 
         var merged = current
-        if current.title == scaffold.title {
+        if current.title.utf8.elementsEqual(scaffold.title.utf8) {
             merged.title = mergedTitle(
                 existing: scaffold.title,
                 proposed: result.insights.title
             )
         }
-        if current.summary == scaffold.summary {
+        if current.summary.utf8.elementsEqual(scaffold.summary.utf8) {
             merged.summary = result.insights.summary
         }
-        if current.keyPoints == scaffold.keyPoints {
+        if exactStringsMatch(current.keyPoints, scaffold.keyPoints) {
             merged.keyPoints = result.insights.keyPoints
         }
-        if current.decisions == scaffold.decisions {
+        if exactStringsMatch(current.decisions, scaffold.decisions) {
             merged.decisions = result.insights.decisions
         }
-        if current.actionItems == scaffold.actionItems,
-           current.completedActionItems == scaffold.completedActionItems {
+        if exactStringsMatch(current.actionItems, scaffold.actionItems),
+           exactStringsMatch(current.completedActionItems.sorted(), scaffold.completedActionItems.sorted()) {
             merged.actionItems = unionedActionItems(
                 existing: scaffold.actionItems,
                 proposed: result.insights.actionItems
@@ -1803,34 +1945,60 @@ final class MeetingCoordinator: ObservableObject {
         return merged
     }
 
-    private func placeKeptAudio(
-        _ plan: KeptAudioPlan,
+    struct AppendedAudioSources: Sendable {
+        let prior: NoteCombiner.AudioFileSnapshot
+        let session: NoteCombiner.AudioFileSnapshot
+        let priorDuration: TimeInterval?
+
+        func validate() throws {
+            try prior.validate()
+            try session.validate()
+        }
+    }
+
+    /// The measured duration belongs to the file observed before that await.
+    /// Replacing the recording during measurement must not authorize a stale
+    /// transcript offset, even if the note's Markdown itself is unchanged.
+    static func inspectAppendedAudio(
         priorAudioURL: URL,
         sessionAudioURL: URL,
+        measure: @MainActor (URL) async -> TimeInterval? = { url in
+            await NoteSessionAppend.audioDuration(of: url)
+        }
+    ) async throws -> AppendedAudioSources {
+        let prior = try NoteCombiner.AudioFileSnapshot(url: priorAudioURL)
+        let session = try NoteCombiner.AudioFileSnapshot(url: sessionAudioURL)
+        guard session.exists else { throw NoteCombiner.CombineError.audioChanged }
+        let duration = prior.exists ? await measure(priorAudioURL) : nil
+        try Task.checkCancellation()
+        try prior.validate()
+        try session.validate()
+        return AppendedAudioSources(prior: prior, session: session, priorDuration: duration)
+    }
+
+    static func sessionArtifactsAfterAudioFailure(
+        draft: MeetingDraft, recordingURLs: [URL], sessionAudioURL: URL
+    ) -> Set<URL> {
+        Set(recordingURLs + [draft.recordingURL, sessionAudioURL])
+    }
+
+    private func placeKeptAudio(
+        _ plan: KeptAudioPlan,
+        for draft: MeetingDraft,
+        audio: AppendedAudioSources,
         asideURL: URL
     ) async throws {
+        _ = try requireAttachedTarget(for: draft)
+        try audio.validate()
         let manager = FileManager.default
+        let priorAudioURL = audio.prior.url
+        let sessionAudioURL = audio.session.url
         switch plan {
         case .none, .keepPriorOnly:
             return
         case .concatenate:
-            let combinedTemporaryURL = priorAudioURL
-                .deletingLastPathComponent()
-                .appendingPathComponent(
-                    "combined-\(UUID().uuidString).m4a"
-                )
-            do {
-                try await AudioExtractor.extractAudio(
-                    from: [priorAudioURL, sessionAudioURL],
-                    to: combinedTemporaryURL
-                )
-                _ = try manager.replaceItemAt(
-                    priorAudioURL,
-                    withItemAt: combinedTemporaryURL
-                )
-            } catch {
-                try? manager.removeItem(at: combinedTemporaryURL)
-                throw error
+            try await Self.concatenateAppendedAudio(audio) {
+                _ = try requireAttachedTarget(for: draft)
             }
         case .adoptSession:
             try Self.adoptSessionAudio(
@@ -1844,6 +2012,27 @@ final class MeetingCoordinator: ObservableObject {
                 move: { try manager.moveItem(at: $0, to: $1) }
             )
         }
+    }
+
+    /// The same captured files must still own both the measured timeline and
+    /// the combined output. Metadata checks narrow the replacement race;
+    /// this is not a filesystem transaction against uncooperative writers.
+    static func concatenateAppendedAudio(
+        _ audio: AppendedAudioSources,
+        extract: @MainActor ([URL], URL) async throws -> Void = { sources, destination in
+            try await AudioExtractor.extractAudio(from: sources, to: destination)
+        },
+        validatingBeforeReplacement: @MainActor () throws -> Void
+    ) async throws {
+        try audio.validate()
+        let temporary = audio.prior.url.deletingLastPathComponent()
+            .appendingPathComponent("combined-\(UUID().uuidString).m4a")
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        try await extract([audio.prior.url, audio.session.url], temporary)
+        try Task.checkCancellation()
+        try validatingBeforeReplacement()
+        try audio.validate()
+        _ = try FileManager.default.replaceItemAt(audio.prior.url, withItemAt: temporary)
     }
 
     /// The two moves that make a session recording become the note's audio.
@@ -2363,6 +2552,10 @@ final class MeetingCoordinator: ObservableObject {
     func clearDraftForTesting() {
         activeDraft = nil
     }
+
+    var liveNotesSaveForTesting: Task<Void, Never>? {
+        liveNotesSaveTask
+    }
     #endif
 
     // MARK: - Live notes on disk
@@ -2378,10 +2571,10 @@ final class MeetingCoordinator: ObservableObject {
     /// cover it.
     private func scheduleLiveNotesSave() {
         guard let draft = activeDraft else { return }
-        let url = Self.liveNotesURL(
-            for: draft.id,
-            in: store.recordingsDirectory()
-        )
+        // Settings can change the notes folder during a meeting. The capture
+        // and its resumed segments stay at their original destination, so its
+        // typed notes must stay there too for recovery and cleanup to find.
+        let url = Self.liveNotesURL(for: draft)
         let body = liveNotes
         liveNotesSaveTask?.cancel()
         liveNotesSaveTask = Task { @MainActor [weak self] in
@@ -2389,9 +2582,19 @@ final class MeetingCoordinator: ObservableObject {
             // Cancelled means the meeting ended and its artifacts have been
             // dealt with; gone means the app is going, and there is no
             // meeting left for these to be recovered alongside.
-            guard !Task.isCancelled, self != nil else { return }
+            guard !Task.isCancelled, let self,
+                  self.activeDraft?.id == draft.id,
+                  self.activeDraft?.recordingURL == draft.recordingURL
+            else { return }
             Self.writeLiveNotes(body, to: url)
         }
+    }
+
+    nonisolated static func liveNotesURL(for draft: MeetingDraft) -> URL {
+        liveNotesURL(
+            for: draft.id,
+            in: draft.recordingURL.deletingLastPathComponent()
+        )
     }
 
     /// Where a meeting's typed notes are held while it runs.
@@ -2414,7 +2617,9 @@ final class MeetingCoordinator: ObservableObject {
             try? FileManager.default.removeItem(at: url)
             return
         }
-        guard (try? Data(trimmed.utf8).write(to: url, options: .atomic))
+        // Whitespace-only input still means the field was cleared. Otherwise
+        // keep the user's exact bytes, including indentation and Unicode form.
+        guard (try? Data(body.utf8).write(to: url, options: .atomic))
             != nil
         else {
             // The notes are still in the window and still go into the note
@@ -2438,7 +2643,8 @@ final class MeetingCoordinator: ObservableObject {
         guard let body = try? String(contentsOf: url, encoding: .utf8) else {
             return ""
         }
-        return body.trimmingCharacters(in: .whitespacesAndNewlines)
+        return body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "" : body
     }
 
     private static func cleanupNotice(for urls: [URL]) -> String {
@@ -2482,7 +2688,7 @@ enum RecordingArtifactCleanup {
         // file behind would litter the folder with a second copy nobody
         // reads and nothing removes.
         candidates.insert(
-            MeetingCoordinator.liveNotesURL(for: draft.id, in: directory)
+            MeetingCoordinator.liveNotesURL(for: draft)
                 .standardizedFileURL
         )
 
@@ -2541,7 +2747,7 @@ enum RecordingArtifactCleanup {
 private struct PendingStartRequest {
     let title: String
     let sourceApp: String
-    var attachedNoteID: UUID?
+    let attachment: LibraryNoteIdentity?
 }
 
 private enum PermissionResumeKey {
@@ -2549,4 +2755,5 @@ private enum PermissionResumeKey {
     static let title = "resumeRecordingAfterPermissionTitle"
     static let sourceApp = "resumeRecordingAfterPermissionSource"
     static let attachedNoteID = "resumeRecordingAfterPermissionNoteID"
+    static let attachedNotePath = "resumeRecordingAfterPermissionNotePath"
 }

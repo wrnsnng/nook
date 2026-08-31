@@ -180,6 +180,52 @@ struct LibraryAnswerTests {
         #expect(chunks.allSatisfy { !$0.text.isEmpty })
     }
 
+    @Test
+    func copiedUUIDsCannotBecomeCompetingSourcesOrCrowdOutUniqueNotes() {
+        let first = MeetingNote(
+            title: "Copied decision", startedAt: Date(timeIntervalSince1970: 1_000_000),
+            endedAt: Date(timeIntervalSince1970: 1_003_600), sourceApp: "Synthetic",
+            summary: "Ship the pricing change.", decisions: ["Approve pricing"],
+            fileURL: URL(fileURLWithPath: "/synthetic/first.md")
+        )
+        var second = first
+        second.fileURL = URL(fileURLWithPath: "/synthetic/copy.md")
+        second.summary = "Cancel the pricing change."
+        second.decisions = ["Reject pricing"]
+        let unique = MeetingNote(
+            title: "Release", startedAt: first.startedAt, endedAt: first.endedAt,
+            sourceApp: "Synthetic", summary: "The release is Friday."
+        )
+
+        for notes in [[first, second, unique], [unique, second, first]] {
+            let chunks = LibraryAnswerService.chunks(from: notes)
+            #expect(chunks.map(\.noteID) == [unique.id])
+            #expect(chunks.map(\.text) == [unique.summary])
+        }
+    }
+
+    @Test
+    func aLibraryOfOnlyCopiesExplainsWhyNothingCanBeAnsweredWithoutEmbeddingThem() async {
+        let first = MeetingNote(
+            title: "Pricing", startedAt: Date(timeIntervalSince1970: 1_000_000),
+            endedAt: Date(timeIntervalSince1970: 1_003_600), sourceApp: "Synthetic",
+            summary: "The pricing discussion."
+        )
+        var second = first
+        second.fileURL = URL(fileURLWithPath: "/synthetic/copy.md")
+        let embedding = CountingEmbedding()
+        let cacheURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nook-ask-duplicates-\(UUID().uuidString).json")
+        let service = LibraryAnswerService(embedding: embedding, cacheURL: cacheURL)
+
+        let answer = await service.answer(question: "pricing", notes: [first, second])
+
+        #expect(answer.citations.isEmpty)
+        #expect(answer.refusedReason?.contains("copies with a shared ID") == true)
+        #expect(embedding.count == 0)
+        #expect(!FileManager.default.fileExists(atPath: cacheURL.path))
+    }
+
     /// A summary or personal-notes paragraph is free-form prose that can run
     /// to any length; six oversized excerpts of that kind sent to the
     /// on-device model in one request could overflow its context window on

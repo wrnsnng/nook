@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import SwiftUI
 
@@ -12,13 +13,46 @@ import SwiftUI
 final class QuickNoteController: ObservableObject {
     @Published var text = "" {
         didSet {
-            guard text != oldValue else { return }
+            guard !text.utf8.elementsEqual(oldValue.utf8) else { return }
             textRevision &+= 1
+            if isShowingEmptyDraftValidation,
+               text.unicodeScalars.contains(where: {
+                   !CharacterSet.whitespacesAndNewlines.contains($0)
+               }) {
+                // Undo/Redo and typing can resolve this validation before the
+                // next autosave. A real save failure still belongs to the file.
+                message = nil
+                hasUnsavedFailure = false
+                hasUnsavedEdits = true
+            }
+            checkpointEdit()
+            scheduleTextAnalysis()
         }
     }
+    /// A count belongs to one exact revision. Hide it while the worker catches
+    /// up rather than displaying the previous note's total. Statistics must
+    /// never delay typing, checkpointing, saving, or safe discard decisions.
+    @Published private(set) var wordCount: Int? = 0
+    /// Never offer a task parsed from an earlier text revision. Like the word
+    /// count, suggestions are advisory and may catch up after the words save.
+    @Published private(set) var taskSuggestion: QuickCaptureTaskParser.Suggestion?
     @Published private(set) var isPresenting = false
+    /// Only an explicit presentation requests the keyboard. Routine text,
+    /// statistics, and toolbar updates must leave the user's chosen focus alone.
+    @Published private(set) var editorFocusToken = 0
     @Published private(set) var isWorking = false
-    @Published private(set) var message: String?
+    @Published private(set) var message: String? {
+        didSet {
+            // Any replacement message supersedes the empty-text validation,
+            // including a failed discard or an actual filesystem error.
+            isShowingEmptyDraftValidation = false
+        }
+    }
+    private var isShowingEmptyDraftValidation = false
+    @Published private(set) var recoveryWarning: String?
+    /// Filing can succeed while removing the earlier standalone copy fails.
+    /// Keep that outcome independently of later typing and successful saves.
+    @Published private(set) var filingCompletionMessage: String?
     @Published private(set) var lastSavedAt: Date?
     /// Whether edits have landed since the last save, so the status line can
     /// say "Saved" only while it is true.
@@ -45,11 +79,14 @@ final class QuickNoteController: ObservableObject {
     /// Which action is running, so its own button can show it rather than a
     /// spinner floating somewhere else in the bar.
     @Published private(set) var runningAction: NoteAction?
+    @Published private(set) var runningEngine: NoteAssistantEngine?
+    @Published private(set) var isStoppingAssistant = false
+    @Published private(set) var isPreparingForTermination = false
     @Published private(set) var availableEngines: [NoteAssistantEngine] = []
 
     @Published private(set) var engine: NoteAssistantEngine {
         didSet {
-            UserDefaults.standard.set(engine.rawValue, forKey: Keys.engine)
+            defaults.set(engine.rawValue, forKey: Keys.engine)
         }
     }
 
@@ -58,7 +95,7 @@ final class QuickNoteController: ObservableObject {
     /// dictation shortcut is pressed to stop.
     @Published var isContinuous: Bool {
         didSet {
-            UserDefaults.standard.set(isContinuous, forKey: Keys.continuous)
+            defaults.set(isContinuous, forKey: Keys.continuous)
         }
     }
 
@@ -73,27 +110,109 @@ final class QuickNoteController: ObservableObject {
     /// place that stops being true should be impossible to enable without
     /// having read what it means.
     func selectEngine(_ engine: NoteAssistantEngine) {
+        if engine == .onDevice, runningEngine?.leavesTheMac == true {
+            requestAssistantStop()
+        }
         guard engine != self.engine else { return }
         guard engine.leavesTheMac, !hasConsented(to: engine) else {
-            self.engine = engine
+            setSelectedEngine(engine)
             return
         }
         guard confirmSending(to: engine) else { return }
-        UserDefaults.standard.set(true, forKey: Keys.consent(engine))
-        self.engine = engine
+        defaults.set(true, forKey: Keys.consent(engine))
+        setSelectedEngine(engine)
     }
 
     func hasConsented(to engine: NoteAssistantEngine) -> Bool {
         guard engine.leavesTheMac else { return true }
-        return UserDefaults.standard.bool(forKey: Keys.consent(engine))
+        return defaults.bool(forKey: Keys.consent(engine))
     }
 
     /// Forgets a previous agreement, so the explanation is shown again.
     func revokeConsent(for engine: NoteAssistantEngine) {
-        UserDefaults.standard.removeObject(forKey: Keys.consent(engine))
+        defaults.removeObject(forKey: Keys.consent(engine))
+        if runningEngine == engine { requestAssistantStop() }
         if self.engine == engine {
-            self.engine = .onDevice
+            setSelectedEngine(.onDevice)
         }
+    }
+
+    private func setSelectedEngine(_ engine: NoteAssistantEngine) {
+        self.engine = engine
+        if let runningEngine, runningEngine != engine { requestAssistantStop() }
+    }
+
+    var isSelectedAssistantAvailable: Bool { availableEngines.contains(engine) }
+
+    /// One installed alternative is still a choice when the selected local
+    /// engine is unavailable. Never choose an external provider without consent.
+    var canChooseAssistant: Bool {
+        !availableEngines.isEmpty
+            && (availableEngines.count > 1 || !isSelectedAssistantAvailable)
+    }
+
+    var canRunAction: Bool {
+        !text.isEmpty && !isWorking && !isPreparingForTermination && isSelectedAssistantAvailable
+            && hasConsented(to: engine)
+    }
+
+    /// The selected assistant describes the next action. An existing external
+    /// run keeps its disclosure until its operation has actually returned.
+    var outboundEngine: NoteAssistantEngine? {
+        if let runningEngine, runningEngine.leavesTheMac { return runningEngine }
+        return engine.leavesTheMac ? engine : nil
+    }
+
+    var selectedAssistantDescription: String {
+        isSelectedAssistantAvailable
+            ? engine.detail
+            : "\(engine.toolName) is unavailable. Choose an available assistant."
+    }
+
+    var outboundMessage: String {
+        if let running = runningEngine, running.leavesTheMac {
+            if isStoppingAssistant {
+                return running == .codex
+                    ? "Stopping Codex. Text may have reached OpenAI; file access may continue."
+                    : "Stopping Claude. Text may already have reached Anthropic."
+            }
+            return running == .codex
+                ? "Codex is running. Text goes to OpenAI; it can read local files."
+                : "Claude is running. This note is sent to Anthropic."
+        }
+        guard let outboundEngine, let provider = outboundEngine.provider else { return "" }
+        return outboundEngine == .codex
+            ? "Actions send to OpenAI. Codex can read local files."
+            : "Actions send this note to \(provider)."
+    }
+
+    var actionStatusDescription: String {
+        if let action = runningAction, let engine = runningEngine {
+            return isStoppingAssistant
+                ? "Stopping \(action.title), using \(engine.title)."
+                : "\(action.title) is running, using \(engine.title)."
+        }
+        if isPreparingForTermination { return "Preparing to quit Nook." }
+        if !isSelectedAssistantAvailable { return selectedAssistantDescription }
+        if text.isEmpty { return "Add words to use note actions." }
+        return "Using \(engine.title)"
+    }
+
+    var actionAvailabilityHint: String {
+        if isStoppingAssistant {
+            return "Your words are kept. Waiting for the assistant to finish stopping. Editing and saving remain available."
+        }
+        if isWorking {
+            return "Wait for this action to finish before starting another. You can keep editing or save and close."
+        }
+        if isPreparingForTermination {
+            return "Note actions are unavailable while Nook prepares to quit. Editing and saving remain available."
+        }
+        if !isSelectedAssistantAvailable {
+            return "Use Choose an assistant to review available options. Editing and saving remain available."
+        }
+        if text.isEmpty { return "Type or dictate a note first." }
+        return "Choose an action to change or add to this note."
     }
 
     private func confirmSending(to engine: NoteAssistantEngine) -> Bool {
@@ -111,10 +230,16 @@ final class QuickNoteController: ObservableObject {
         already signed into there. It is handled under \(provider)'s terms and \
         privacy policy, not Nook's.
 
-        Nothing is sent until you run an action, and only the note you are \
-        working on is included: never your recordings, meetings, or other \
-        notes.
+        Nothing is sent until you run an action. Nook passes the current \
+        note without attaching recordings, meetings, or other notes.
         """
+        if engine == .codex {
+            alert.informativeText += "\n\n" + """
+            Codex runs in read-only mode, but it can still read other files \
+            it can access on this Mac. Information it reads may also be sent \
+            to OpenAI. Nook does not confine Codex to this note.
+            """
+        }
         alert.addButton(withTitle: "Send Notes to \(provider)")
         alert.addButton(withTitle: "Keep Everything On This Mac")
         // The safe option is the default, so a reflexive Return keeps the
@@ -137,24 +262,47 @@ final class QuickNoteController: ObservableObject {
         panel?.isKeyWindow == true
     }
 
+    /// Empty visible text can still own an autosaved note after Undo. Discard
+    /// removes that owned file, while a new pad with no text has nothing to do.
+    var canDiscard: Bool {
+        savedNote != nil || !text.isEmpty
+    }
+
     private let store: MarkdownStore
+    private let defaults: UserDefaults
+    private let recovery: DraftJournal?
+    private var recoveryObservation: AnyCancellable?
+    private var libraryObservation: AnyCancellable?
+    private let openFilingLibrary: @MainActor () -> Void
+    private var recoveryDraftID = UUID()
+    private var recoveryNoteID = UUID()
+    private var recoveryLibraryPath: String?
+    private var recoveryBaseline = ""
+    private var suppressCheckpoint = false
     private let deleteSavedNote: @MainActor (MeetingNote) -> Bool
+    private let countWords: @Sendable (String) async -> Int
+    private let suggestTask: @Sendable (String) async -> QuickCaptureTaskParser.Suggestion?
+    private let discardConfirmation: (@MainActor () -> Bool)?
+    private var analysisRevision = UUID()
+    private var analysisRequests: AsyncStream<QuickNoteAnalysisRequest>.Continuation?
+    private var analysisTask: Task<Void, Never>?
     private let runAssistant: @Sendable (
         NoteAction,
         String,
         NoteAssistantEngine
     ) async throws -> String
     private let loadAvailableEngines: @Sendable () async -> [NoteAssistantEngine]
+    private var engineRefreshID = UUID()
     private var panel: NSPanel?
     private let windowDelegate = QuickNoteWindowDelegate()
-    private var savedNoteID: UUID?
-    /// The file the pad's note already lives in.
+    /// The exact saved version this pad is editing, including its file revision.
     ///
-    /// Held because the note is rebuilt from scratch on every save and its
-    /// title is regenerated from the words so far. Hands-free capture saves
-    /// after each spoken chunk, so a destination derived from the title again
-    /// wrote one thought into a new file every few seconds.
-    private var savedNoteURL: URL?
+    /// Keeping only the ID and path allowed a reload after an external edit
+    /// to supply a newer revision to the next autosave, silently overwriting
+    /// that edit. The pad must keep its own base until its words are saved.
+    /// The stable path also prevents a changing generated title from creating
+    /// a second file after each hands-free chunk.
+    private var savedNote: MeetingNote?
     private var startedAt = Date()
     private var saveDebounce: Task<Void, Never>?
     private var assistantTask: Task<Void, Never>?
@@ -165,7 +313,7 @@ final class QuickNoteController: ObservableObject {
     private var presentationID = UUID()
     /// Changes on every user edit. An assistant result is only valid for the
     /// exact revision whose words were sent to it.
-    private var textRevision = 0
+    private(set) var textRevision = 0
     /// Ends any dictation session aimed at this pad before the window goes
     /// away. A recognizer can deliver its final words after a close request;
     /// without invalidating that session, the no-field route presents the pad
@@ -174,16 +322,28 @@ final class QuickNoteController: ObservableObject {
 
     init(
         store: MarkdownStore,
+        recovery: DraftJournal? = nil,
         deleteSavedNote: (@MainActor (MeetingNote) -> Bool)? = nil,
         assistantRun: (@Sendable (
             NoteAction,
             String,
             NoteAssistantEngine
         ) async throws -> String)? = nil,
-        availableEngines: (@Sendable () async -> [NoteAssistantEngine])? = nil
+        availableEngines: (@Sendable () async -> [NoteAssistantEngine])? = nil,
+        countWords: (@Sendable (String) async -> Int)? = nil,
+        discardConfirmation: (@MainActor () -> Bool)? = nil,
+        suggestTask: (@Sendable (String) async -> QuickCaptureTaskParser.Suggestion?)? = nil,
+        defaults: UserDefaults = .standard,
+        openFilingLibrary: (@MainActor () -> Void)? = nil
     ) {
         self.store = store
+        self.defaults = defaults
+        self.recovery = recovery
+        self.openFilingLibrary = openFilingLibrary ?? { AppModel.shared.openLibrary() }
         self.deleteSavedNote = deleteSavedNote ?? { store.delete($0) }
+        self.countWords = countWords ?? { Self.countWords(in: $0) }
+        self.suggestTask = suggestTask ?? { QuickCaptureTaskParser.suggestion(in: $0) }
+        self.discardConfirmation = discardConfirmation
         let assistant = NoteAssistant()
         self.runAssistant = assistantRun ?? { action, text, engine in
             try await assistant.run(action, on: text, using: engine)
@@ -191,10 +351,120 @@ final class QuickNoteController: ObservableObject {
         self.loadAvailableEngines = availableEngines ?? {
             await assistant.availableEngines()
         }
-        self.engine = Self.restoredEngine()
-        self.isContinuous = UserDefaults.standard.bool(
+        self.engine = Self.restoredEngine(defaults: defaults)
+        self.isContinuous = defaults.bool(
             forKey: Keys.continuous
         )
+        recoveryObservation = recovery?.$statusMessage.sink { [weak self] message in
+            self?.recoveryWarning = message
+        }
+        // A popover can stay open while Finder copies enter the library. Its
+        // choices must refresh even when nobody types another word in the pad.
+        libraryObservation = store.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+    }
+
+    deinit {
+        analysisRequests?.finish()
+        analysisTask?.cancel()
+    }
+
+    // MARK: - Background text analysis
+
+    /// Reopening the pad can change the meaning of "tomorrow" even when its
+    /// text is unchanged. Reuse a current count, but refresh the dated offer.
+    func refreshTaskSuggestion() {
+        scheduleTextAnalysis(keepingCount: true)
+    }
+
+    func applyTaskSuggestion(_ suggestion: QuickCaptureTaskParser.Suggestion) {
+        guard let current = taskSuggestion,
+              current.dueDate == suggestion.dueDate,
+              current.cueLabel == suggestion.cueLabel,
+              current.paragraph.utf8.elementsEqual(suggestion.paragraph.utf8)
+        else { return }
+        text = QuickCaptureTaskParser.applying(current, to: text)
+    }
+
+    private func scheduleTextAnalysis(keepingCount: Bool = false) {
+        analysisRevision = UUID()
+        let nextCount: Int? = text.isEmpty ? 0 : (keepingCount ? wordCount : nil)
+        if wordCount != nextCount { wordCount = nextCount }
+        if taskSuggestion != nil { taskSuggestion = nil }
+        // One consumer and one replaceable pending buffer bound the work when
+        // typing outruns counting. A task per edit would retain every large
+        // intermediate note and gives no ordering guarantee.
+        if analysisRequests == nil, !text.isEmpty {
+            let pair = AsyncStream<QuickNoteAnalysisRequest>.makeStream(
+                bufferingPolicy: .bufferingNewest(1)
+            )
+            analysisRequests = pair.continuation
+            let countWords = countWords
+            let suggestTask = suggestTask
+            let worker: @Sendable () async -> Void = { [weak self] in
+                for await request in pair.stream {
+                    guard !Task.isCancelled else { return }
+                    let count: Int
+                    if let knownCount = request.knownCount {
+                        count = knownCount
+                    } else {
+                        count = await countWords(request.text)
+                    }
+                    guard !Task.isCancelled else { return }
+                    // Skip parsing a superseded snapshot. Publish its count
+                    // first so suggestion work cannot hold statistics hostage.
+                    guard await self?.acceptWordCount(count, revision: request.revision) == true
+                    else { continue }
+                    let suggestion = request.text.isEmpty ? nil : await suggestTask(request.text)
+                    guard !Task.isCancelled else { return }
+                    await self?.acceptTaskSuggestion(suggestion, revision: request.revision)
+                }
+            }
+            analysisTask = Task.detached(priority: .utility, operation: worker)
+        }
+        // An empty request also replaces any queued old text. Its result cannot
+        // overwrite a newer edit because clearing advances the revision too.
+        analysisRequests?.yield(QuickNoteAnalysisRequest(
+            text: text, revision: analysisRevision, knownCount: nextCount
+        ))
+    }
+
+    private func acceptWordCount(_ count: Int, revision: UUID) -> Bool {
+        guard revision == analysisRevision else { return false }
+        if wordCount != count { wordCount = count }
+        return true
+    }
+
+    private func acceptTaskSuggestion(
+        _ suggestion: QuickCaptureTaskParser.Suggestion?, revision: UUID
+    ) {
+        guard revision == analysisRevision else { return }
+        guard taskSuggestion != nil || suggestion != nil else { return }
+        taskSuggestion = suggestion
+    }
+
+    /// Match String.split's Character whitespace behavior without allocating
+    /// one substring per word. Scalar or byte separators would change counts
+    /// for grapheme clusters containing whitespace and combining characters.
+    nonisolated static func countWords(in text: String) -> Int {
+        var count = 0
+        var insideWord = false
+        var charactersSinceCancellationCheck = 0
+        for character in text {
+            if character.isWhitespace {
+                insideWord = false
+            } else if !insideWord {
+                count += 1
+                insideWord = true
+            }
+            charactersSinceCancellationCheck += 1
+            if charactersSinceCancellationCheck == 1_024 {
+                if Task.isCancelled { return 0 }
+                charactersSinceCancellationCheck = 0
+            }
+        }
+        return count
     }
 
     /// The engine to start with, which is not simply the remembered one.
@@ -205,8 +475,7 @@ final class QuickNoteController: ObservableObject {
     /// that had no consent step, restored from a backup, or left behind when
     /// the agreement was withdrawn. Any of those would otherwise mean notes
     /// leaving the Mac on launch with nobody having said yes.
-    private static func restoredEngine() -> NoteAssistantEngine {
-        let defaults = UserDefaults.standard
+    static func restoredEngine(defaults: UserDefaults = .standard) -> NoteAssistantEngine {
         let restored = defaults.string(forKey: Keys.engine)
             .flatMap(NoteAssistantEngine.init(rawValue:)) ?? .onDevice
         guard restored.leavesTheMac else { return restored }
@@ -228,12 +497,18 @@ final class QuickNoteController: ObservableObject {
         // new capture must not begin by clearing it.
         if !isPresenting, !hasUnsavedFailure {
             beginPresentation()
+            suppressCheckpoint = true
             text = ""
-            savedNoteID = nil
-            savedNoteURL = nil
+            savedNote = nil
+            recoveryBaseline = ""
             message = nil
+            filingCompletionMessage = nil
             hasUnsavedEdits = false
             startedAt = Date()
+            recoveryDraftID = UUID()
+            recoveryNoteID = UUID()
+            recoveryLibraryPath = Self.libraryPath(store.storageURL)
+            suppressCheckpoint = false
             // Hands-free is a session, not a preference. The stored value
             // outlives the session that set it, so restoring it would show a
             // ticked box with nothing listening. Nook also must not open the
@@ -248,6 +523,10 @@ final class QuickNoteController: ObservableObject {
         }
         panel?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        // Raising a panel does not make its editor first responder. Issue the
+        // one-shot request after the hosting view is attached, including when
+        // an already-open pad is explicitly brought forward again.
+        editorFocusToken &+= 1
     }
 
     /// Appends a finalized chunk while the user is still speaking.
@@ -290,6 +569,7 @@ final class QuickNoteController: ObservableObject {
         }
         prepareToDismiss()
         hasUnsavedEdits = false
+        filingCompletionMessage = nil
         isPresenting = false
         panel?.orderOut(nil)
         panel = nil
@@ -334,7 +614,6 @@ final class QuickNoteController: ObservableObject {
             try? await Task.sleep(for: .milliseconds(600))
             guard !Task.isCancelled, let self else { return }
             self.saveIfNeeded()
-            self.hasUnsavedEdits = false
         }
     }
 
@@ -348,18 +627,39 @@ final class QuickNoteController: ObservableObject {
     /// A debounced save may already have written the file, so discarding has
     /// to delete what was written rather than merely closing the window.
     func discardWithConfirmation() {
-        guard wordCount <= Self.discardConfirmationWordCount
-            || confirmDiscard()
+        guard canDiscard else { return }
+        // A pending count cannot authorize destruction using an older, shorter
+        // revision's total. Confirm conservatively until this revision is known.
+        // Zero visible words also cannot describe a saved note that Undo hid:
+        // removing that file is always an explicit, confirmed decision.
+        let mayDiscardWithoutConfirmation = wordCount.map {
+            $0 <= Self.discardConfirmationWordCount && ($0 > 0 || savedNote == nil)
+        } == true
+        guard mayDiscardWithoutConfirmation
+            || (discardConfirmation?() ?? confirmDiscard())
         else { return }
         discard()
     }
 
     func discard() {
+        if let saved = savedNote {
+            guard recoveryLibraryPath == nil
+                    || recoveryLibraryPath == Self.libraryPath(store.storageURL),
+                  let file = saved.fileURL,
+                  Self.libraryPath(file.deletingLastPathComponent())
+                    == Self.libraryPath(store.storageURL),
+                  let revision = saved.fileRevision,
+                  let current = try? Data(contentsOf: file),
+                  MeetingNote.contentRevision(current) == revision else {
+                message = "The original note changed or is in another folder. Your draft and the saved file were kept."
+                hasUnsavedFailure = true
+                return
+            }
+        }
         saveDebounce?.cancel()
         saveDebounce = nil
         prepareToDismiss()
-        if let savedNoteID,
-           let saved = store.notes.first(where: { $0.id == savedNoteID }) {
+        if let saved = savedNote {
             guard deleteSavedNote(saved) else {
                 message = store.lastError
                     ?? "Nook couldn’t move this note to the Trash."
@@ -368,13 +668,17 @@ final class QuickNoteController: ObservableObject {
                 return
             }
         }
-        savedNoteID = nil
-        savedNoteURL = nil
+        recovery?.resolve(recoveryDraftID)
+        suppressCheckpoint = true
+        savedNote = nil
+        recoveryBaseline = ""
         text = ""
+        suppressCheckpoint = false
         lastSavedAt = nil
         hasUnsavedEdits = false
         hasUnsavedFailure = false
         message = nil
+        filingCompletionMessage = nil
         isPresenting = false
         panel?.orderOut(nil)
         panel = nil
@@ -385,7 +689,9 @@ final class QuickNoteController: ObservableObject {
         alert.alertStyle = .warning
         alert.messageText = "Discard this note?"
         alert.informativeText =
-            "These words are not kept anywhere else, and this cannot be undone."
+            savedNote != nil && wordCount == 0
+                ? "This pad is empty. Discard moves the saved note it belongs to into the Trash."
+                : "These words are not kept anywhere else, and this cannot be undone."
         alert.addButton(withTitle: "Keep It")
         alert.addButton(withTitle: "Discard")
         // The safe option is the default, so a reflexive Return keeps the
@@ -405,31 +711,85 @@ final class QuickNoteController: ObservableObject {
     func saveIfNeeded() -> MeetingNote? {
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else {
+            // An empty replacement still belongs to the saved pad. Closing
+            // must not silently restore the old words or erase its checkpoint.
+            if let savedNote, text != savedNote.summary {
+                hasUnsavedFailure = true
+                hasUnsavedEdits = true
+                message = "The note is empty. Add text or choose Discard to remove it."
+                isShowingEmptyDraftValidation = true
+                return nil
+            }
+            recovery?.resolve(recoveryDraftID)
+            recoveryDraftID = UUID()
             hasUnsavedFailure = false
+            hasUnsavedEdits = false
             return nil
         }
 
-        let note = MeetingNote(
-            id: savedNoteID ?? UUID(),
+        guard recoveryLibraryPath == nil
+                || recoveryLibraryPath == Self.libraryPath(store.storageURL) else {
+            hasUnsavedFailure = true
+            hasUnsavedEdits = true
+            message = "This draft belongs to another notes folder. Switch back to save it."
+            return nil
+        }
+        if let savedNote, let file = savedNote.fileURL,
+           !FileManager.default.fileExists(atPath: file.path) {
+            hasUnsavedFailure = true
+            hasUnsavedEdits = true
+            message = "The original note is no longer available. Your draft has not been saved over another file."
+            return nil
+        }
+
+        var note = savedNote ?? MeetingNote(
+            id: recoveryNoteID,
             kind: .spoken,
             title: NoteTitleGenerator.title(for: body),
             startedAt: startedAt,
             endedAt: Date(),
             sourceApp: "Spoken note",
-            summary: body,
-            fileURL: savedNoteURL
+            summary: body
         )
+        note.title = NoteTitleGenerator.title(for: body)
+        note.endedAt = Date()
+        note.summary = body
         do {
+            if note.fileURL == nil {
+                note.fileURL = store.destinationForNewNote(note)
+            }
+            let markdown = MarkdownCodec.encode(note)
+            let encoded = Data(markdown.utf8)
+            if let recovery, var record = checkpointRecord(),
+               let destination = note.fileURL {
+                record.completion = DraftCompletion(
+                    targetPath: destination.path,
+                    noteID: note.id,
+                    revision: MeetingNote.contentRevision(encoded)
+                )
+                // An unavailable recovery directory must not disable ordinary
+                // saving. Its failure stays visible through the journal; the
+                // successful note write still gets a chance to protect words.
+                try? recovery.persistSynchronously(record)
+            }
             let saved = try store.save(note)
-            savedNoteID = saved.id
-            savedNoteURL = saved.fileURL
+            guard let destination = saved.fileURL,
+                  try Data(contentsOf: destination) == encoded else {
+                throw MarkdownStoreError.writeVerificationFailed
+            }
+            savedNote = saved
+            recoveryBaseline = markdown
+            recovery?.resolve(recoveryDraftID)
+            recoveryDraftID = UUID()
             lastSavedAt = Date()
             message = nil
             hasUnsavedFailure = false
+            hasUnsavedEdits = false
             return saved
         } catch {
             message = "Couldn’t save this note: \(error.localizedDescription)"
             hasUnsavedFailure = true
+            hasUnsavedEdits = true
             return nil
         }
     }
@@ -437,6 +797,7 @@ final class QuickNoteController: ObservableObject {
     func saveAndOpenInLibrary() {
         guard let note = saveIfNeeded() else { return }
         prepareToDismiss()
+        filingCompletionMessage = nil
         isPresenting = false
         panel?.orderOut(nil)
         panel = nil
@@ -458,10 +819,42 @@ final class QuickNoteController: ObservableObject {
     func fileIntoMeeting(_ target: MeetingNote) {
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { return }
+        // A button may outlive a reload or a folder change. Refuse before
+        // saving the pad or resolving its checkpoint, and retain the selected
+        // target's original revision for the store's external-edit checks.
+        guard recoveryLibraryPath == nil
+                || recoveryLibraryPath == Self.libraryPath(store.storageURL) else {
+            message = "This draft belongs to another notes folder. Switch back before filing it. Your words are still here."
+            return
+        }
+        guard !store.isLoading else {
+            message = "The library is refreshing. Wait for it to finish, then choose the meeting again. Your words are still here."
+            return
+        }
+        guard !store.duplicateNoteIDs.contains(target.id) else {
+            message = "That meeting now shares its note ID with another file. Review the copies in Library before filing. Your words are still here."
+            return
+        }
+        guard target.kind == .meeting,
+              let file = target.fileURL, file.isFileURL,
+              Self.libraryPath(file.deletingLastPathComponent()) == Self.libraryPath(store.storageURL),
+              let current = store.note(matching: target.libraryIdentity),
+              current.kind == .meeting else {
+            message = "That meeting is no longer available in this notes folder. Choose a meeting again. Your words are still here."
+            return
+        }
+        guard let revision = target.fileRevision, current.fileRevision == revision else {
+            message = "That meeting changed after it was offered. Choose it again to review the current file before filing. Your words are still here."
+            return
+        }
         // Cancelled before the write, not after: a debounce that fired in
         // between would put the standalone note straight back.
         saveDebounce?.cancel()
         saveDebounce = nil
+        // A move must not trash newer content in the source file while filing
+        // an older pad draft. First save through the pad's original revision;
+        // a conflict leaves both files and the draft intact.
+        if savedNote != nil, saveIfNeeded() == nil { return }
         do {
             let existing = target.personalNotes
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -471,24 +864,37 @@ final class QuickNoteController: ObservableObject {
             _ = try store.updatePersonalNotes(joined, for: target)
             // The words are in the meeting now, so the autosaved copy goes to
             // the Trash exactly as discarding it would send it there.
-            var strandedCopy: String?
-            if let savedNoteID,
-               let autosaved = store.notes.first(where: { $0.id == savedNoteID }),
+            var hasStrandedCopy = false
+            if let autosaved = savedNote,
                !store.delete(autosaved) {
-                strandedCopy = autosaved.fileURL?.lastPathComponent
+                hasStrandedCopy = true
             }
+            recovery?.resolve(recoveryDraftID)
+            // The completed filing must not be replayed, and a new thought
+            // must never reuse the old copy's UUID or resolved checkpoint.
+            // End the old assistant/capture session even when this window stays.
+            prepareToDismiss()
+            suppressCheckpoint = true
             text = ""
-            savedNoteID = nil
-            savedNoteURL = nil
-            lastSavedAt = Date()
+            savedNote = nil
+            recoveryBaseline = ""
+            recoveryDraftID = UUID()
+            recoveryNoteID = UUID()
+            recoveryLibraryPath = Self.libraryPath(store.storageURL)
+            startedAt = Date()
+            suppressCheckpoint = false
+            lastSavedAt = nil
             hasUnsavedEdits = false
             hasUnsavedFailure = false
-            // Filed either way; a copy that would not move is worth saying so
-            // the user is not left wondering why the note is in two places.
-            message = strandedCopy.map {
-                "Filed into that meeting, but the earlier copy in \($0) could not be moved to the Trash."
+            message = nil
+            if hasStrandedCopy {
+                filingCompletionMessage = "Filed successfully, but Nook couldn’t move the earlier saved copy to Trash."
+                // Done/Close remain available, but a partial success must not
+                // dismiss its own explanation before the user can read it.
+                panel?.makeKeyAndOrderFront(nil)
+                return
             }
-            prepareToDismiss()
+            filingCompletionMessage = nil
             isPresenting = false
             panel?.orderOut(nil)
             panel = nil
@@ -497,9 +903,36 @@ final class QuickNoteController: ObservableObject {
         }
     }
 
-    /// Meetings the filing menu can offer, newest first.
+    /// Meetings the filing menu can offer, newest first. Apply the exclusion
+    /// before the limit so copied IDs cannot crowd out usable destinations.
     var recentMeetingTargets: [MeetingNote] {
-        store.notes.filter { $0.kind == .meeting }.prefix(5).map { $0 }
+        let directory = store.storageURL.standardizedFileURL
+        return store.notes.filter {
+            $0.kind == .meeting && !store.duplicateNoteIDs.contains($0.id)
+                && $0.fileURL?.isFileURL == true
+                && $0.fileURL?.deletingLastPathComponent().standardizedFileURL == directory
+        }.sorted {
+            if $0.startedAt != $1.startedAt { return $0.startedAt > $1.startedAt }
+            return ($0.libraryIdentity.filePath ?? "") < ($1.libraryIdentity.filePath ?? "")
+        }.prefix(5).map { $0 }
+    }
+
+    var hasOmittedDuplicateMeetings: Bool {
+        store.notes.contains { $0.kind == .meeting && store.duplicateNoteIDs.contains($0.id) }
+    }
+
+    var filingChoices: [QuickNoteFilingChoice] {
+        QuickNoteFilingChoice.choices(for: recentMeetingTargets)
+    }
+
+    /// Reviewing a shared ID must remain possible even if saving this pad is
+    /// blocked. This route neither files its words nor closes its editor.
+    func reviewFilingTargetsInLibrary() {
+        openFilingLibrary()
+    }
+
+    func dismissFilingCompletion() {
+        filingCompletionMessage = nil
     }
 
     /// Starts a checklist line at the cursor from the toolbar or keyboard.
@@ -509,28 +942,37 @@ final class QuickNoteController: ObservableObject {
 
     // MARK: - Assistance
 
-    func refreshEngines() {
-        Task { @MainActor [weak self] in
+    @discardableResult
+    func refreshEngines() -> Task<Void, Never> {
+        let refreshID = UUID()
+        engineRefreshID = refreshID
+        return Task { @MainActor [weak self] in
             guard let self else { return }
             let engines = await self.loadAvailableEngines()
+            guard !Task.isCancelled, self.engineRefreshID == refreshID else { return }
             self.availableEngines = engines
             // A previously chosen engine can disappear when a tool is removed.
-            // Falling back must never land on one that sends notes away, so an
-            // agreement is required even when Nook picks for the user.
+            // Prior consent permits another explicit choice, not an automatic
+            // reversal of Keep on this Mac when its local model is unavailable.
             if !engines.contains(self.engine) {
-                self.engine = engines.first(where: { !$0.leavesTheMac })
-                    ?? engines.first(where: { self.hasConsented(to: $0) })
-                    ?? .onDevice
+                self.setSelectedEngine(.onDevice)
             }
         }
     }
 
-    func run(_ action: NoteAction) {
+    @discardableResult
+    func run(_ action: NoteAction) -> Task<Void, Never>? {
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !body.isEmpty, !isWorking else { return }
+        guard !body.isEmpty, !isWorking, !isPreparingForTermination else { return nil }
+        guard isSelectedAssistantAvailable, hasConsented(to: engine) else {
+            message = "Choose an available assistant before running a note action. Your words can still be edited and saved."
+            return nil
+        }
 
         isWorking = true
         runningAction = action
+        runningEngine = engine
+        isStoppingAssistant = false
         message = nil
         let engine = self.engine
         let presentationID = self.presentationID
@@ -547,10 +989,13 @@ final class QuickNoteController: ObservableObject {
                 if self.assistantRunID == runID {
                     self.isWorking = false
                     self.runningAction = nil
+                    self.runningEngine = nil
+                    self.isStoppingAssistant = false
                     self.assistantTask = nil
                     self.assistantRunID = nil
                 }
             }
+            guard !Task.isCancelled, !self.isStoppingAssistant else { return }
             do {
                 let result = try await self.runAssistant(
                     action,
@@ -561,6 +1006,7 @@ final class QuickNoteController: ObservableObject {
                 // discarded, or reopened the pad. Its output belongs only to
                 // the exact presentation and revision it saw.
                 guard !Task.isCancelled,
+                      !self.isStoppingAssistant,
                       self.assistantRunID == runID,
                       self.isPresenting,
                       self.presentationID == presentationID,
@@ -572,6 +1018,7 @@ final class QuickNoteController: ObservableObject {
                 self.apply(result, for: action)
             } catch {
                 guard !Task.isCancelled,
+                      !self.isStoppingAssistant,
                       self.assistantRunID == runID,
                       self.isPresenting,
                       self.presentationID == presentationID,
@@ -584,6 +1031,32 @@ final class QuickNoteController: ObservableObject {
             }
         }
         assistantTask = task
+        return task
+    }
+
+    private func requestAssistantStop() {
+        guard isWorking else { return }
+        // Reject results immediately, but do not describe cancellation as
+        // finished until the assistant returns. A CLI may still be cleaning up.
+        isStoppingAssistant = true
+        assistantTask?.cancel()
+    }
+
+    /// Quit must wait for the actual assistant operation, not just a canceled
+    /// Task handle. A timeout keeps Nook open with its stopping disclosure.
+    func prepareAssistantForTermination(timeout: Double = 5) async -> Bool {
+        isPreparingForTermination = true
+        requestAssistantStop()
+        guard let task = assistantTask else { return true }
+        let finished = await withDeadline(seconds: timeout) {
+            await task.value
+            return true
+        }
+        return finished == true
+    }
+
+    func cancelApplicationTermination() {
+        isPreparingForTermination = false
     }
 
     private func apply(_ result: String, for action: NoteAction) {
@@ -625,10 +1098,6 @@ final class QuickNoteController: ObservableObject {
                 message = Self.keptYourOwnWordsNotice
             }
         }
-    }
-
-    var wordCount: Int {
-        text.split(whereSeparator: \.isWhitespace).count
     }
 
     #if DEBUG
@@ -708,11 +1177,7 @@ final class QuickNoteController: ObservableObject {
         // Cancellation is only an optimisation: the identity and revision
         // checks in its completion are the actual safety boundary because a
         // provider is allowed to ignore cancellation.
-        assistantTask?.cancel()
-        assistantTask = nil
-        assistantRunID = nil
-        isWorking = false
-        runningAction = nil
+        requestAssistantStop()
         presentationID = UUID()
         textRevision &+= 1
         isContinuous = false
@@ -724,6 +1189,77 @@ final class QuickNoteController: ObservableObject {
         textRevision &+= 1
     }
 
+    // MARK: - Recovery checkpoints
+
+    private static func libraryPath(_ url: URL) -> String {
+        url.standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
+    private func checkpointEdit() {
+        guard !suppressCheckpoint, recovery != nil else { return }
+        if recoveryLibraryPath == nil {
+            recoveryLibraryPath = Self.libraryPath(store.storageURL)
+        }
+        guard !text.utf8.elementsEqual((savedNote?.summary ?? "").utf8) else {
+            recovery?.resolve(recoveryDraftID)
+            recoveryDraftID = UUID()
+            return
+        }
+        if let record = checkpointRecord() { recovery?.checkpoint(record) }
+    }
+
+    private func checkpointRecord() -> DraftCheckpoint? {
+        guard let recovery else { return nil }
+        return DraftCheckpoint(
+            id: recoveryDraftID,
+            kind: .quickNote,
+            libraryPath: recoveryLibraryPath ?? Self.libraryPath(store.storageURL),
+            originalFilePath: savedNote?.fileURL.map(Self.libraryPath),
+            noteID: savedNote?.id,
+            title: savedNote?.title ?? "Unfinished quick note",
+            text: text,
+            baseline: recoveryBaseline,
+            baselineRevision: savedNote?.fileRevision,
+            createdAt: startedAt,
+            sessionID: recovery.sessionID
+        )
+    }
+
+    func libraryWillChange() {
+        if !text.isEmpty || savedNote != nil {
+            if recoveryLibraryPath == nil {
+                recoveryLibraryPath = Self.libraryPath(store.storageURL)
+            }
+            checkpointEdit()
+        }
+        saveDebounce?.cancel()
+        saveDebounce = nil
+        recovery?.flushSynchronously()
+    }
+
+    /// Called only after an explicit deletion succeeded. It cannot allow a
+    /// later autosave or assistant completion to recreate that deleted note.
+    func noteWasDeleted(_ note: MeetingNote) {
+        guard savedNote?.id == note.id,
+              savedNote?.fileURL?.standardizedFileURL
+                == note.fileURL?.standardizedFileURL else { return }
+        saveDebounce?.cancel()
+        saveDebounce = nil
+        prepareToDismiss()
+        recovery?.resolve(recoveryDraftID)
+        suppressCheckpoint = true
+        savedNote = nil
+        recoveryBaseline = ""
+        text = ""
+        suppressCheckpoint = false
+        hasUnsavedFailure = false
+        hasUnsavedEdits = false
+        filingCompletionMessage = nil
+        isPresenting = false
+        panel?.orderOut(nil)
+        panel = nil
+    }
+
     private static let frameAutosaveName = "QuickNote"
 
     private enum Keys {
@@ -731,8 +1267,51 @@ final class QuickNoteController: ObservableObject {
         static let continuous = "quickNoteContinuous"
 
         static func consent(_ engine: NoteAssistantEngine) -> String {
-            "quickNoteConsent.\(engine.rawValue)"
+            // Earlier Codex consent promised access only to the current note.
+            // That approval does not cover the clarified file-read warning.
+            engine == .codex
+                ? "quickNoteConsent.codex.v2"
+                : "quickNoteConsent.\(engine.rawValue)"
         }
+    }
+}
+
+private struct QuickNoteAnalysisRequest: Sendable {
+    let text: String
+    let revision: UUID
+    let knownCount: Int?
+}
+
+/// Match the caption people actually see, including the date's minute-level
+/// formatting. Distinct files with the same caption need their filename too.
+struct QuickNoteFilingChoice: Identifiable {
+    let note: MeetingNote
+    let dateLabel: String
+    let disambiguatingFilename: String?
+
+    var id: LibraryNoteIdentity { note.libraryIdentity }
+    var title: String { note.title.isEmpty ? "Untitled meeting" : note.title }
+    var accessibilityLabel: String {
+        let destination = "Add to \(title), \(dateLabel)"
+        return disambiguatingFilename.map { "\(destination), file \($0)" } ?? destination
+    }
+
+    static func choices(for notes: [MeetingNote]) -> [Self] {
+        let captions = notes.map {
+            Caption(title: $0.title.isEmpty ? "Untitled meeting" : $0.title,
+                    date: $0.startedAt.formatted(date: .abbreviated, time: .shortened))
+        }
+        let counts = Dictionary(grouping: captions, by: { $0 }).mapValues(\.count)
+        return zip(notes, captions).map { note, caption in
+            Self(note: note, dateLabel: caption.date,
+                 disambiguatingFilename: counts[caption, default: 0] > 1
+                    ? note.fileURL?.lastPathComponent : nil)
+        }
+    }
+
+    private struct Caption: Hashable {
+        let title: String
+        let date: String
     }
 }
 

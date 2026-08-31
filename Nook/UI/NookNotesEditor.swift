@@ -35,6 +35,7 @@ final class TextViewInsertionPort {
 struct NookNotesEditor: View {
     @Environment(\.isEnabled) private var isEnabled
     @Binding var text: String
+    private let textInput: ExactNotesText
     let placeholder: String
     /// Observed editing state, written by the text view's delegate as the
     /// user moves between fields. Never drives focus back into the view;
@@ -62,6 +63,32 @@ struct NookNotesEditor: View {
     var accessibilityLabel = "Personal meeting notes"
     var insertionPort: TextViewInsertionPort?
 
+    init(
+        text: Binding<String>,
+        placeholder: String,
+        isFocused: Binding<Bool>? = nil,
+        focusToken: Int = 0,
+        contentInsets: EdgeInsets = EdgeInsets(top: 10, leading: 11, bottom: 10, trailing: 11),
+        fontSize: CGFloat = NSFont.systemFontSize,
+        lineSpacing: CGFloat = 4,
+        accessibilityLabel: String = "Personal meeting notes",
+        insertionPort: TextViewInsertionPort? = nil
+    ) {
+        _text = text
+        // A Binding<String> can compare equal after an NFC/NFD-only change,
+        // before updateNSView ever runs. Capture an exact value as a separate
+        // SwiftUI input, without allocating a byte array or recreating the view.
+        textInput = ExactNotesText(value: text.wrappedValue)
+        self.placeholder = placeholder
+        self.isFocused = isFocused
+        self.focusToken = focusToken
+        self.contentInsets = contentInsets
+        self.fontSize = fontSize
+        self.lineSpacing = lineSpacing
+        self.accessibilityLabel = accessibilityLabel
+        self.insertionPort = insertionPort
+    }
+
     var body: some View {
         ZStack(alignment: .topLeading) {
             if text.isEmpty {
@@ -75,6 +102,7 @@ struct NookNotesEditor: View {
 
             PlainNotesTextView(
                 text: $text,
+                textInput: textInput,
                 isFocused: isFocused,
                 focusToken: focusToken,
                 fontSize: fontSize,
@@ -85,6 +113,63 @@ struct NookNotesEditor: View {
             )
             .padding(contentInsets)
         }
+    }
+
+    /// AppKit can vend foreign UTF-16 String storage. Convert once at the
+    /// editor boundary so revision and recovery checks reuse contiguous UTF-8
+    /// instead of traversing that bridge repeatedly. This changes storage,
+    /// never normalization or text, and does not write into the text view.
+    static func textSnapshot(from textView: NSTextView) -> String {
+        var snapshot = textView.string
+        snapshot.makeContiguousUTF8()
+        return snapshot
+    }
+
+    /// Swift String equality treats composed and decomposed text as equal.
+    /// The binding owns exact text, so an explicit replacement must reach the
+    /// editor even when it only changes that encoding. Compare UTF-16 units
+    /// at AppKit's boundary without normalizing or converting the whole buffer.
+    static func synchronizeText(_ text: String, in textView: NSTextView) {
+        // The input method owns this temporary range until it commits or
+        // cancels. An unrelated SwiftUI update still carries committed text;
+        // replacing the buffer here would discard the user's composition.
+        guard !textView.hasMarkedText() else { return }
+        guard !textView.string.utf16.elementsEqual(text.utf16) else { return }
+        let selection = textView.selectedRange()
+        textView.string = text
+        let textLength = (text as NSString).length
+        let location = min(selection.location, textLength)
+        textView.setSelectedRange(NSRange(
+            location: location,
+            length: min(selection.length, textLength - location)
+        ))
+    }
+
+    /// Apply an explicit request once, after the representable update has
+    /// attached the editor. Returning the scheduled work lets native tests
+    /// verify actual first-responder behavior without showing a window.
+    @discardableResult
+    static func requestFocus(
+        _ token: Int,
+        appliedToken: inout Int,
+        in textView: NSTextView
+    ) -> Task<Void, Never>? {
+        guard token != appliedToken, textView.isEditable else { return nil }
+        appliedToken = token
+        return Task { @MainActor [weak textView] in
+            guard let textView, textView.isEditable, let window = textView.window else { return }
+            if window.firstResponder !== textView {
+                window.makeFirstResponder(textView)
+            }
+        }
+    }
+}
+
+private struct ExactNotesText: Equatable {
+    let value: String
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.value.utf8.elementsEqual(rhs.value.utf8)
     }
 }
 
@@ -108,6 +193,7 @@ private final class KeyActivatingTextView: NSTextView {
 
 private struct PlainNotesTextView: NSViewRepresentable {
     @Binding var text: String
+    let textInput: ExactNotesText
     var isFocused: Binding<Bool>?
     var focusToken: Int
     let fontSize: CGFloat
@@ -127,7 +213,10 @@ private struct PlainNotesTextView: NSViewRepresentable {
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
 
-        let textView = KeyActivatingTextView()
+        // An isolated native probe showed substantially more typing work for
+        // very long paragraphs with TextKit 2. Choose TextKit 1 when creating
+        // the text system, never by switching a live editor or changing its text.
+        let textView = KeyActivatingTextView(usingTextLayoutManager: false)
         textView.delegate = context.coordinator
         textView.drawsBackground = false
         textView.isRichText = false
@@ -158,7 +247,7 @@ private struct PlainNotesTextView: NSViewRepresentable {
         configure(textView)
         context.coordinator.appliedFontSize = fontSize
         context.coordinator.appliedLineSpacing = lineSpacing
-        textView.string = text
+        textView.string = textInput.value
         return scrollView
     }
 
@@ -182,18 +271,7 @@ private struct PlainNotesTextView: NSViewRepresentable {
             context.coordinator.appliedLineSpacing = lineSpacing
         }
         textView.isEditable = isEditable
-        if textView.string != text {
-            let selection = textView.selectedRange()
-            textView.string = text
-            let textLength = (text as NSString).length
-            let location = min(selection.location, textLength)
-            textView.setSelectedRange(
-                NSRange(
-                    location: location,
-                    length: min(selection.length, textLength - location)
-                )
-            )
-        }
+        NookNotesEditor.synchronizeText(textInput.value, in: textView)
 
         if !isEditable {
             if textView.window?.firstResponder === textView {
@@ -206,15 +284,11 @@ private struct PlainNotesTextView: NSViewRepresentable {
         // deliberately no blur path here: clicking elsewhere resigns the
         // text view through AppKit, and a render-time blur is what broke
         // typing during meetings.
-        if focusToken != context.coordinator.appliedFocusToken {
-            context.coordinator.appliedFocusToken = focusToken
-            Task { @MainActor in
-                guard textView.window != nil else { return }
-                if textView.window?.firstResponder !== textView {
-                    textView.window?.makeFirstResponder(textView)
-                }
-            }
-        }
+        NookNotesEditor.requestFocus(
+            focusToken,
+            appliedToken: &context.coordinator.appliedFocusToken,
+            in: textView
+        )
     }
 
     private func configure(_ textView: NSTextView) {
@@ -260,7 +334,7 @@ private struct PlainNotesTextView: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard let textView else { return }
-            parent.text = textView.string
+            parent.text = NookNotesEditor.textSnapshot(from: textView)
         }
 
         func textDidBeginEditing(_ notification: Notification) {

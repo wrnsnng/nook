@@ -332,13 +332,13 @@ struct SpokenNoteBodyTests {
         let decoded = try #require(
             MarkdownCodec.decode(Self.spokenWithoutHeading, fileURL: file)
         )
-        _ = try store.save(decoded)
+        let saved = try store.save(decoded)
         var written = try String(contentsOf: file, encoding: .utf8)
         #expect(written.contains("Open with the demo, then the numbers."))
         #expect(written.contains("- [x] Book the room"))
 
         // A model that lost the body is refused rather than written.
-        var hollow = decoded
+        var hollow = saved
         hollow.summary = ""
         var thrown: Error?
         do {
@@ -784,6 +784,160 @@ struct SaveFailureCopyTests {
     }
 }
 
+@MainActor
+struct ExactFileRevisionTests {
+    private func temporaryDirectory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NookExactRevision-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    private func store(in directory: URL) -> MarkdownStore {
+        let store = MarkdownStore(noteLoader: { _, cache in
+            MarkdownStore.loadNotes(in: directory, cache: cache)
+        })
+        store.storageURL = directory
+        return store
+    }
+
+    private func note(in store: MarkdownStore) throws -> MeetingNote {
+        try store.save(MeetingNote(
+            title: "Revision safety",
+            startedAt: Date(timeIntervalSince1970: 1_780_000_000),
+            endedAt: Date(timeIntervalSince1970: 1_780_000_060),
+            sourceApp: "Manual",
+            summary: "Original summary."
+        ))
+    }
+
+    @Test(arguments: [false, true])
+    func refreshedPersonalNotesRequireExactBaselineOrProposedText(
+        canonicallyMatchesProposal: Bool
+    ) throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        let composed = "Review caf\u{00E9} decisions."
+        let decomposed = "Review cafe\u{0301} decisions."
+        let baseline = canonicallyMatchesProposal ? "Original personal notes." : composed
+        let proposed = canonicallyMatchesProposal ? composed : "The local unfinished edit."
+        let file = directory.appendingPathComponent("external-personal-edit.md")
+        let external = MeetingNote(
+            title: "Externally edited personal notes",
+            startedAt: Date(timeIntervalSince1970: 1_780_000_000),
+            endedAt: Date(timeIntervalSince1970: 1_780_000_060),
+            sourceApp: "Manual",
+            summary: "Synthetic meeting summary.", personalNotes: decomposed
+        )
+        let externalBytes = Data(MarkdownCodec.encode(external).utf8)
+        try externalBytes.write(to: file)
+        // This model carries the current file revision, as after a library
+        // refresh. Only the editor's field baseline can detect the conflict.
+        let refreshed = try #require(
+            MarkdownStore.loadNotes(in: directory, cache: nil).get().notes.first
+        )
+        #expect(refreshed.fileRevision == MeetingNote.contentRevision(externalBytes))
+        #expect(composed == decomposed)
+        #expect(!composed.utf8.elementsEqual(decomposed.utf8))
+
+        #expect(throws: MarkdownStoreError.personalNotesChangedElsewhere) {
+            try store.updatePersonalNotes(
+                proposed, for: refreshed, expectedPersonalNotes: baseline
+            )
+        }
+        #expect(try Data(contentsOf: file) == externalBytes)
+
+        // An explicit choice of the exact external text still resolves the
+        // conflict without changing its Unicode representation.
+        let saved = try store.updatePersonalNotes(
+            decomposed, for: refreshed, expectedPersonalNotes: baseline
+        )
+        #expect(saved.personalNotes.utf8.elementsEqual(decomposed.utf8))
+        #expect(try Data(contentsOf: file) == externalBytes)
+    }
+
+    @Test(arguments: [0.0, 0.25])
+    func wholeNoteWritesRefuseChangedBytesEvenWhenTheTimestampLooksUnchanged(
+        timestampOffset: TimeInterval
+    ) throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        var note = try note(in: store)
+        let file = try #require(note.fileURL)
+        let modified = try #require(note.fileModified)
+        let external = try String(contentsOf: file, encoding: .utf8)
+            .replacingOccurrences(of: "Original summary.", with: "Externally edited summary.")
+        try external.write(to: file, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.modificationDate: modified.addingTimeInterval(timestampOffset)],
+            ofItemAtPath: file.path
+        )
+        note.title = "A title edited in Nook"
+        #expect(throws: MarkdownStoreError.fileChangedElsewhere) { try store.save(note) }
+        #expect(try String(contentsOf: file, encoding: .utf8) == external)
+    }
+
+    @Test
+    func changingOnlyTheModificationDateDoesNotBlockAnUnchangedDocument() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        var note = try note(in: store)
+        let file = try #require(note.fileURL)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(120)],
+            ofItemAtPath: file.path
+        )
+        note.title = "Renamed without losing anything"
+        let saved = try store.save(note)
+        #expect(saved.title == note.title)
+        #expect(saved.summary == "Original summary.")
+    }
+
+    @Test
+    func aRawDraftConflictThrowsAndSurvivesReloadUntilExplicitlyDiscarded() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        let note = try note(in: store)
+        let file = try #require(note.fileURL)
+        let modified = try #require(note.fileModified)
+        let draft = MarkdownDraftController()
+        draft.prepare(for: note, store: store)
+        let original = draft.originalMarkdown
+        draft.rawMarkdown += "\n\n## Local addition\n\nKeep this draft.\n"
+        let unsaved = draft.rawMarkdown
+        let external = original.replacingOccurrences(
+            of: "Original summary.", with: "Externally edited summary."
+        )
+        try external.write(to: file, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: file.path)
+        #expect(throws: MarkdownStoreError.fileChangedElsewhere) {
+            try draft.save(note: note, store: store)
+        }
+        for _ in 0..<100 where store.isLoading { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(!store.isLoading)
+        let refreshed = try #require(store.notes.first { $0.id == note.id })
+        draft.refresh(for: refreshed, store: store)
+        #expect(throws: MarkdownStoreError.fileChangedElsewhere) {
+            try draft.save(note: refreshed, store: store)
+        }
+        #expect(draft.hasChanges)
+        #expect(draft.rawMarkdown == unsaved)
+        #expect(draft.originalMarkdown == original)
+        #expect(try String(contentsOf: file, encoding: .utf8) == external)
+        draft.discardChanges()
+        draft.refresh(for: refreshed, store: store)
+        #expect(draft.rawMarkdown == external)
+        draft.rawMarkdown += "\n\nReviewed after loading the current file.\n"
+        try draft.save(note: refreshed, store: store)
+        #expect(!draft.hasChanges)
+        #expect(try String(contentsOf: file, encoding: .utf8).contains("Externally edited summary."))
+    }
+}
+
 private final class TrashRejectingFileManager: FileManager {
     struct TrashUnavailable: Error {}
 
@@ -888,5 +1042,194 @@ struct NoteDeletionSafetyTests {
         #expect(FileManager.default.fileExists(atPath: file.path))
         #expect(try Data(contentsOf: file) == before)
         #expect(store.lastError?.contains("Trash") == true)
+    }
+}
+
+/// Inject a competing write after preparation, where the old implementation
+/// had already accepted its revision but had not replaced the file yet.
+@MainActor
+struct MarkdownWriteBoundaryTests {
+    private func fixture(
+        beforeCommit: @escaping @MainActor (URL) throws -> Void = { _ in }
+    ) throws -> (root: URL, library: URL, store: MarkdownStore) {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NookWriteBoundary-\(UUID().uuidString)")
+            .standardizedFileURL.resolvingSymlinksInPath()
+        let library = root.appendingPathComponent("Library")
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        let store = MarkdownStore(
+            noteLoader: { _, _ in .success((notes: [], issues: [])) },
+            beforeWriteCommit: beforeCommit
+        )
+        store.storageURL = library
+        return (root, library, store)
+    }
+
+    private func note() -> MeetingNote {
+        MeetingNote(
+            title: "Synthetic write boundary",
+            startedAt: Date(timeIntervalSince1970: 1_780_000_000),
+            endedAt: Date(timeIntervalSince1970: 1_780_000_060),
+            sourceApp: "Manual", summary: "Original café words."
+        )
+    }
+
+    private func stagingFiles(in directory: URL) throws -> [URL] {
+        try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix(".nook-write-") }
+    }
+
+    @Test(arguments: [false, true])
+    func aDestinationCreatedDuringPreparationIsNeverOverwritten(asSymlink: Bool) throws {
+        var interleave: (@MainActor (URL) throws -> Void)?
+        let f = try fixture { try interleave?($0) }
+        defer {
+            interleave = nil
+            try? FileManager.default.removeItem(at: f.root)
+        }
+        let outside = f.root.appendingPathComponent("Other-writer.txt")
+        let foreign = Data("Other writer’s exact café source\n".utf8)
+        try foreign.write(to: outside)
+        var chosenDestination: URL?
+        interleave = { destination in
+            chosenDestination = destination
+            if asSymlink {
+                try FileManager.default.createSymbolicLink(at: destination, withDestinationURL: outside)
+            } else {
+                try foreign.write(to: destination)
+            }
+        }
+
+        #expect(throws: MarkdownStoreError.fileChangedElsewhere) { try f.store.save(note()) }
+
+        let destination = try #require(chosenDestination)
+        #expect(try Data(contentsOf: destination) == foreign)
+        #expect(try Data(contentsOf: outside) == foreign)
+        #expect(f.store.notes.isEmpty)
+        #expect(try stagingFiles(in: f.library).isEmpty)
+        if asSymlink {
+            #expect(try FileManager.default.destinationOfSymbolicLink(atPath: destination.path) == outside.path)
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func anotherStoresInterleavedSaveKeepsTheEditorsOriginalConflictBaseline(rawEditor: Bool) throws {
+        var interleave: (@MainActor (URL) throws -> Void)?
+        let f = try fixture { try interleave?($0) }
+        defer {
+            interleave = nil
+            try? FileManager.default.removeItem(at: f.root)
+        }
+        let original = try f.store.save(note())
+        let file = try #require(original.fileURL)
+        let originalDate = try #require(original.fileModified)
+        let editor = MarkdownDraftController()
+        editor.prepare(for: original, store: f.store)
+        let baseline = editor.originalMarkdown
+        editor.rawMarkdown += "\n## Local words\nKeep this unfinished edit.\n"
+        let localDraft = editor.rawMarkdown
+        let secondStore = MarkdownStore(noteLoader: { _, _ in .success((notes: [], issues: [])) })
+        secondStore.storageURL = f.library
+        var other = original
+        other.summary = "An external writer’s newer words."
+        var foreignBytes = Data()
+        interleave = { destination in
+            _ = try secondStore.save(other)
+            foreignBytes = try Data(contentsOf: destination)
+            try FileManager.default.setAttributes([.modificationDate: originalDate], ofItemAtPath: destination.path)
+        }
+
+        if rawEditor {
+            #expect(throws: MarkdownStoreError.fileChangedElsewhere) {
+                try editor.save(note: original, store: f.store)
+            }
+            #expect(editor.hasChanges)
+            #expect(Data(editor.rawMarkdown.utf8) == Data(localDraft.utf8))
+            #expect(Data(editor.originalMarkdown.utf8) == Data(baseline.utf8))
+        } else {
+            var local = original
+            local.title = "Locally renamed"
+            #expect(throws: MarkdownStoreError.fileChangedElsewhere) { try f.store.save(local) }
+        }
+        #expect(!foreignBytes.isEmpty)
+        #expect(try Data(contentsOf: file) == foreignBytes)
+        #expect(try stagingFiles(in: f.library).isEmpty)
+    }
+
+    @Test
+    func anOriginalRemovedDuringPreparationIsNotRecreated() throws {
+        var interleave: (@MainActor (URL) throws -> Void)?
+        let f = try fixture { try interleave?($0) }
+        defer {
+            interleave = nil
+            try? FileManager.default.removeItem(at: f.root)
+        }
+        var original = try f.store.save(note())
+        let file = try #require(original.fileURL)
+        interleave = { try FileManager.default.removeItem(at: $0) }
+        original.title = "Unsaved local change"
+
+        #expect(throws: CocoaError.self) { try f.store.save(original) }
+
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        #expect(f.store.notes.first?.title == "Synthetic write boundary")
+        #expect(try stagingFiles(in: f.library).isEmpty)
+    }
+
+    @Test
+    func anInterruptedPreparationKeepsThePreviousFileAndRemovesPrivateStaging() throws {
+        var interleave: (@MainActor (URL) throws -> Void)?
+        let f = try fixture { try interleave?($0) }
+        defer {
+            interleave = nil
+            try? FileManager.default.removeItem(at: f.root)
+        }
+        var original = try f.store.save(note())
+        let file = try #require(original.fileURL)
+        let previous = try Data(contentsOf: file)
+        original.summary = "New source that cannot be committed."
+        let prepared = Data(MarkdownCodec.encode(original).utf8)
+        var inspected = false
+        interleave = { _ in
+            let temporary = try #require(try stagingFiles(in: f.library).first)
+            let attributes = try FileManager.default.attributesOfItem(atPath: temporary.path)
+            #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+            #expect(try Data(contentsOf: temporary) == prepared)
+            inspected = true
+            throw POSIXError(.ENOSPC)
+        }
+
+        #expect(throws: POSIXError.self) { try f.store.save(original) }
+
+        #expect(inspected)
+        #expect(try Data(contentsOf: file) == previous)
+        #expect(f.store.notes.first?.summary == "Original café words.")
+        #expect(try stagingFiles(in: f.library).isEmpty)
+    }
+
+    @Test
+    func replacingTheNamedDirectoryCannotRedirectAStagedSave() throws {
+        var interleave: (@MainActor (URL) throws -> Void)?
+        let f = try fixture { try interleave?($0) }
+        defer {
+            interleave = nil
+            try? FileManager.default.removeItem(at: f.root)
+        }
+        var original = try f.store.save(note())
+        let file = try #require(original.fileURL)
+        let previous = try Data(contentsOf: file)
+        let moved = f.root.appendingPathComponent("Moved")
+        interleave = { destination in
+            try FileManager.default.moveItem(at: f.library, to: moved)
+            try FileManager.default.createDirectory(at: f.library, withIntermediateDirectories: true)
+            try previous.write(to: destination)
+        }
+        original.title = "Local change"
+
+        #expect(throws: MarkdownStoreError.fileChangedElsewhere) { try f.store.save(original) }
+
+        #expect(try Data(contentsOf: file) == previous)
+        #expect(try Data(contentsOf: moved.appendingPathComponent(file.lastPathComponent)) == previous)
+        #expect(try stagingFiles(in: moved).isEmpty)
     }
 }

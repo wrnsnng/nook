@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import Synchronization
 import Testing
 @testable import Nook
 
@@ -117,6 +118,45 @@ struct LiveAnalyzerInputTests {
         // 25 × 100 ms of 48 kHz audio is ~2.5 s, or ~40,000 frames at 16 kHz.
         #expect(totalFrames > 38_000)
         #expect(totalFrames < 42_000)
+    }
+
+    @Test
+    func flushingCompletesTheAudioOnceWithoutRepeatingTheTail() throws {
+        let converter = ResamplingAnalyzerInputConverter(
+            analyzerFormat: try analyzerFormat()
+        )
+        let format = try captureFormat()
+        var totalFrames: AVAudioFrameCount = 0
+        for _ in 0..<25 {
+            let captured = try tone(format: format, frames: 4_800)
+            for output in try converter.convertToBuffers(captured) {
+                totalFrames += output.frameLength
+            }
+        }
+
+        for output in try converter.flushBuffers() {
+            totalFrames += output.frameLength
+        }
+
+        // A duplicated input or a discarded resampler tail changes the saved
+        // speech timeline. Exactly 2.5 seconds must survive the full stream.
+        #expect(totalFrames == 40_000)
+        #expect(try converter.flushBuffers().isEmpty)
+    }
+
+    @Test
+    func concurrentInputRequestsReceiveTheAudioOnlyOnce() throws {
+        let buffer = try tone(format: try captureFormat(), frames: 4_800)
+        let provider = AnalyzerInputBufferProvider(buffer: buffer)
+        let suppliedFrames = Mutex<[AVAudioFrameCount]>([])
+
+        DispatchQueue.concurrentPerform(iterations: 64) { _ in
+            guard let supplied = provider.takeBuffer() else { return }
+            suppliedFrames.withLock { $0.append(supplied.frameLength) }
+        }
+
+        #expect(suppliedFrames.withLock { $0 } == [4_800])
+        #expect(provider.takeBuffer() == nil)
     }
 
     @Test

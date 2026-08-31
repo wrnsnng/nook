@@ -31,6 +31,13 @@ enum TranscriptAssembler {
 
             let currentEnd = current.startTime + current.duration
             let gap = max(0, next.startTime - currentEnd)
+            // Saved transcript lines often have different speakers or are
+            // already farther apart than a paragraph can merge. Reject those
+            // pairs before scanning both passages to count every word.
+            guard current.source == next.source, gap <= maximumGap else {
+                result.append(next.cleaned)
+                return
+            }
             let currentWords = current.text.split(whereSeparator: \.isWhitespace).count
             let nextWords = next.text.split(whereSeparator: \.isWhitespace).count
             let hasNaturalEnding = current.text
@@ -38,9 +45,7 @@ enum TranscriptAssembler {
                 .last
                 .map { ".!?".contains($0) }
                 ?? false
-            let shouldMerge = current.source == next.source
-                && gap <= maximumGap
-                && currentWords + nextWords <= maximumWords
+            let shouldMerge = currentWords + nextWords <= maximumWords
                 && (!hasNaturalEnding || currentWords < 5)
 
             guard shouldMerge else {
