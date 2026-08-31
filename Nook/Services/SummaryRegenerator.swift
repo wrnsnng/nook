@@ -44,6 +44,42 @@ enum RegenerationCopy {
         }
         return "Pass \(pass), part \(part) of \(total)"
     }
+
+    /// First-capture fallback copy can say only the transcript was saved.
+    /// A failed regeneration preserves an existing note, so its notice must
+    /// describe that outcome without implying the old summary was removed.
+    static func retainedMessage(for reason: SummaryService.FailureReason) -> String {
+        let explanation: String
+        switch reason {
+        case .deviceNotEligible:
+            explanation = "This Mac cannot run Apple Intelligence."
+        case .appleIntelligenceOff:
+            explanation = "Apple Intelligence is turned off. Turn it on in System Settings to try again."
+        case .modelNotReady:
+            explanation = "Apple Intelligence is still preparing its model. Try again when it is ready."
+        case .transcriptTooLong:
+            explanation = "This meeting was too long for the on-device model, even after Nook shortened it."
+        case .declined:
+            explanation = "Apple Intelligence declined to summarize this conversation."
+        case .unsupportedLanguage:
+            explanation = "Apple Intelligence does not summarize this language yet."
+        case .modelBusy:
+            explanation = "Apple Intelligence was busy. Try again in a moment."
+        case .ungrounded:
+            explanation = "The new summary did not match the transcript."
+        case .timedOut:
+            explanation = "Summarizing took too long. Try again."
+        case .sensitiveContent:
+            explanation = "Apple Intelligence flagged part of this conversation as sensitive."
+        case .malformedAnswer:
+            explanation = "Apple Intelligence returned an answer Nook could not read."
+        case .schemaUnsupported:
+            explanation = "This version of Apple Intelligence cannot produce Nook’s note format."
+        case .generationFailed:
+            explanation = "Apple Intelligence could not finish the new summary."
+        }
+        return "Your existing note is unchanged. \(explanation)"
+    }
 }
 
 /// What regenerating a note's summary needs from a summarizer.
@@ -95,7 +131,7 @@ enum SummaryRegenerator {
         note.kind == .meeting && !note.transcript.isEmpty
     }
 
-    enum Outcome: Equatable {
+    enum Outcome: Equatable, Sendable {
         /// The note as it should be saved.
         case regenerated(MeetingNote)
         /// The note is left exactly as it was, with the reason the model
@@ -164,19 +200,22 @@ enum SummaryRegenerator {
         else { return latest }
 
         var merged = latest
-        if latest.title == starting.title {
+        // A Unicode normalization edit is still a deliberate source edit.
+        // Swift's canonical String equality would give the model ownership
+        // of that newer text again, including strings inside an array.
+        if latest.title.utf8.elementsEqual(starting.title.utf8) {
             merged.title = regenerated.title
         }
-        if latest.summary == starting.summary {
+        if latest.summary.utf8.elementsEqual(starting.summary.utf8) {
             merged.summary = regenerated.summary
         }
-        if latest.keyPoints == starting.keyPoints {
+        if exactStringsEqual(latest.keyPoints, starting.keyPoints) {
             merged.keyPoints = regenerated.keyPoints
         }
-        if latest.decisions == starting.decisions {
+        if exactStringsEqual(latest.decisions, starting.decisions) {
             merged.decisions = regenerated.decisions
         }
-        if latest.actionItems == starting.actionItems {
+        if exactStringsEqual(latest.actionItems, starting.actionItems) {
             merged.actionItems = regenerated.actionItems
         }
         // Checkbox state is user-owned rather than model-owned. Keep the
@@ -186,6 +225,25 @@ enum SummaryRegenerator {
             merged.actionItems.contains($0)
         }
         return merged
+    }
+
+    /// Identity-only changes to segment UUIDs do not change what was heard.
+    /// Transcript wording/timing/source and the bounded guidance actually sent
+    /// to the summarizer do. Never label old-input output as a fresh write-up.
+    static func hasSameGenerationInput(_ starting: MeetingNote, _ latest: MeetingNote) -> Bool {
+        guard starting.transcript.count == latest.transcript.count,
+              zip(starting.transcript, latest.transcript).allSatisfy({ left, right in
+                  left.startTime == right.startTime && left.duration == right.duration
+                    && left.source == right.source && left.text.utf8.elementsEqual(right.text.utf8)
+              }) else { return false }
+        return SummaryAttention(note: starting).rendered.utf8.elementsEqual(
+            SummaryAttention(note: latest).rendered.utf8
+        )
+    }
+
+    private static func exactStringsEqual(_ left: [String], _ right: [String]) -> Bool {
+        left.count == right.count
+            && zip(left, right).allSatisfy { $0.utf8.elementsEqual($1.utf8) }
     }
 
     /// Compatibility overload for callers that already have a freshest note

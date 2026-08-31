@@ -5,6 +5,49 @@ import Testing
 
 struct MarkdownCodecTests {
     @Test
+    func decodedTranscriptIDsKeepTheirExistingByteIdentity() throws {
+        let markdown = """
+        ---
+        id: 01234567-89AB-CDEF-0123-456789ABCDEF
+        title: "Synthetic identity fixture"
+        started: 2026-08-01T00:00:00Z
+        ended: 2026-08-01T02:00:00Z
+        source: "Synthetic"
+        ---
+
+        # Synthetic identity fixture
+
+        ## Transcript
+
+        - **[00:00]** **You:** The first synthetic point has several words.
+        - **[00:15]** **Meeting:** A second synthetic point keeps its speaker.
+        - **[01:02:03]** This mixed source point arrives after an hour.
+        - **[01:02:03.5]** **You:** A fractional timestamp retains its original identity.
+        """
+        let decoded = try #require(MarkdownCodec.decode(markdown))
+        // Compatibility vectors from the previous SHA256-to-hex-to-UUID
+        // representation. UUID version/variant bits must not be rewritten.
+        let expected = [
+            "4547411C-F76D-2B0E-0C7D-B43F3856038C",
+            "FEE58D82-CC93-0733-EE61-7CC2D8C373D1",
+            "455F19CA-B4E4-58F8-D4B1-9AEF0A91AA42",
+            "66E1EA59-65A9-3398-D8B8-08EDBAF1DB3D",
+        ]
+        #expect(decoded.transcript.map { $0.id.uuidString } == expected)
+        #expect(decoded.transcript.map(\.startTime) == [0, 15, 3_723, 3_723.5])
+        #expect(decoded.transcript.map(\.source) == [.microphone, .system, .mixed, .microphone])
+
+        let edited = markdown.replacingOccurrences(
+            of: "The first synthetic point has several words.",
+            with: "The person corrected the first synthetic point."
+        )
+        let reloaded = try #require(MarkdownCodec.decode(
+            edited, fileURL: URL(fileURLWithPath: "/synthetic/renamed.md")
+        ))
+        #expect(reloaded.transcript.map { $0.id.uuidString } == expected)
+    }
+
+    @Test
     func frontmatterRoundTripsEscapedCharacters() throws {
         let start = Date(timeIntervalSince1970: 1_700_000_000)
         let note = MeetingNote(
@@ -934,6 +977,42 @@ struct MarkdownCodecTests {
     }
 
     @Test
+    func transcriptMergeBoundariesPreserveWhitespaceAndOriginalSegmentIdentity() {
+        let first = TranscriptSegment(
+            startTime: 0,
+            duration: 1,
+            text: "  First\tthought  ",
+            source: .system
+        )
+        for (source, gap, maximumWords, shouldMerge) in [
+            (TranscriptSegment.Source.system, 2.0, 4, true),
+            (.system, 2.001, 4, false),
+            (.microphone, 2.0, 4, false),
+            (.system, 2.0, 3, false),
+        ] {
+            let second = TranscriptSegment(
+                startTime: 1 + gap,
+                duration: 1,
+                text: "\nSecond\tthought  ",
+                source: source
+            )
+            let result = TranscriptAssembler.coalesce(
+                [first, second], maximumGap: 2, maximumWords: maximumWords
+            )
+            if shouldMerge {
+                #expect(result.count == 1)
+                #expect(result.first?.id == first.id)
+                #expect(result.first?.text == "First thought Second thought")
+                #expect(result.first?.duration == 4)
+            } else {
+                #expect(result.map(\.id) == [first.id, second.id])
+                #expect(result.map(\.text) == ["First thought", "Second thought"])
+                #expect(result.map(\.source) == [first.source, second.source])
+            }
+        }
+    }
+
+    @Test
     func placeholderBulletsAreNotPresentedAsMeetingContent() throws {
         let start = Date(timeIntervalSince1970: 1_700_000_000)
         let markdown = MarkdownCodec.encode(
@@ -1049,7 +1128,7 @@ struct MarkdownCodecTests {
             notes: [matching, unrelated]
         )
 
-        #expect(ids == Set([matching.id]))
+        #expect(ids == Set([matching.libraryIdentity]))
     }
 
     @Test
@@ -1775,9 +1854,8 @@ struct ActionItemToggleTests {
     }
 }
 
-/// The decode cache exists so app activation stops re-reading every file.
-/// Its whole contract is the timestamp: matching means reuse, anything else
-/// means the file changed through some route and must be read again.
+/// Content revisions allow parse reuse while reload still observes external
+/// edits that preserve modification dates and copied notes that share UUIDs.
 @MainActor
 struct NoteDecodeCacheTests {
     private func sampleNote() -> MeetingNote {
@@ -1790,28 +1868,119 @@ struct NoteDecodeCacheTests {
         )
     }
 
+    private func temporaryDirectory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NookDecodeCache-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
     @Test
-    func anEntrySurvivesOnlyWhileItsTimestampMatches() {
+    func anEntrySurvivesOnlyWhileItsCanonicalFileAndExactRevisionMatch() {
         let cache = NoteDecodeCache()
         let url = URL(fileURLWithPath: "/tmp/probe.md")
-        let original = Date(timeIntervalSince1970: 100)
-
-        cache.store(sampleNote(), for: url, modified: original)
-
-        #expect(
-            cache.note(for: url, modified: original)?.title
-                == "Cache probe"
-        )
-        #expect(cache.note(for: url, modified: original.addingTimeInterval(1)) == nil)
-        #expect(
-            cache.note(
-                for: URL(fileURLWithPath: "/tmp/other.md"),
-                modified: original
-            ) == nil
-        )
-
+        let original = Data(repeating: 1, count: 32)
+        cache.store(sampleNote(), for: url, revision: original)
+        #expect(cache.note(for: url, revision: original)?.title == "Cache probe")
+        #expect(cache.note(for: URL(fileURLWithPath: "/tmp/unused/../probe.md"), revision: original)?.title == "Cache probe")
+        #expect(cache.note(for: url, revision: Data(repeating: 2, count: 32)) == nil)
+        #expect(cache.note(for: URL(fileURLWithPath: "/tmp/other.md"), revision: original) == nil)
         cache.clear()
-        #expect(cache.note(for: url, modified: original) == nil)
+        #expect(cache.note(for: url, revision: original) == nil)
+    }
+
+    @Test
+    func anExternalEditWithTheSameTimestampIsVisibleOnOrdinaryReload() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("Note.md")
+        let cache = NoteDecodeCache()
+        var note = sampleNote()
+        try Data(MarkdownCodec.encode(note).utf8).write(to: file)
+        // Foundation can round a freshly written subsecond filesystem date
+        // when setting it again. Whole seconds keep this an exact cache test.
+        let date = Date(timeIntervalSince1970: 1_750_000_000)
+        try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: file.path)
+        let first = try #require(MarkdownStore.loadNotes(in: directory, cache: cache).get().notes.first)
+        #expect(first.fileModified == date)
+        note.summary = "Externally changed words at the same timestamp"
+        let changed = Data(MarkdownCodec.encode(note).utf8)
+        try changed.write(to: file)
+        try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: file.path)
+
+        let reloaded = try #require(MarkdownStore.loadNotes(in: directory, cache: cache).get().notes.first)
+
+        #expect(reloaded.summary == note.summary)
+        #expect(reloaded.fileModified == first.fileModified)
+        #expect(reloaded.fileRevision == MeetingNote.contentRevision(changed))
+        #expect(reloaded.fileRevision != first.fileRevision)
+        #expect(try Data(contentsOf: file) == changed)
+    }
+
+    @Test
+    func unchangedBytesReuseTheDecodeWhileRefreshingTheModificationDate() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("Note.md")
+        let cache = NoteDecodeCache()
+        try Data(MarkdownCodec.encode(sampleNote()).utf8).write(to: file)
+        let date = Date(timeIntervalSince1970: 1_750_000_000)
+        try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: file.path)
+        let first = try #require(MarkdownStore.loadNotes(in: directory, cache: cache).get().notes.first)
+        let changedDate = try #require(first.fileModified).addingTimeInterval(10)
+        try FileManager.default.setAttributes([.modificationDate: changedDate], ofItemAtPath: file.path)
+
+        let reloaded = try #require(MarkdownStore.loadNotes(in: directory, cache: cache).get().notes.first)
+
+        #expect(reloaded.summary == first.summary)
+        #expect(reloaded.fileRevision == first.fileRevision)
+        #expect(reloaded.fileModified == changedDate)
+    }
+
+    @Test
+    func aMalformedReplacementCannotBeHiddenByThePreviousTimestampCache() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("Note.md")
+        let cache = NoteDecodeCache()
+        try Data(MarkdownCodec.encode(sampleNote()).utf8).write(to: file)
+        let date = Date(timeIntervalSince1970: 1_750_000_000)
+        try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: file.path)
+        let first = try #require(MarkdownStore.loadNotes(in: directory, cache: cache).get().notes.first)
+        #expect(first.fileModified == date)
+        let bytes = Data([0xff, 0xfe, 0x00])
+        try bytes.write(to: file)
+        try FileManager.default.setAttributes([.modificationDate: try #require(first.fileModified)], ofItemAtPath: file.path)
+
+        let reloaded = try MarkdownStore.loadNotes(in: directory, cache: cache).get()
+
+        #expect(reloaded.notes.isEmpty)
+        #expect(reloaded.issues.map { $0.fileURL.standardizedFileURL.resolvingSymlinksInPath() }
+            == [file.standardizedFileURL.resolvingSymlinksInPath()])
+        #expect(try Data(contentsOf: file) == bytes)
+    }
+
+    @Test
+    func copiedUUIDsKeepSeparateFileDecodesAndDeletedEntriesArePruned() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let firstFile = directory.appendingPathComponent("First.md")
+        let secondFile = directory.appendingPathComponent("Copy.md")
+        let cache = NoteDecodeCache()
+        var note = sampleNote()
+        let firstBytes = Data(MarkdownCodec.encode(note).utf8)
+        try firstBytes.write(to: firstFile)
+        note.summary = "Independent copy with the same UUID"
+        try Data(MarkdownCodec.encode(note).utf8).write(to: secondFile)
+        let loaded = try MarkdownStore.loadNotes(in: directory, cache: cache).get().notes
+        #expect(loaded.count == 2)
+        #expect(Set(loaded.map(\.id)) == [note.id])
+        #expect(Set(loaded.map(\.summary)) == ["Probe summary", note.summary])
+
+        try FileManager.default.removeItem(at: firstFile)
+        _ = try MarkdownStore.loadNotes(in: directory, cache: cache).get()
+
+        #expect(cache.note(for: firstFile, revision: MeetingNote.contentRevision(firstBytes)) == nil)
     }
 }
 

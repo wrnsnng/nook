@@ -1,6 +1,7 @@
 import AVFoundation
 import CoreMedia
 import Foundation
+import os
 import Speech
 
 struct LiveTranscriptState: Equatable, Sendable {
@@ -183,7 +184,7 @@ final class LiveTranscriptionService {
             await track.finish()
         }
         let result = TranscriptAssembler.coalesce(
-            deduplicated(mergedSegments())
+            LiveSegmentMerger.deduplicated(mergedSegments())
         )
         tracks.removeAll()
         consumedFinalCounts = [:]
@@ -254,42 +255,31 @@ final class LiveTranscriptionService {
             .sorted { LiveSegmentMerger.ordersBefore($0, $1) }
     }
 
-    private func deduplicated(_ segments: [TranscriptSegment]) -> [TranscriptSegment] {
-        var result: [TranscriptSegment] = []
-        for segment in segments {
-            // The input is time-sorted, so any duplicate sits within the
-            // window immediately behind the candidate; walking past it would
-            // rescan the whole meeting for every line.
-            var mergedWithDuplicate = false
-            var scanIndex = result.count - 1
-            while scanIndex >= 0,
-                  abs(result[scanIndex].startTime - segment.startTime) < 4 {
-                if LiveSegmentMerger.similarity(
-                    result[scanIndex].text,
-                    segment.text
-                ) > 0.72 {
-                    if result[scanIndex].source == .microphone,
-                       segment.source == .system {
-                        result[scanIndex] = segment
-                    }
-                    mergedWithDuplicate = true
-                    break
-                }
-                scanIndex -= 1
-            }
-            guard !mergedWithDuplicate else { continue }
-            result.append(segment)
-        }
-        return result.sorted { $0.startTime < $1.startTime }
-    }
+
 }
 
-private struct TrackSnapshot: Sendable {
+struct TrackSnapshot: Sendable {
     let source: TranscriptSegment.Source
-    var segments: [TranscriptSegment] = []
+    private(set) var segments: [TranscriptSegment] = []
+    private var finalizedRanges: Set<CMTimeRange> = []
     var partial = ""
     var revision = 0
     var lastChangedAt = Date.distantPast
+
+    init(source: TranscriptSegment.Source) { self.source = source }
+
+    mutating func appendFinalized(_ text: String, range: CMTimeRange) {
+        // A final may be emitted twice for one span. Text is not its identity:
+        // repeating "No" later means both occurrences belong in the note.
+        if range.isValid, !range.isIndefinite,
+           !finalizedRanges.insert(range).inserted { return }
+        segments.append(TranscriptSegment(
+            startTime: max(0, range.start.seconds),
+            duration: max(0, range.duration.seconds),
+            text: text,
+            source: source
+        ))
+    }
 }
 
 /// Maintains the published live transcript incrementally.
@@ -315,6 +305,9 @@ struct LiveSegmentMerger {
     /// Running total over `coalesced`. Recomputing it per interface update is
     /// what made long meetings progressively slower to repaint.
     private(set) var totalWords = 0
+    /// A system span can explain one microphone echo, not several genuine
+    /// repetitions whose measured ranges happen to overlap it.
+    private var pairedSystemSegments: Set<TranscriptSegment.ID> = []
 
     /// Duplicates land within seconds of their twin, so scanning back past
     /// this window cannot miss one.
@@ -342,20 +335,59 @@ struct LiveSegmentMerger {
         return sourceRank(lhs.source) < sourceRank(rhs.source)
     }
 
-    /// Shared vocabulary over the longer text, the same echo test both this
-    /// fold and the full saved-audio pass use.
-    static func similarity(_ lhs: String, _ rhs: String) -> Double {
-        let left = Set(lhs.lowercased().split { !$0.isLetter && !$0.isNumber })
-        let right = Set(rhs.lowercased().split { !$0.isLetter && !$0.isNumber })
-        guard !left.isEmpty, !right.isEmpty else { return 0 }
-        let overlap = left.intersection(right).count
-        return Double(overlap) / Double(max(left.count, right.count))
+    private static func isCrossSourceEcho(
+        _ lhs: TranscriptSegment,
+        _ rhs: TranscriptSegment
+    ) -> Bool {
+        guard (lhs.source == .microphone && rhs.source == .system)
+            || (lhs.source == .system && rhs.source == .microphone),
+            abs(lhs.startTime - rhs.startTime) < duplicateWindow,
+            lhs.duration > 0, rhs.duration > 0 else { return false }
+        let overlap = min(lhs.startTime + lhs.duration, rhs.startTime + rhs.duration)
+            - max(lhs.startTime, rhs.startTime)
+        guard overlap >= max(lhs.duration, rhs.duration) * 0.5 else { return false }
+        // Shared vocabulary erased negation and amounts. Keep every word and
+        // punctuation mark; normalize only case and whitespace. An uncertain
+        // echo costs a duplicate rather than losing somebody's speech.
+        let left = lhs.text.lowercased().split(whereSeparator: \.isWhitespace)
+        let right = rhs.text.lowercased().split(whereSeparator: \.isWhitespace)
+        // Short agreements can be spoken on both sides simultaneously.
+        return left.count >= 3 && left == right
+    }
+
+    /// The input is time-sorted. Use the same conservative echo rule for the
+    /// saved note as for live captions, scanning only the nearby time window.
+    static func deduplicated(_ segments: [TranscriptSegment]) -> [TranscriptSegment] {
+        var result: [TranscriptSegment] = []
+        var pairedSystemSegments: Set<TranscriptSegment.ID> = []
+        for segment in segments {
+            var mergedWithDuplicate = false
+            var index = result.count - 1
+            while index >= 0,
+                  abs(result[index].startTime - segment.startTime) < duplicateWindow {
+                let systemID = segment.source == .system ? segment.id : result[index].id
+                if !pairedSystemSegments.contains(systemID),
+                   isCrossSourceEcho(result[index], segment) {
+                    pairedSystemSegments.insert(systemID)
+                    if segment.source == .system {
+                        result.remove(at: index)
+                        result.insert(segment, at: insertionIndex(for: segment, in: result))
+                    }
+                    mergedWithDuplicate = true
+                    break
+                }
+                index -= 1
+            }
+            if !mergedWithDuplicate { result.append(segment) }
+        }
+        return result
     }
 
     mutating func reset() {
         interleaved = []
         coalesced = []
         totalWords = 0
+        pairedSystemSegments = []
     }
 
     /// Folds freshly finalized segments in, returning whether any of them
@@ -386,13 +418,19 @@ struct LiveSegmentMerger {
         while index >= 0,
               interleaved[index].startTime >= segment.startTime - Self.duplicateWindow {
             let existing = interleaved[index]
-            if abs(existing.startTime - segment.startTime) < Self.duplicateWindow,
-               Self.similarity(existing.text, segment.text) > 0.72 {
+            let systemID = segment.source == .system ? segment.id : existing.id
+            if !pairedSystemSegments.contains(systemID),
+               Self.isCrossSourceEcho(existing, segment) {
+                pairedSystemSegments.insert(systemID)
                 guard existing.source == .microphone, segment.source == .system else {
                     return false
                 }
                 totalWords += Self.words(in: segment.text) - Self.words(in: existing.text)
-                interleaved[index] = segment
+                interleaved.remove(at: index)
+                interleaved.insert(
+                    segment,
+                    at: Self.insertionIndex(for: segment, in: interleaved)
+                )
                 return true
             }
             index -= 1
@@ -632,17 +670,8 @@ private final class LiveTrack {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
 
-        let start = max(0, result.range.start.seconds)
         if result.isFinal {
-            let segment = TranscriptSegment(
-                startTime: start,
-                duration: max(0, result.range.duration.seconds),
-                text: text,
-                source: source
-            )
-            if snapshot.segments.last?.text != text {
-                snapshot.segments.append(segment)
-            }
+            snapshot.appendFinalized(text, range: result.range)
             snapshot.partial = ""
         } else {
             snapshot.partial = text
@@ -729,6 +758,31 @@ protocol LiveAnalyzerInputConverting: AnyObject {
     func flush() throws -> [AnalyzerInput]
 }
 
+/// Hands one buffer to the converter even if its input callback is queried
+/// more than once or from concurrent queues. The caller must leave the samples
+/// unchanged until the synchronous conversion returns, as AVAudioConverter
+/// requires. The lock guards ownership of the pending reference, not sample
+/// mutation, and taking it removes the reference before releasing the lock.
+final class AnalyzerInputBufferProvider: Sendable {
+    private let pending: OSAllocatedUnfairLock<AVAudioPCMBuffer?>
+
+    init(buffer: AVAudioPCMBuffer?) {
+        // AVAudioPCMBuffer is not Sendable. This synchronous borrowing API
+        // cannot transfer its caller's buffer into a Mutex with `sending`.
+        // The unchecked state initializer keeps that borrow under a lock
+        // without a blanket Sendable conformance or copying every audio frame.
+        pending = OSAllocatedUnfairLock(uncheckedState: buffer)
+    }
+
+    func takeBuffer() -> AVAudioPCMBuffer? {
+        pending.withLockUnchecked { buffer in
+            let result = buffer
+            buffer = nil
+            return result
+        }
+    }
+}
+
 /// ScreenCaptureKit delivers 48 kHz stereo; `SpeechAnalyzer` asks for its own
 /// (typically 16 kHz mono) format, so capture buffers essentially never match
 /// it. `AVAudioConverter` bridges the two on every supported system.
@@ -778,7 +832,7 @@ final class ResamplingAnalyzerInputConverter: LiveAnalyzerInputConverting {
         guard let output = try drain(
             converter: converter,
             capacity: capacity,
-            provide: { buffer },
+            input: buffer,
             whenStarved: .noDataNow
         ) else {
             return []
@@ -793,7 +847,7 @@ final class ResamplingAnalyzerInputConverter: LiveAnalyzerInputConverting {
         guard let output = try drain(
             converter: converter,
             capacity: capacity,
-            provide: { nil },
+            input: nil,
             whenStarved: .endOfStream
         ) else {
             return []
@@ -818,8 +872,8 @@ final class ResamplingAnalyzerInputConverter: LiveAnalyzerInputConverting {
         return created
     }
 
-    /// Pulls one output buffer out of `converter`. `provide` returns the source
-    /// buffer once, after which `whenStarved` reports why no more is coming.
+    /// Pulls one output buffer out of `converter`. The source buffer is supplied
+    /// once, after which `whenStarved` reports why no more is coming.
     ///
     /// Live conversion must starve with `.noDataNow`: `.endOfStream` moves the
     /// converter into a terminal state and every later buffer in the meeting
@@ -827,7 +881,7 @@ final class ResamplingAnalyzerInputConverter: LiveAnalyzerInputConverting {
     private func drain(
         converter: AVAudioConverter,
         capacity: AVAudioFrameCount,
-        provide: @escaping () -> AVAudioPCMBuffer?,
+        input: AVAudioPCMBuffer?,
         whenStarved: AVAudioConverterInputStatus
     ) throws -> AVAudioPCMBuffer? {
         guard let output = AVAudioPCMBuffer(
@@ -837,20 +891,21 @@ final class ResamplingAnalyzerInputConverter: LiveAnalyzerInputConverting {
             throw LiveInputConversionError.unsupportedFormat
         }
 
-        var supplied = false
-        var conversionError: NSError?
-        let status = converter.convert(
-            to: output,
-            error: &conversionError
-        ) { _, inputStatus in
-            guard !supplied, let buffer = provide() else {
+        let provider = AnalyzerInputBufferProvider(buffer: input)
+        let inputBlock: AVAudioConverterInputBlock = { _, inputStatus in
+            guard let buffer = provider.takeBuffer() else {
                 inputStatus.pointee = whenStarved
                 return nil
             }
-            supplied = true
             inputStatus.pointee = .haveData
             return buffer
         }
+        var conversionError: NSError?
+        let status = converter.convert(
+            to: output,
+            error: &conversionError,
+            withInputFrom: inputBlock
+        )
 
         switch status {
         case .haveData, .inputRanDry, .endOfStream:

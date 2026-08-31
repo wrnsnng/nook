@@ -107,13 +107,15 @@ enum MarkdownCodec {
         appendSection("Decisions", decisions)
         appendSection("Action items", actions)
 
-        // A digest is compiled, not recorded: it carries the period's
-        // overview and outcomes but no transcript and no personal notes.
-        if note.kind != .digest {
+        // A digest has no recorded transcript. Its empty personal section is
+        // omitted, but any annotations somebody added must survive saving.
+        if note.kind != .digest || !personalNotes.isEmpty {
             appendSection(
                 "My notes",
                 personalNotes.isEmpty ? "_No personal notes._" : personalNotes
             )
+        }
+        if note.kind != .digest {
             appendSection(
                 "Transcript",
                 transcript.isEmpty ? "_No speech was detected._" : transcript
@@ -167,7 +169,10 @@ enum MarkdownCodec {
                 endedAt: endedAt,
                 sourceApp: source,
                 summary: summary,
-                fileURL: fileURL
+                fileURL: fileURL,
+                fileRevision: fileURL.map { _ in
+                    MeetingNote.contentRevision(Data(markdown.utf8))
+                }
             )
         }
         let keyPoints = NoteContentSanitizer.meaningfulItems(
@@ -223,7 +228,10 @@ enum MarkdownCodec {
             sessions: sessions,
             audioStart: audioStart,
             extraSections: preservedSections(in: blocks),
-            fileURL: fileURL
+            fileURL: fileURL,
+            fileRevision: fileURL.map { _ in
+                MeetingNote.contentRevision(Data(markdown.utf8))
+            }
         )
     }
 
@@ -1072,20 +1080,17 @@ extension MarkdownCodec {
     ) -> UUID {
         let seed = "\(noteID.uuidString)|\(startTime)|\(source.rawValue)|\(index)"
         let digest = SHA256.hash(data: Data(seed.utf8))
-        let hex = digest.prefix(16)
-            .map { String(format: "%02x", $0) }
-            .joined()
-        let formatted = [
-            hex.prefix(8),
-            hex.dropFirst(8).prefix(4),
-            hex.dropFirst(12).prefix(4),
-            hex.dropFirst(16).prefix(4),
-            hex.dropFirst(20).prefix(12),
-        ].joined(separator: "-")
-        // The hex above is always well-formed, so this only fails if the
-        // note id itself somehow is not; falling back to it keeps every
-        // segment in that note at least sharing one stable identity.
-        return UUID(uuidString: formatted) ?? noteID
+        // These are exactly the bytes the previous hex-string parser used.
+        // Going through sixteen formatters and another parser per transcript
+        // line made stable identity expensive during a cold library load.
+        return digest.withUnsafeBytes { bytes in
+            UUID(uuid: (
+                bytes[0], bytes[1], bytes[2], bytes[3],
+                bytes[4], bytes[5], bytes[6], bytes[7],
+                bytes[8], bytes[9], bytes[10], bytes[11],
+                bytes[12], bytes[13], bytes[14], bytes[15]
+            ))
+        }
     }
 
     private static func bulletList(_ values: [String]) -> String {

@@ -558,20 +558,23 @@ actor SummaryService {
                 onProgress: onProgress,
                 onStage: onStage
             )
-            if let insights = finalized(
+            let result = Self.finalizedResult(
                 proposed,
                 transcript: transcript,
                 fallbackTitle: fallbackTitle
-            ) {
-                await NookEventLog.write(.summaryGenerated)
-                return SummaryResult(insights: insights, failure: nil)
-            }
-            await NookEventLog.write(FailureReason.ungrounded.logEvent)
-            return Self.failed(
-                .ungrounded,
-                transcript: transcript,
-                fallbackTitle: fallbackTitle
             )
+            #if DEBUG
+            if proposed.failure != nil {
+                let kept = result.insights.keyPoints.count + result.insights.decisions.count
+                    + result.insights.actionItems.count
+                NookDebugLog.write("salvage kept \(kept) entries")
+            }
+            #endif
+            // A grounded harvest is useful fallback content, but it is not
+            // a successful write-up and cannot authorize replacing an old
+            // summary. Its original failure must survive this last boundary.
+            await NookEventLog.write(result.failure?.logEvent ?? .summaryGenerated)
+            return result
         } catch {
             let reason = Self.failureReason(for: error)
             #if DEBUG
@@ -602,7 +605,7 @@ actor SummaryService {
         attention: SummaryAttention?,
         onProgress: SummaryProgressHandler?,
         onStage: SummaryStageHandler?
-    ) async throws -> MeetingInsights {
+    ) async throws -> SummaryResult {
         var plan = TranscriptReducePlan.standard(
             forCharacters: text.count,
             condensedPartCeiling: Self.condensedPartCharacterEstimate
@@ -656,80 +659,91 @@ actor SummaryService {
                 #if DEBUG
                 NookDebugLog.write("every part was declined before the write-up")
                 #endif
-                if let salvaged = await salvaged(
+                return try await Self.salvagedResult(
+                    after: ContentRejected(),
                     from: ledger,
                     transcript: transcript,
                     fallbackTitle: fallbackTitle
-                ) {
-                    await NookEventLog.write(FailureReason.declined.logEvent)
-                    return salvaged
-                }
-                throw ContentRejected()
+                )
             }
             await onStage?(.writingUp)
             do {
-                return try await structuredInsights(
-                    from: source,
-                    coverage: coverage,
-                    candidates: await ledger.rendered(),
-                    previous: previous,
+                return try await Self.writeUpResult(
+                    transcript: transcript,
                     fallbackTitle: fallbackTitle,
-                    attention: attention
-                )
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                // The material fit but the write-up failed anyway, refused,
-                // or came back unreadable. Only an overflow is retried with
-                // less room; everything else salvages the harvest, which is
-                // checked against the transcript like any other result.
-                guard Self.classify(error) == .overflow,
-                      attempt + 1 < Self.maximumPlanAttempts
-                else {
-                    if let salvaged = await salvaged(
-                        from: ledger,
-                        transcript: transcript,
-                        fallbackTitle: fallbackTitle
-                    ) {
-                        await NookEventLog.write(
-                            Self.failureReason(for: error).logEvent
-                        )
-                        return salvaged
-                    }
-                    throw error
+                    ledger: ledger,
+                    retryOverflow: attempt + 1 < Self.maximumPlanAttempts
+                ) { [self] in
+                    try await structuredInsights(
+                        from: source,
+                        coverage: coverage,
+                        candidates: await ledger.rendered(),
+                        previous: previous,
+                        fallbackTitle: fallbackTitle,
+                        attention: attention
+                    )
                 }
+            } catch {
+                guard Self.classify(error) == .overflow,
+                      attempt + 1 < Self.maximumPlanAttempts else { throw error }
                 plan = plan.tightened
             }
         }
         throw TranscriptReduceError.didNotFit
     }
 
-    /// The last resort when the write-up pass cannot run: the harvested
-    /// candidates already went through the same validator and grounder every
-    /// model result passes through, so they are the one part of the answer
-    /// no refusal can take away.
-    private func salvaged(
+    /// The final model boundary is supplied so failure propagation can be
+    /// exercised without an available model. Production uses this same path:
+    /// successful write-ups, retryable overflow, cancellation and useful
+    /// harvests have distinct outcomes before any note can be replaced.
+    static func writeUpResult(
+        transcript: [TranscriptSegment],
+        fallbackTitle: String,
+        ledger: CandidateLedger,
+        retryOverflow: Bool,
+        writing: @Sendable () async throws -> MeetingInsights
+    ) async throws -> SummaryResult {
+        do {
+            try Task.checkCancellation()
+            let insights = try await writing()
+            try Task.checkCancellation()
+            return SummaryResult(insights: insights, failure: nil)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // Only overflow retries with a smaller plan. The actual reason
+            // travels with every salvaged harvest, including busy or malformed
+            // answers, which must never be relabelled as a refusal.
+            if Self.classify(error) == .overflow, retryOverflow { throw error }
+            return try await salvagedResult(
+                after: error,
+                from: ledger,
+                transcript: transcript,
+                fallbackTitle: fallbackTitle
+            )
+        }
+    }
+
+    /// The harvest remains available for first-time summaries and recovery,
+    /// while a regeneration caller can retain its existing note on failure.
+    /// No journal or model is touched by this deterministic boundary.
+    static func salvagedResult(
+        after error: Error,
         from ledger: CandidateLedger,
         transcript: [TranscriptSegment],
         fallbackTitle: String
-    ) async -> MeetingInsights? {
-        let result = await Self.salvagedInsights(
+    ) async throws -> SummaryResult {
+        try Task.checkCancellation()
+        guard !(error is CancellationError) else { throw error }
+        guard let insights = await Self.salvagedInsights(
             facts: ledger.keyPoints,
             decisions: ledger.decisions,
             actions: ledger.actions,
             transcript: transcript,
             fallbackTitle: fallbackTitle
-        )
-        #if DEBUG
-        if let result {
-            let kept = result.keyPoints.count + result.decisions.count
-                + result.actionItems.count
-            NookDebugLog.write("salvage kept \(kept) entries")
-        } else {
-            NookDebugLog.write("salvage had nothing to keep")
-        }
-        #endif
-        return result
+        ) else { throw error }
+        try Task.checkCancellation()
+        return SummaryResult(insights: insights, failure: Self.failureReason(for: error))
     }
 
     /// Static and deterministic so it can be tested without Apple
@@ -749,7 +763,7 @@ actor SummaryService {
         let proposed = MeetingInsights(
             title: fallbackTitle,
             summary:
-                "Apple Intelligence would not write this conversation up, so these entries were taken directly from the transcript.",
+                "A complete summary was not available, so these entries were taken directly from the transcript.",
             keyPoints: facts,
             decisions: decisions,
             actionItems: actions
@@ -1559,7 +1573,28 @@ actor SummaryService {
     private static let maximumSplitDepth = 2
     private static let maximumPlanAttempts = 3
 
-    private func finalized(
+    /// Validation must preserve the reason a harvest became a fallback. A
+    /// result that passes grounding is not automatically a model success.
+    static func finalizedResult(
+        _ result: SummaryResult,
+        transcript: [TranscriptSegment],
+        fallbackTitle: String
+    ) -> SummaryResult {
+        guard let insights = finalized(
+            result.insights,
+            transcript: transcript,
+            fallbackTitle: fallbackTitle
+        ) else {
+            return failed(
+                result.failure ?? .ungrounded,
+                transcript: transcript,
+                fallbackTitle: fallbackTitle
+            )
+        }
+        return SummaryResult(insights: insights, failure: result.failure)
+    }
+
+    private static func finalized(
         _ insights: MeetingInsights,
         transcript: [TranscriptSegment],
         fallbackTitle: String
@@ -1570,6 +1605,11 @@ actor SummaryService {
         ) else {
             return nil
         }
+        let quantities = MeetingNumericGrounder(sourceLines: transcript.map(\.text))
+        guard quantities.supports(validated.summary),
+              MeetingTitleGenerator.isFallbackTitle(validated.title, fallbackTitle: fallbackTitle)
+                || quantities.supports(validated.title)
+        else { return nil }
         var grounded = MeetingInsightGrounder.ground(validated, in: transcript)
         grounded.title = MeetingTitleGenerator.resolvedTitle(
             proposedTitle: grounded.title,
@@ -1856,13 +1896,13 @@ enum MeetingInsightGrounder {
     ) -> MeetingInsights {
         var grounded = insights
         let spokenLines = transcript.map {
-            $0.text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            $0.text.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         let actionLines = spokenLines.filter {
-            containsPositiveSignal($0, signals: actionSignals)
+            containsPositiveSignal($0.lowercased(), signals: actionSignals)
         }
         let decisionLines = spokenLines.filter {
-            containsPositiveSignal($0, signals: decisionSignals)
+            containsPositiveSignal($0.lowercased(), signals: decisionSignals)
         }
 
         grounded.keyPoints = supportedItems(
@@ -1887,7 +1927,9 @@ enum MeetingInsightGrounder {
         _ items: [String],
         by sourceLines: [String]
     ) -> [String] {
-        items.filter { item in
+        let quantities = MeetingNumericGrounder(sourceLines: sourceLines)
+        return items.filter { item in
+            guard quantities.supports(item) else { return false }
             let itemTokens = meaningfulTokens(in: item)
             guard !itemTokens.isEmpty else { return false }
             return sourceLines.contains { line in
@@ -1967,6 +2009,161 @@ enum MeetingInsightGrounder {
         "have", "into", "its", "need", "our", "please", "should",
         "that", "the", "their", "then", "there", "they", "this",
         "was", "were", "will", "with", "would", "you", "your",
+    ]
+}
+
+/// A reused digit is not evidence for a new quantity. An agenda item or a
+/// timestamp must not become a participant count merely because the model
+/// copied its number. Keep digit-bearing literals with nearby spoken wording,
+/// including their following content word when one is present. The preceding
+/// context also has to overlap when the proposal supplies it.
+///
+/// This is a conservative surface check, not semantic entailment. It can reject
+/// honest paraphrases, written-number conversions and reordered quantities;
+/// nonnumeric inventions and relationships that reuse the same local wording
+/// still need review. A rejection retains the transcript or the existing note.
+private struct MeetingNumericGrounder {
+    private struct Context {
+        let literal: String
+        let before: Set<String>
+        let after: String?
+    }
+
+    private struct Token {
+        let literal: String
+        let endsClause: Bool
+        let endsWithComma: Bool
+        let currencyCode: String?
+
+        var isNumeric: Bool { literal.contains(where: \.isNumber) }
+    }
+
+    private struct Evidence {
+        var precedingWords: Set<String> = []
+        var precedingWordsByFollowingWord: [String: Set<String>] = [:]
+    }
+
+    private let sourceEvidence: [String: Evidence]
+
+    init(sourceLines: [String]) {
+        var evidence: [String: Evidence] = [:]
+        for line in sourceLines {
+            for context in Self.contexts(in: line) {
+                evidence[context.literal, default: Evidence()].precedingWords.formUnion(context.before)
+                if let after = context.after {
+                    evidence[context.literal, default: Evidence()]
+                        .precedingWordsByFollowingWord[after, default: []].formUnion(context.before)
+                }
+            }
+        }
+        sourceEvidence = evidence
+    }
+
+    func supports(_ text: String) -> Bool {
+        Self.contexts(in: text).allSatisfy { candidate in
+            guard let evidence = sourceEvidence[candidate.literal] else { return false }
+            if let after = candidate.after {
+                guard let preceding = evidence.precedingWordsByFollowingWord[after] else { return false }
+                return candidate.before.isEmpty || !candidate.before.isDisjoint(with: preceding)
+            }
+            // A bare number has no claim context to check. It cannot
+            // validate itself just by occurring elsewhere in the source.
+            return !candidate.before.isEmpty
+                && !candidate.before.isDisjoint(with: evidence.precedingWords)
+        }
+    }
+
+    private static func contexts(in text: String) -> [Context] {
+        guard text.contains(where: \.isNumber) else { return [] }
+        let tokens = text.split(whereSeparator: \.isWhitespace).map { raw in
+            let unwrapped = String(raw).trimmingCharacters(in: wrappers)
+            var literal = unwrapped
+            // Keep signs, currency, decimals, percentages and code punctuation.
+            // Only terminal sentence punctuation is safe to discard.
+            while let last = literal.last, clausePunctuation.contains(last) {
+                literal.removeLast()
+            }
+            return Token(
+                literal: literal.lowercased(),
+                endsClause: unwrapped.last.map(clausePunctuation.contains) ?? false,
+                endsWithComma: unwrapped.last == ",",
+                // Keep lowercase words such as "try" out of the currency
+                // vocabulary, even though TRY is a currency code.
+                currencyCode: currencyCodes.contains(literal) ? literal.lowercased() : nil
+            )
+        }
+        return tokens.indices.compactMap { index in
+            guard tokens[index].isNumeric else { return nil }
+            var literal = tokens[index].literal
+            if index > 0, !tokens[index - 1].endsClause {
+                let previous = tokens[index - 1]
+                if let code = previous.currencyCode {
+                    literal = code + literal
+                } else if isNumericPrefix(previous.literal) {
+                    literal = previous.literal + literal
+                }
+            }
+            if !tokens[index].endsClause, index + 1 < tokens.count,
+               ["%", "‰"].contains(tokens[index + 1].literal) {
+                literal += tokens[index + 1].literal
+            }
+            var before: Set<String> = []
+            var cursor = index
+            while cursor > 0, before.count < 3 {
+                cursor -= 1
+                let token = tokens[cursor]
+                if token.isNumeric {
+                    // A date or range can end in adjacent numbers. Keep the
+                    // preceding literal as their anchor, but never cross a
+                    // sentence boundary. Every number is still checked.
+                    if !token.endsClause || token.endsWithComma {
+                        before.insert(token.literal)
+                    }
+                    break
+                }
+                guard !token.endsClause else { break }
+                if isContentWord(token.literal) { before.insert(token.literal) }
+            }
+            var after: String?
+            if !tokens[index].endsClause {
+                cursor = index + 1
+                while cursor < tokens.count {
+                    let token = tokens[cursor]
+                    // Joining two faithful sentences must not make the
+                    // second subject look like a unit of the first number.
+                    guard !token.isNumeric, !clauseTransitions.contains(token.literal) else { break }
+                    if isContentWord(token.literal) {
+                        after = token.literal
+                        break
+                    }
+                    if token.endsClause { break }
+                    cursor += 1
+                }
+            }
+            return Context(literal: literal, before: before, after: after)
+        }
+    }
+
+    private static func isNumericPrefix(_ literal: String) -> Bool {
+        ["+", "-", "−"].contains(literal)
+            || (literal.unicodeScalars.count == 1 && literal.unicodeScalars.contains {
+                $0.properties.generalCategory == .currencySymbol
+            })
+    }
+
+    private static func isContentWord(_ literal: String) -> Bool {
+        literal.contains(where: \.isLetter) && !joiningWords.contains(literal)
+    }
+
+    private static let wrappers = CharacterSet(charactersIn: "\"'“”‘’()[]{}")
+    private static let clausePunctuation: Set<Character> = [".", ",", "!", "?", ";", ":"]
+    private static let clauseTransitions: Set<String> = ["and", "or", "but", "yet", "while", "whereas"]
+    private static let currencyCodes = Set(Locale.commonISOCurrencyCodes)
+    private static let joiningWords: Set<String> = [
+        "a", "an", "and", "are", "as", "at", "be", "been", "by", "for", "from",
+        "had", "has", "have", "in", "is", "it", "its", "of", "on", "or", "our",
+        "the", "their", "there", "these", "they", "this", "those", "to", "was",
+        "we", "were", "with", "you", "your",
     ]
 }
 

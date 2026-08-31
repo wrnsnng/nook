@@ -987,3 +987,518 @@ struct ProseInsightParserTests {
         #expect(SummaryService.parsedProseInsights("") == nil)
     }
 }
+
+/// Exercises the production write-up, salvage and final-validation boundaries
+/// together. The only responder is a synthetic throwing closure; no model,
+/// availability check, journal, recording or user file is touched.
+struct SummaryFailureProvenanceTests {
+    @Test(arguments: SyntheticWriteUpFailure.allCases)
+    func salvagedEntriesKeepTheActualFailureThroughFinalValidation(failure: SyntheticWriteUpFailure) async throws {
+        let result = try await SummaryProvenanceFixture.result(after: failure)
+
+        #expect(result.failure == failure.reason)
+        #expect(result.usedFallback)
+        #expect(result.insights.keyPoints == SummaryProvenanceFixture.facts)
+        #expect(result.insights.decisions == SummaryProvenanceFixture.decisions)
+        #expect(result.insights.actionItems == SummaryProvenanceFixture.actions)
+        #expect(result.insights.summary.contains("taken directly from the transcript"))
+        #expect(!result.insights.summary.contains("would not write"))
+        #expect(!result.insights.summary.contains("declined"))
+        // Callers that consume `.insights`, including ordinary first-time
+        // summarization and recovery, still receive the grounded harvest.
+        let firstSummary = result.insights
+        #expect(!firstSummary.summary.isEmpty)
+        #expect(!firstSummary.keyPoints.isEmpty)
+    }
+
+    @MainActor
+    @Test(arguments: SyntheticWriteUpFailure.allCases)
+    func regenerationDoesNotCommitAnyFieldWhenOnlyASalvagedWriteUpReturns(failure: SyntheticWriteUpFailure) async throws {
+        let folder = URL(fileURLWithPath: "/synthetic-summary-provenance/Notes", isDirectory: true)
+        let original = SummaryProvenanceFixture.existingNote(in: folder)
+        let originalBytes = Data(MarkdownCodec.encode(original).utf8)
+        var current = original
+        var commits = 0
+        let summarizer = SyntheticFailingWriteUpSummarizer(failure: failure)
+        let session = SummaryRegenerationSession { note, onStage in
+            await SummaryRegenerator.regenerate(note, using: summarizer, onStage: onStage)
+        }
+        let started = session.start(
+            note: original,
+            library: { .init(directoryURL: folder, generation: 0, notes: [current]) },
+            commit: { replacement in
+                commits += 1
+                current = replacement
+                return replacement
+            }
+        )
+        let task = try #require(started)
+
+        await task.value
+
+        #expect(commits == 0)
+        #expect(current == original)
+        #expect(Data(MarkdownCodec.encode(current).utf8) == originalBytes)
+        #expect(current.personalNotes.utf8.elementsEqual(original.personalNotes.utf8))
+        #expect(current.summary.utf8.elementsEqual(original.summary.utf8))
+        #expect(!session.isRunning)
+        let completion = try #require(session.completion)
+        guard case .retained(let reason) = completion.result else {
+            Issue.record("A salvaged write-up must retain the existing note")
+            return
+        }
+        #expect(reason == failure.reason)
+    }
+
+    @MainActor
+    @Test
+    func aFirstCaptureRetainsItsUsefulScaffoldWhenEnrichmentOnlySalvages() async throws {
+        let draft = MeetingDraft(
+            id: UUID(), title: "Synthetic migration review", sourceApp: "Synthetic",
+            startedAt: Date(timeIntervalSince1970: 1_780_000_000),
+            recordingURL: URL(fileURLWithPath: "/synthetic-summary-provenance/recording.m4a")
+        )
+        let transcript = SummaryProvenanceFixture.transcript
+        let scaffold = MeetingCoordinator.transcriptFirstScaffold(
+            for: draft, transcript: transcript,
+            personalNotes: "  Cafe\u{301} preparation.\n", moments: [MeetingMoment(offset: 10)],
+            endedAt: draft.startedAt.addingTimeInterval(90)
+        )
+        var current = scaffold
+        current.personalNotes += "The user added a detail while waiting.\n"
+        let before = Data(MarkdownCodec.encode(current).utf8)
+        let result = try await SummaryProvenanceFixture.result(after: .busy)
+
+        let after = try #require(MeetingCoordinator.mergingTranscriptFirstSummary(
+            result, scaffold: scaffold, current: current
+        ))
+
+        #expect(result.usedFallback)
+        #expect(after == current)
+        #expect(Data(MarkdownCodec.encode(after).utf8) == before)
+        #expect(after.summary.contains("Transcript highlights:"))
+        #expect(after.transcript == transcript)
+        #expect(after.moments == scaffold.moments)
+        // The harvested candidates remain available in the result, but do
+        // not masquerade as a successful enrichment of this durable scaffold.
+        #expect(result.insights.keyPoints == SummaryProvenanceFixture.facts)
+        #expect(after.summary != result.insights.summary)
+    }
+
+    @Test
+    func aSuccessfulWriteUpRemainsSuccessfulAfterFinalValidation() async throws {
+        let expected = MeetingInsights(
+            title: "October migration", summary: "The team kept the migration window in October.",
+            keyPoints: SummaryProvenanceFixture.facts,
+            decisions: SummaryProvenanceFixture.decisions,
+            actionItems: SummaryProvenanceFixture.actions
+        )
+        let generated = try await SummaryService.writeUpResult(
+            transcript: SummaryProvenanceFixture.transcript, fallbackTitle: "Synthetic meeting",
+            ledger: CandidateLedger(), retryOverflow: true, writing: { expected }
+        )
+        let result = SummaryService.finalizedResult(
+            generated, transcript: SummaryProvenanceFixture.transcript,
+            fallbackTitle: "Synthetic meeting"
+        )
+
+        #expect(result.failure == nil)
+        #expect(!result.usedFallback)
+        #expect(result.insights == expected)
+    }
+
+    @Test(arguments: [false, true])
+    func contextOverflowStillRetriesUntilTheFinalAttempt(retryAllowed: Bool) async throws {
+        let ledger = await SummaryProvenanceFixture.ledger()
+        let overflow = NSError(domain: "FoundationModels.LanguageModelError", code: 0)
+        do {
+            let result = try await SummaryService.writeUpResult(
+                transcript: SummaryProvenanceFixture.transcript, fallbackTitle: "Synthetic meeting",
+                ledger: ledger, retryOverflow: retryAllowed, writing: { throw overflow }
+            )
+            #expect(!retryAllowed)
+            #expect(result.failure == .transcriptTooLong)
+            #expect(result.insights.keyPoints == SummaryProvenanceFixture.facts)
+        } catch {
+            #expect(retryAllowed)
+            #expect(SummaryService.failureReason(for: error) == .transcriptTooLong)
+        }
+    }
+
+    @Test
+    func anEmptyHarvestPropagatesTheOriginalWriteUpFailure() async throws {
+        do {
+            _ = try await SummaryService.writeUpResult(
+                transcript: SummaryProvenanceFixture.transcript, fallbackTitle: "Synthetic meeting",
+                ledger: CandidateLedger(), retryOverflow: false,
+                writing: { throw SyntheticWriteUpFailure.busy.error }
+            )
+            Issue.record("An empty harvest must not become a successful summary")
+        } catch {
+            #expect(SummaryService.failureReason(for: error) == .modelBusy)
+        }
+    }
+
+    @Test
+    func cancellationNeverTurnsIntoSalvagedContent() async throws {
+        let ledger = await SummaryProvenanceFixture.ledger()
+        await #expect(throws: CancellationError.self) {
+            try await SummaryService.writeUpResult(
+                transcript: SummaryProvenanceFixture.transcript, fallbackTitle: "Synthetic meeting",
+                ledger: ledger, retryOverflow: false, writing: { throw CancellationError() }
+            )
+        }
+        await #expect(throws: CancellationError.self) {
+            try await SummaryService.salvagedResult(
+                after: CancellationError(), from: ledger,
+                transcript: SummaryProvenanceFixture.transcript, fallbackTitle: "Synthetic meeting"
+            )
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func finalValidationCannotPromoteAnInvalidAnswerOrEraseItsOriginalFailure(alreadyFailed: Bool) {
+        let invalid = SummaryResult(
+            insights: MeetingInsights(title: "Unusable", summary: "", keyPoints: [], decisions: [], actionItems: []),
+            failure: alreadyFailed ? .modelBusy : nil
+        )
+        let result = SummaryService.finalizedResult(
+            invalid, transcript: SummaryProvenanceFixture.transcript, fallbackTitle: "Synthetic meeting"
+        )
+
+        #expect(result.failure == (alreadyFailed ? .modelBusy : .ungrounded))
+        #expect(result.usedFallback)
+        #expect(!result.insights.summary.isEmpty)
+        #expect(result.insights.summary.contains("Transcript highlights:"))
+    }
+}
+
+enum SyntheticWriteUpFailure: CaseIterable, Sendable {
+    case declined
+    case busy
+    case unreadable
+    case timedOut
+    case unsupportedLanguage
+    case unexpected
+
+    var reason: SummaryService.FailureReason {
+        switch self {
+        case .declined: .declined
+        case .busy: .modelBusy
+        case .unreadable: .malformedAnswer
+        case .timedOut: .timedOut
+        case .unsupportedLanguage: .unsupportedLanguage
+        case .unexpected: .generationFailed
+        }
+    }
+
+    var error: Error {
+        switch self {
+        case .declined: NSError(domain: "FoundationModels.LanguageModelError", code: 2)
+        case .busy: NSError(domain: "FoundationModels.LanguageModelError", code: 1)
+        case .unreadable:
+            NSError(domain: "Synthetic.WriteUp", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Failed to parse generated content."
+            ])
+        case .timedOut: NSError(domain: "FoundationModels.LanguageModelError", code: 8)
+        case .unsupportedLanguage: NSError(domain: "FoundationModels.LanguageModelError", code: 7)
+        case .unexpected: NSError(domain: "Synthetic.WriteUp", code: 99)
+        }
+    }
+}
+
+private enum SummaryProvenanceFixture {
+    static let facts = ["The migration window stays in October"]
+    static let decisions = ["Use the staged rollout for migration"]
+    static let actions = ["Draft the rollout plan before the board review"]
+    static let transcript = [
+        TranscriptSegment(startTime: 0, duration: 30, text: "The team agreed the migration window stays in October."),
+        TranscriptSegment(startTime: 30, duration: 30, text: "I will draft the rollout plan before the board review."),
+        TranscriptSegment(startTime: 60, duration: 30, text: "We decided to use the staged rollout for migration.")
+    ]
+
+    static func ledger() async -> CandidateLedger {
+        let ledger = CandidateLedger()
+        await ledger.add(facts: facts, decisions: decisions, actions: actions)
+        return ledger
+    }
+
+    static func result(
+        after failure: SyntheticWriteUpFailure,
+        transcript: [TranscriptSegment] = Self.transcript,
+        fallbackTitle: String = "Synthetic meeting"
+    ) async throws -> SummaryResult {
+        let ledger = await ledger()
+        let generated = try await SummaryService.writeUpResult(
+            transcript: transcript, fallbackTitle: fallbackTitle,
+            ledger: ledger, retryOverflow: true, writing: { throw failure.error }
+        )
+        return SummaryService.finalizedResult(
+            generated, transcript: transcript, fallbackTitle: fallbackTitle
+        )
+    }
+
+    static func existingNote(in folder: URL) -> MeetingNote {
+        MeetingNote(
+            title: "My trusted migration summary",
+            startedAt: Date(timeIntervalSince1970: 1_780_000_000),
+            endedAt: Date(timeIntervalSince1970: 1_780_000_090), sourceApp: "Synthetic",
+            summary: "A reviewed Cafe\u{301} summary that must remain exact.",
+            keyPoints: ["Keep the reviewed key point"], decisions: ["Keep the reviewed decision"],
+            actionItems: ["Keep the reviewed action"], completedActionItems: ["Keep the reviewed action"],
+            personalNotes: "  Cafe\u{301} pre-reading.\n", transcript: transcript,
+            moments: [MeetingMoment(offset: 10)],
+            sessions: [.init(startedAt: Date(timeIntervalSince1970: 1_780_000_000), endedAt: Date(timeIntervalSince1970: 1_780_000_090))],
+            audioStart: 4,
+            extraSections: [.init(heading: "## Agenda", body: "Keep this handwritten agenda.", anchor: "## summary")],
+            fileURL: folder.appendingPathComponent("review.md"),
+            fileModified: Date(timeIntervalSince1970: 1_780_000_100), fileRevision: Data("synthetic revision".utf8)
+        )
+    }
+}
+
+private struct SyntheticFailingWriteUpSummarizer: FailureReportingSummarizing {
+    let failure: SyntheticWriteUpFailure
+
+    func summarizeReportingFailure(
+        transcript: [TranscriptSegment], fallbackTitle: String,
+        attention: SummaryAttention?, onStage: SummaryStageHandler?
+    ) async -> SummaryResult {
+        await onStage?(.writingUp)
+        do {
+            return try await SummaryProvenanceFixture.result(
+                after: failure, transcript: transcript, fallbackTitle: fallbackTitle
+            )
+        } catch {
+            Issue.record("The synthetic harvest unexpectedly failed: \(error)")
+            return SummaryResult(
+                insights: SummaryService.fallbackInsights(
+                    transcript: transcript, fallbackTitle: fallbackTitle, reason: failure.reason
+                ),
+                failure: failure.reason
+            )
+        }
+    }
+}
+
+/// Numbers in agenda labels and capture timestamps are not evidence for
+/// quantities in the write-up. All data is synthetic; finalization exercises
+/// the production guard without asking an installed model to hallucinate.
+struct SummaryNumericGroundingTests {
+    @Test(arguments: [
+        "A team of 18 individuals worked for 18 minutes, each minute dedicated to designing 40 discussion items.",
+        "The team worked for 18 minutes on the discussion items.",
+        "40 participants reviewed the design discussion.",
+    ])
+    func agendaNumbersCannotBecomeParticipantCountsOrDurations(summary: String) {
+        let result = finalized(summary: summary)
+
+        #expect(result.failure == .ungrounded)
+        #expect(result.usedFallback)
+        #expect(result.insights.summary.contains("Transcript highlights:"))
+        #expect(result.insights.summary != summary)
+    }
+
+    @Test(arguments: ["18 participants", "18 minutes of design review"])
+    func aNumericTitleNeedsItsOwnSpokenSupport(title: String) {
+        let result = finalized(summary: "The team reviewed the design wording.", title: title)
+
+        #expect(result.failure == .ungrounded)
+        #expect(result.insights.title != title)
+    }
+
+    @Test
+    func captureTimingDoesNotCountAsSpokenNumericEvidence() {
+        let transcript = [TranscriptSegment(
+            startTime: 18, duration: 40, text: "The team reviewed the design wording."
+        )]
+        let result = finalized(summary: "The team reviewed the design for 18 minutes.", transcript: transcript)
+
+        #expect(result.failure == .ungrounded)
+    }
+
+    @Test(arguments: [
+        "The discussion included 40 engineers.",
+        "The discussion included 18 designers.",
+        "The budget was 1,200.00.",
+        "The rate was 19%.",
+        "The rate was 1.9.",
+        "The delivery code is AB-42.",
+    ])
+    func digitsCannotBeReassignedOrLoseTheirCurrencyUnitOrCode(summary: String) {
+        let transcript = [TranscriptSegment(startTime: 0, duration: 30, text:
+            "The discussion included 18 engineers. The discussion included 40 designers. "
+                + "The budget was $1,200.00. The rate was 1.9%. The delivery code is ABC-42."
+        )]
+        let result = finalized(summary: summary, transcript: transcript)
+
+        #expect(result.failure == .ungrounded)
+    }
+
+    @Test(arguments: ["$1,200.00", "$ 1,200.00"])
+    func supportedCountsAmountsRatesAndCodesSurviveUnchanged(amount: String) {
+        let summary = "The staffing plan includes 18 engineers; the budget is \(amount). "
+            + "The rate is 1.9%. The delivery code is ABC-42."
+        let transcript = [TranscriptSegment(startTime: 0, duration: 30, text:
+            "The staffing plan includes 18 engineers. The budget is $1,200.00. "
+                + "The rate is 1.9%. The delivery code is ABC-42."
+        )]
+        let result = finalized(summary: summary, title: "Staffing plan for 18 engineers", transcript: transcript)
+
+        #expect(result.failure == nil)
+        #expect(result.insights.summary == summary)
+        #expect(result.insights.title == "Staffing plan for 18 engineers")
+    }
+
+    @Test
+    func faithfulSentencesCanBeJoinedWithoutMovingTheirQuantities() {
+        let transcript = [TranscriptSegment(startTime: 0, duration: 30, text:
+            "The budget is $1,200.00. The rate is 1.9%."
+        )]
+        let summary = "The budget is $1,200.00 and the rate is 1.9%."
+        let result = finalized(summary: summary, transcript: transcript)
+
+        #expect(result.failure == nil)
+        #expect(result.insights.summary == summary)
+    }
+
+    @Test(arguments: [
+        "The release is August 18, 2026.",
+        "The count rose from 18 to 40.",
+        "The reviews are August 18 and 19.",
+    ])
+    func spokenMultiNumberPhrasesKeepTheirDateOrRange(summary: String) {
+        let transcript = [TranscriptSegment(startTime: 0, duration: 30, text: summary)]
+        let result = finalized(summary: summary, transcript: transcript)
+
+        #expect(result.failure == nil)
+        #expect(result.insights.summary == summary)
+    }
+
+    @Test
+    func writtenCurrencyCodesCannotBeReassigned() {
+        let transcript = [TranscriptSegment(startTime: 0, duration: 30, text: "The budget is USD 18.")]
+        let unchanged = finalized(summary: "The budget is USD 18.", transcript: transcript)
+        let changed = finalized(summary: "The budget is EUR 18.", transcript: transcript)
+
+        #expect(unchanged.failure == nil)
+        #expect(changed.failure == .ungrounded)
+        let items = MeetingInsightGrounder.ground(MeetingInsights(
+            title: "Budget review", summary: "The team reviewed the budget.",
+            keyPoints: ["Budget USD 18", "Budget EUR 18"], decisions: [], actionItems: []
+        ), in: transcript)
+        #expect(items.keyPoints == ["Budget USD 18"])
+    }
+
+    @Test
+    func surroundingWordsMustSupportTheNumberEvenWhenItsUnitMatches() {
+        let transcript = [TranscriptSegment(startTime: 0, duration: 30, text:
+            "The exercise lasted 18 minutes. The team reviewed the meeting agenda."
+        )]
+        let changedSubject = finalized(summary: "The meeting took 18 minutes.", transcript: transcript)
+        #expect(changedSubject.failure == .ungrounded)
+    }
+
+    @Test
+    func anExistingFallbackTitleDoesNotNeedToBeSpoken() {
+        let result = finalized(
+            summary: "The team reviewed the design wording.",
+            title: "Design review 2026", fallbackTitle: "Design review 2026"
+        )
+
+        #expect(result.failure == nil)
+    }
+
+    @Test
+    func unsupportedListQuantitiesAreDroppedWithoutLosingSupportedItems() {
+        let transcript = [
+            TranscriptSegment(startTime: 0, duration: 10, text: "Design discussion item 18."),
+            TranscriptSegment(startTime: 10, duration: 10, text: "I will review 40 designs by Friday."),
+            TranscriptSegment(startTime: 20, duration: 10, text: "We agreed to approve 40 designs."),
+        ]
+        let proposed = MeetingInsights(
+            title: "Design review", summary: "The team reviewed the designs.",
+            keyPoints: ["Design discussion item 18", "Design discussion with 18 participants"],
+            decisions: ["Approve 40 designs", "Approve 18 designs"],
+            actionItems: ["Review 40 designs by Friday", "Review 18 designs by Friday"]
+        )
+        let grounded = MeetingInsightGrounder.ground(proposed, in: transcript)
+
+        #expect(grounded.keyPoints == ["Design discussion item 18"])
+        #expect(grounded.decisions == ["Approve 40 designs"])
+        #expect(grounded.actionItems == ["Review 40 designs by Friday"])
+    }
+
+    @MainActor
+    @Test
+    func anUngroundedNumericWriteUpCannotReplaceAnySavedField() async throws {
+        let folder = URL(fileURLWithPath: "/synthetic-numeric-grounding/Notes", isDirectory: true)
+        var original = SummaryProvenanceFixture.existingNote(in: folder)
+        original.transcript = Self.agendaTranscript
+        let originalBytes = Data(MarkdownCodec.encode(original).utf8)
+        var current = original
+        var commits = 0
+        let session = SummaryRegenerationSession { note, onStage in
+            await SummaryRegenerator.regenerate(note, using: SyntheticNumericWriteUpSummarizer(), onStage: onStage)
+        }
+        let started = session.start(
+            note: original,
+            library: { .init(directoryURL: folder, generation: 0, notes: [current]) },
+            commit: { replacement in
+                commits += 1
+                current = replacement
+                return replacement
+            }
+        )
+        let task = try #require(started)
+
+        await task.value
+
+        #expect(commits == 0)
+        #expect(current == original)
+        #expect(Data(MarkdownCodec.encode(current).utf8) == originalBytes)
+        #expect(!session.isRunning)
+        let completion = try #require(session.completion)
+        guard case .retained(let reason) = completion.result else {
+            Issue.record("An ungrounded numeric write-up must retain the existing note")
+            return
+        }
+        #expect(reason == .ungrounded)
+    }
+
+    private static let agendaTranscript = (0..<80).map { index in
+        TranscriptSegment(
+            startTime: Double(index * 3), duration: 3,
+            text: "Design discussion item \(index). Keep the wording clear, verify the local notes and review the next step with the team."
+        )
+    }
+
+    private func finalized(
+        summary: String, title: String = "Design review", fallbackTitle: String = "Synthetic meeting",
+        transcript: [TranscriptSegment] = Self.agendaTranscript
+    ) -> SummaryResult {
+        SummaryService.finalizedResult(
+            SummaryResult(insights: MeetingInsights(
+                title: title, summary: summary, keyPoints: [], decisions: [], actionItems: []
+            ), failure: nil),
+            transcript: transcript, fallbackTitle: fallbackTitle
+        )
+    }
+}
+
+private struct SyntheticNumericWriteUpSummarizer: FailureReportingSummarizing {
+    func summarizeReportingFailure(
+        transcript: [TranscriptSegment], fallbackTitle: String,
+        attention: SummaryAttention?, onStage: SummaryStageHandler?
+    ) async -> SummaryResult {
+        await onStage?(.writingUp)
+        return SummaryService.finalizedResult(
+            SummaryResult(insights: MeetingInsights(
+                title: "Design review",
+                summary: "A team of 18 individuals worked for 18 minutes, each minute dedicated to designing 40 discussion items.",
+                keyPoints: [], decisions: [], actionItems: []
+            ), failure: nil),
+            transcript: transcript, fallbackTitle: fallbackTitle
+        )
+    }
+}

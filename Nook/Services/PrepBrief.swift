@@ -70,6 +70,8 @@ struct PrepBrief: Identifiable, Hashable, Sendable {
     let startDate: Date
     /// Matching notes, most recent sitting first.
     let sittings: [MeetingNote]
+    /// Matching copies stay available for review, without becoming history.
+    let omittedNoteCount: Int
 
     var id: String { seriesKey }
 
@@ -133,7 +135,11 @@ enum PrepBriefBuilder {
         // do internally on every call.
         let key = SeriesMatcher.seriesKey(for: eventTitle)
         guard !key.isEmpty else { return nil }
-        let sittings = notes
+        let partition = LibraryNoteAggregation.partition(notes)
+        let omittedNoteCount = partition.omitted.filter {
+            $0.kind != .digest && SeriesMatcher.seriesKey(for: $0.title) == key
+        }.count
+        let sittings = partition.eligible
             .filter { note in
                 guard note.kind != .digest else { return false }
                 let noteKey = noteSeriesKeys?[note.id]
@@ -141,12 +147,15 @@ enum PrepBriefBuilder {
                 return !noteKey.isEmpty && noteKey == key
             }
             .sorted { $0.startedAt > $1.startedAt }
-        guard !sittings.isEmpty else { return nil }
+        // All history may be ambiguous. Keep a warning surface instead of
+        // silently suggesting this meeting has never happened before.
+        guard !sittings.isEmpty || omittedNoteCount > 0 else { return nil }
         return PrepBrief(
             seriesKey: key,
             eventTitle: eventTitle,
             startDate: startDate,
-            sittings: sittings
+            sittings: sittings,
+            omittedNoteCount: omittedNoteCount
         )
     }
 }
@@ -161,9 +170,10 @@ actor SeriesKeyCache {
     /// Every note's series key, computed fresh only for notes that are new
     /// or whose title changed since the last call.
     func keys(for notes: [MeetingNote]) -> [MeetingNote.ID: String] {
+        let eligible = LibraryNoteAggregation.partition(notes).eligible
         var result: [MeetingNote.ID: String] = [:]
-        result.reserveCapacity(notes.count)
-        for note in notes {
+        result.reserveCapacity(eligible.count)
+        for note in eligible {
             if let cached = entries[note.id], cached.title == note.title {
                 result[note.id] = cached.key
             } else {
@@ -174,7 +184,7 @@ actor SeriesKeyCache {
         }
         // Notes no longer in the library have nothing left to reuse their
         // entry, so drop it rather than growing this forever.
-        let currentIDs = Set(notes.map(\.id))
+        let currentIDs = Set(eligible.map(\.id))
         entries = entries.filter { currentIDs.contains($0.key) }
         return result
     }
@@ -201,7 +211,9 @@ final class PrepBriefController: ObservableObject {
             guard let self else { return }
             guard let event else {
                 buildGeneration += 1
-                current = nil
+                // Invalidate a pending build even if no brief is visible,
+                // but do not redraw the Library for an unchanged absence.
+                if current != nil { current = nil }
                 return
             }
             buildGeneration += 1

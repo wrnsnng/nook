@@ -3,20 +3,40 @@ import Foundation
 @MainActor
 final class MarkdownDraftController: ObservableObject {
     @Published private(set) var noteID: MeetingNote.ID?
-    @Published var rawMarkdown = ""
+    @Published var rawMarkdown = "" {
+        didSet {
+            guard !rawMarkdown.utf8.elementsEqual(oldValue.utf8) else { return }
+            if statusMessage == "Saved" { statusMessage = nil }
+            checkpointIfNeeded()
+        }
+    }
     @Published private(set) var originalMarkdown = ""
     @Published var statusMessage: String?
 
-    /// When the draft was loaded from disk. A file modified after this point
-    /// was changed by something other than Nook.
-    private var loadedModificationDate: Date?
+    /// Comes from the same byte read as `originalMarkdown`, and stays fixed
+    /// across reloads while this editor has changes.
+    private var loadedFileRevision: Data?
+    private let recovery: DraftJournal?
+    private var owner: EditorDraftOwner?
+    private var loadedLibraryIdentity: LibraryNoteIdentity?
+    private var recoveryID = UUID()
+    private var draftCreatedAt = Date()
+    private var isChangingContext = false
+
+    init(recovery: DraftJournal? = nil) {
+        self.recovery = recovery
+    }
+
+    var libraryIdentity: LibraryNoteIdentity? { loadedLibraryIdentity }
 
     var hasChanges: Bool {
-        noteID != nil && rawMarkdown != originalMarkdown
+        noteID != nil && !rawMarkdown.utf8.elementsEqual(originalMarkdown.utf8)
     }
 
     func prepare(for note: MeetingNote, store: MarkdownStore) {
-        guard noteID != note.id else { return }
+        let incoming = EditorDraftOwner(note: note, libraryURL: store.storageURL)
+        guard owner != incoming else { return }
+        recovery?.flushSynchronously()
         guard !hasChanges else {
             statusMessage = "Save or discard the other meeting’s edit before opening this Markdown source."
             return
@@ -28,7 +48,7 @@ final class MarkdownDraftController: ObservableObject {
         // `prepare` is the only operation allowed to switch notes. A save or
         // model callback from a view that just disappeared must not redirect
         // the shared editor underneath the newly selected note.
-        guard noteID == note.id else { return }
+        guard owner == EditorDraftOwner(note: note, libraryURL: store.storageURL) else { return }
         guard !hasChanges else {
             statusMessage = "Save or revert Markdown edits before refreshing this source."
             return
@@ -38,11 +58,20 @@ final class MarkdownDraftController: ObservableObject {
 
     private func load(for note: MeetingNote, store: MarkdownStore) {
         do {
-            let markdown = try store.rawMarkdown(for: note)
+            let snapshot = try store.markdownSnapshot(for: note)
+            let markdown = snapshot.markdown
+            // Loading is one context transition. Observers must never pair
+            // the new source with the previous note's identity or baseline.
+            isChangingContext = true
+            defer { isChangingContext = false }
+            owner = EditorDraftOwner(note: note, libraryURL: store.storageURL)
+            loadedLibraryIdentity = note.libraryIdentity
             noteID = note.id
             rawMarkdown = markdown
             originalMarkdown = markdown
-            loadedModificationDate = Self.modificationDate(of: note.fileURL)
+            loadedFileRevision = snapshot.revision
+            recoveryID = UUID()
+            draftCreatedAt = Date()
             statusMessage = nil
         } catch {
             statusMessage = "Nook couldn’t read this file, so the editor shows nothing rather than something stale."
@@ -50,7 +79,7 @@ final class MarkdownDraftController: ObservableObject {
     }
 
     func save(note: MeetingNote, store: MarkdownStore) throws {
-        guard noteID == note.id else {
+        guard noteID == note.id, let owner, owner.matches(note) else {
             statusMessage = "This Markdown draft belongs to a different note and was not saved."
             throw MarkdownDraftError.wrongNote
         }
@@ -58,31 +87,109 @@ final class MarkdownDraftController: ObservableObject {
         // open while another app changes the one on disk. Saving would then
         // overwrite edits nobody in this window has seen, so it stops and
         // asks for a refresh instead.
-        if let current = Self.modificationDate(of: note.fileURL),
-           let loaded = loadedModificationDate,
-           abs(current.timeIntervalSince(loaded)) > 1 {
-            statusMessage = "This file changed outside Nook. Refresh to load it, then reapply your edits."
-            return
+        do {
+            try owner.validate(note: note, store: store)
+            // A source edit cannot change which library entry owns this file.
+            // Otherwise the store would keep the old entry and upsert this
+            // file under another note's UUID while the draft kept its old owner.
+            if let decoded = MarkdownCodec.decode(rawMarkdown), decoded.id != owner.noteID {
+                throw MarkdownStoreError.noteIdentityChanged
+            }
+            if let recovery, let path = owner.filePath {
+                var intent = checkpoint(owner: owner, recovery: recovery)
+                intent.completion = DraftCompletion(
+                    targetPath: path,
+                    noteID: owner.noteID,
+                    revision: MeetingNote.contentRevision(Data(rawMarkdown.utf8))
+                )
+                // A failed backup must not prevent an ordinary Save. The
+                // journal keeps its warning and previous complete checkpoint.
+                try? recovery.persistSynchronously(intent)
+            }
+            try store.saveRawMarkdown(
+                rawMarkdown,
+                for: note,
+                expectedRevision: loadedFileRevision
+            )
+            // The store's write is not yet evidence that these exact source
+            // bytes can be recovered from the intended destination.
+            let persisted = try store.markdownSnapshot(for: note)
+            guard persisted.markdown.utf8.elementsEqual(rawMarkdown.utf8) else {
+                throw MarkdownStoreError.saveReadBackFailed
+            }
+            loadedFileRevision = persisted.revision
+        } catch {
+            statusMessage = error.localizedDescription
+            // Save-and-quit treats a normal return as success. A refused
+            // write must throw so quitting cannot discard this live draft.
+            throw error
         }
-        try store.saveRawMarkdown(rawMarkdown, for: note)
+        recovery?.resolve(recoveryID)
         originalMarkdown = rawMarkdown
-        loadedModificationDate = Self.modificationDate(of: note.fileURL)
+        recoveryID = UUID()
+        draftCreatedAt = Date()
         statusMessage = "Saved"
     }
 
     func discardChanges() {
+        recovery?.resolve(recoveryID)
+        isChangingContext = true
         rawMarkdown = originalMarkdown
+        isChangingContext = false
+        recoveryID = UUID()
+        draftCreatedAt = Date()
         statusMessage = nil
     }
 
-    private static func modificationDate(of url: URL?) -> Date? {
-        guard let url,
-              let attributes = try? FileManager.default.attributesOfItem(
-                  atPath: url.path
-              ) else {
-            return nil
+    /// Keep the live draft bound to the old folder until it is deliberately
+    /// saved or discarded. A copied UUID in a new folder is not its owner.
+    func libraryWillChange() {
+        checkpointIfNeeded()
+        recovery?.flushSynchronously()
+    }
+
+    /// Called only after the original file was successfully moved to Trash.
+    func noteWasDeleted(_ note: MeetingNote) {
+        guard owner?.matches(note) == true else { return }
+        recovery?.resolve(recoveryID)
+        isChangingContext = true
+        owner = nil
+        loadedLibraryIdentity = nil
+        noteID = nil
+        rawMarkdown = ""
+        originalMarkdown = ""
+        loadedFileRevision = nil
+        isChangingContext = false
+        recoveryID = UUID()
+        draftCreatedAt = Date()
+        statusMessage = nil
+    }
+
+    private func checkpointIfNeeded() {
+        guard !isChangingContext, let recovery, let owner else { return }
+        guard hasChanges else {
+            recovery.resolve(recoveryID)
+            recoveryID = UUID()
+            draftCreatedAt = Date()
+            return
         }
-        return attributes[.modificationDate] as? Date
+        recovery.checkpoint(checkpoint(owner: owner, recovery: recovery))
+    }
+
+    private func checkpoint(owner: EditorDraftOwner, recovery: DraftJournal) -> DraftCheckpoint {
+        DraftCheckpoint(
+            id: recoveryID,
+            kind: .markdown,
+            libraryPath: owner.libraryPath,
+            originalFilePath: owner.filePath,
+            noteID: owner.noteID,
+            title: owner.title,
+            text: rawMarkdown,
+            baseline: originalMarkdown,
+            baselineRevision: loadedFileRevision,
+            createdAt: draftCreatedAt,
+            sessionID: recovery.sessionID
+        )
     }
 }
 

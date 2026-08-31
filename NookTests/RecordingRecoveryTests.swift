@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import Testing
 @testable import Nook
@@ -8,6 +9,41 @@ import Testing
 /// copy of that conversation.
 @MainActor
 struct RecordingRecoveryTests {
+    @Test
+    func recoveringManyPausedSegmentsPreservesConversationOrder() {
+        let id = UUID()
+        let directory = URL(fileURLWithPath: "/synthetic/recordings")
+        let first = directory.appendingPathComponent("\(id.uuidString).mp4")
+        let parts = (1...12).map {
+            directory.appendingPathComponent("\(id.uuidString).part-\($0).mp4")
+        }
+        let recording = OrphanedRecording(
+            id: id,
+            urls: Array(parts.reversed()) + [first],
+            recordedAt: .distantPast,
+            byteSize: 0
+        )
+
+        #expect(recording.captures == [first] + parts)
+    }
+
+    @Test
+    func recoveryKeepsNumericOrderWhenTheFirstCaptureIsMissing() {
+        let id = UUID()
+        let directory = URL(fileURLWithPath: "/synthetic/recordings")
+        let parts = [2, 3, 10, 12].map {
+            directory.appendingPathComponent("\(id.uuidString).part-\($0).mp4")
+        }
+        let recording = OrphanedRecording(
+            id: id,
+            urls: Array(parts.reversed()),
+            recordedAt: .distantPast,
+            byteSize: 0
+        )
+
+        #expect(recording.captures == parts)
+    }
+
     private func temporaryDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(
@@ -27,6 +63,19 @@ struct RecordingRecoveryTests {
         })
         store.storageURL = directory
         return store
+    }
+
+    private func reloadAndWait(_ store: MarkdownStore) async {
+        var observation: AnyCancellable?
+        await withCheckedContinuation { continuation in
+            observation = store.$isLoading
+                .dropFirst()
+                .filter { !$0 }
+                .prefix(1)
+                .sink { _ in continuation.resume() }
+            store.reload()
+        }
+        observation?.cancel()
     }
 
     @Test
@@ -114,10 +163,10 @@ struct RecordingRecoveryTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = store(in: directory)
         var trashedURLs: [URL] = []
-        let recovery = RecordingRecovery(store: store) { url in
+        let recovery = RecordingRecovery(store: store, trashItem: { url in
             trashedURLs.append(url)
             try FileManager.default.removeItem(at: url)
-        }
+        })
 
         let id = UUID()
         let capture = try writeRecording(
@@ -146,9 +195,9 @@ struct RecordingRecoveryTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = store(in: directory)
         struct TrashUnavailable: Error {}
-        let recovery = RecordingRecovery(store: store) { _ in
+        let recovery = RecordingRecovery(store: store, trashItem: { _ in
             throw TrashUnavailable()
-        }
+        })
 
         let id = UUID()
         let capture = try writeRecording(
@@ -210,6 +259,105 @@ struct RecordingRecoveryTests {
     }
 
     // MARK: Notes typed during a meeting
+
+    @Test(arguments: [false, true])
+    func liveNotesStayBesideCapturedAudioAfterChangingLibraries(isPaused: Bool) async throws {
+        let directory = try temporaryDirectory()
+        let otherLibrary = try temporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+            try? FileManager.default.removeItem(at: otherLibrary)
+        }
+        let store = store(in: directory)
+        let coordinator = MeetingCoordinator(store: store, detector: MeetingDetector())
+        let id = coordinator.startDraftForTesting()
+        let recordings = directory.appendingPathComponent(".recordings", isDirectory: true)
+        let audio = try writeRecording(id, extensionName: "mp4", in: recordings)
+        let draft = MeetingDraft(
+            id: id, title: "Synthetic review", sourceApp: "Manual",
+            startedAt: .now, recordingURL: audio
+        )
+        coordinator.liveNotes = "Before the folder change."
+        let previousWrite = try #require(coordinator.liveNotesSaveForTesting)
+        store.storageURL = otherLibrary
+        coordinator.setPreviewState(
+            phase: .recording(title: draft.title, startedAt: draft.startedAt),
+            elapsed: 10, liveTranscript: .empty, audioLevel: 0, isPaused: isPaused
+        )
+        let exactNotes = " \nCafe\u{301} review.\n\n  Preserve this indentation.\t\n"
+        coordinator.liveNotes = exactNotes
+        await previousWrite.value
+        await coordinator.liveNotesSaveForTesting?.value
+
+        let notesURL = MeetingCoordinator.liveNotesURL(for: draft)
+        #expect(try Data(contentsOf: notesURL) == Data(exactNotes.utf8))
+        #expect(MeetingCoordinator.recoverableLiveNotes(for: id, in: recordings)
+            .utf8.elementsEqual(exactNotes.utf8))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: otherLibrary.path).isEmpty)
+
+        // Cleanup must use the same captured owner, even if another folder
+        // happens to contain a file with that UUID. No actual Trash is used.
+        let otherNotes = MeetingCoordinator.liveNotesURL(for: id, in: store.recordingsDirectory())
+        let unrelated = Data("Other library's independent copy.".utf8)
+        try unrelated.write(to: otherNotes)
+        coordinator.liveNotes = "Queued just before this session ends."
+        let pendingWrite = try #require(coordinator.liveNotesSaveForTesting)
+        coordinator.clearDraftForTesting()
+        #expect(RecordingArtifactCleanup.removeArtifacts(for: draft).isEmpty)
+        await pendingWrite.value
+
+        #expect(!FileManager.default.fileExists(atPath: notesURL.path))
+        #expect(!FileManager.default.fileExists(atPath: audio.path))
+        #expect(try Data(contentsOf: otherNotes) == unrelated)
+    }
+
+    @Test
+    func aNewSessionUsesItsOwnFolderWithoutRevivingThePreviousSidecar() async throws {
+        let directory = try temporaryDirectory()
+        let otherLibrary = try temporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+            try? FileManager.default.removeItem(at: otherLibrary)
+        }
+        let store = store(in: directory)
+        let coordinator = MeetingCoordinator(store: store, detector: MeetingDetector())
+        let previousID = coordinator.startDraftForTesting()
+        coordinator.liveNotes = "Previous pending session."
+        let previousWrite = try #require(coordinator.liveNotesSaveForTesting)
+        coordinator.clearDraftForTesting()
+        store.storageURL = otherLibrary
+        let nextID = coordinator.startDraftForTesting()
+        coordinator.liveNotes = "This session belongs to the new folder."
+        await previousWrite.value
+        await coordinator.liveNotesSaveForTesting?.value
+
+        #expect(previousID != nextID)
+        let previousDirectory = directory.appendingPathComponent(".recordings", isDirectory: true)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: previousDirectory.path).isEmpty)
+        #expect(MeetingCoordinator.recoverableLiveNotes(
+            for: nextID, in: otherLibrary.appendingPathComponent(".recordings", isDirectory: true)
+        ) == coordinator.liveNotes)
+        coordinator.clearDraftForTesting()
+    }
+
+    @Test
+    func canonicallyEquivalentLiveNotesStillCheckpointTheirChangedBytes() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        let coordinator = MeetingCoordinator(store: store, detector: MeetingDetector())
+        let id = coordinator.startDraftForTesting()
+        coordinator.liveNotes = "Caf\u{e9} planning"
+        await coordinator.liveNotesSaveForTesting?.value
+        coordinator.liveNotes = "Cafe\u{301} planning"
+        await coordinator.liveNotesSaveForTesting?.value
+
+        let recovered = MeetingCoordinator.recoverableLiveNotes(
+            for: id, in: directory.appendingPathComponent(".recordings", isDirectory: true)
+        )
+        #expect(recovered.utf8.elementsEqual(coordinator.liveNotes.utf8))
+        coordinator.clearDraftForTesting()
+    }
 
     @Test
     func notesTypedDuringAMeetingAreOnDiskForRecoveryToFind() throws {
@@ -277,6 +425,287 @@ struct RecordingRecoveryTests {
     }
 
     // MARK: What a recovery leaves behind
+
+    @Test(arguments: RecordingRecoveryPausePoint.allCases, [false, true])
+    func changingLibrariesDuringRecoveryKeepsEverySourceInItsOriginalFolder(
+        pausePoint: RecordingRecoveryPausePoint, switchBack: Bool
+    ) async throws {
+        let directory = try temporaryDirectory()
+        let otherLibrary = try temporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+            try? FileManager.default.removeItem(at: otherLibrary)
+        }
+        let store = store(in: directory)
+        let recordings = store.recordingsDirectory()
+        let id = UUID()
+        let capture = try writeRecording(id, extensionName: "mp4", in: recordings)
+        let originalCapture = try Data(contentsOf: capture)
+        let sidecar = MeetingCoordinator.liveNotesURL(for: id, in: recordings)
+        let exactNotes = " \nCafe\u{301} discussion.\n  Keep my own words.\n"
+        MeetingCoordinator.writeLiveNotes(exactNotes, to: sidecar)
+        let extracted = recordings.appendingPathComponent("\(id.uuidString).m4a")
+        let gate = RecordingRecoveryGate()
+        var calls: [RecordingRecoveryPausePoint] = []
+        let recovery = RecordingRecovery(
+            store: store,
+            extractAudio: { sources, destination in
+                calls.append(.extraction)
+                #expect(sources.map { $0.resolvingSymlinksInPath() } == [capture.resolvingSymlinksInPath()])
+                #expect(destination.standardizedFileURL == extracted.standardizedFileURL)
+                try Data("Synthetic extracted audio".utf8).write(to: destination)
+                if pausePoint == .extraction { await gate.hold() }
+            },
+            transcribeAudio: { url, locale in
+                calls.append(.transcription)
+                #expect(url.standardizedFileURL == extracted.standardizedFileURL)
+                #expect(locale == "en-AU")
+                if pausePoint == .transcription { await gate.hold() }
+                return [TranscriptSegment(startTime: 0, duration: 3, text: "Synthetic review content.")]
+            },
+            summarizeTranscript: { _, title in
+                calls.append(.summary)
+                if pausePoint == .summary { await gate.hold() }
+                return MeetingInsights(
+                    title: title, summary: "Synthetic summary.",
+                    keyPoints: [], decisions: [], actionItems: []
+                )
+            }
+        )
+        recovery.scan()
+        let orphan = try #require(recovery.orphans.first { $0.id == id })
+        recovery.recover(orphan, localeIdentifier: "en-AU")
+        let work = try #require(recovery.recoveryTaskForTesting)
+        await gate.waitUntilHeld()
+        store.storageURL = otherLibrary
+        if switchBack { store.storageURL = directory }
+        gate.release()
+        await work.value
+
+        #expect(!recovery.isWorking)
+        #expect(recovery.message == RecordingRecovery.RecoveryError.recordingLocationChanged.localizedDescription)
+        #expect(calls == Array(RecordingRecoveryPausePoint.allCases.prefix(pausePoint.rawValue + 1)))
+        #expect(store.notes.isEmpty)
+        #expect(try Data(contentsOf: capture) == originalCapture)
+        #expect(try Data(contentsOf: sidecar) == Data(exactNotes.utf8))
+        #expect(try Data(contentsOf: extracted) == Data("Synthetic extracted audio".utf8))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == [".recordings"])
+        #expect(try FileManager.default.contentsOfDirectory(atPath: otherLibrary.path).isEmpty)
+    }
+
+    @Test(arguments: RecordingRecoveryPausePoint.allCases)
+    func restoringANoteDuringRecoveryKeepsItsExactWritingAndEveryRecordingSource(
+        pausePoint: RecordingRecoveryPausePoint
+    ) async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = MarkdownStore(noteLoader: { url, cache in
+            guard url.standardizedFileURL == directory.standardizedFileURL else {
+                return .success((notes: [], issues: []))
+            }
+            return MarkdownStore.loadNotes(in: url, cache: cache)
+        })
+        store.storageURL = directory
+        let recordings = store.recordingsDirectory()
+        let id = UUID()
+        let capture = try writeRecording(id, extensionName: "mp4", in: recordings)
+        let originalCapture = try Data(contentsOf: capture)
+        let sidecar = MeetingCoordinator.liveNotesURL(for: id, in: recordings)
+        let strandedNotes = " \nCafe\u{301} discussion.\n  These are still recoverable.\n"
+        MeetingCoordinator.writeLiveNotes(strandedNotes, to: sidecar)
+        let extracted = recordings.appendingPathComponent("\(id.uuidString).m4a")
+        let extractedBytes = Data("Synthetic extracted audio".utf8)
+        let gate = RecordingRecoveryGate()
+        var calls: [RecordingRecoveryPausePoint] = []
+        let recovery = RecordingRecovery(
+            store: store,
+            extractAudio: { _, destination in
+                calls.append(.extraction)
+                try extractedBytes.write(to: destination)
+                if pausePoint == .extraction { await gate.hold() }
+            },
+            transcribeAudio: { _, _ in
+                calls.append(.transcription)
+                if pausePoint == .transcription { await gate.hold() }
+                return [TranscriptSegment(startTime: 0, duration: 3, text: "Synthetic review content.")]
+            },
+            summarizeTranscript: { _, _ in
+                calls.append(.summary)
+                if pausePoint == .summary { await gate.hold() }
+                return MeetingInsights(
+                    title: "Recovery must not replace this note", summary: "Synthetic replacement summary.",
+                    keyPoints: [], decisions: [], actionItems: []
+                )
+            }
+        )
+        recovery.scan()
+        recovery.recover(try #require(recovery.orphans.first { $0.id == id }), localeIdentifier: "en-AU")
+        let work = try #require(recovery.recoveryTaskForTesting)
+        await gate.waitUntilHeld()
+        defer { gate.release() }
+
+        // Simulate restoring the original file in Finder, then the normal
+        // async reload making its URL and exact revision available to save.
+        let restored = MeetingNote(
+            id: id, title: "Restored original",
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            endedAt: Date(timeIntervalSince1970: 1_700_000_060), sourceApp: "Manual",
+            summary: "The restored summary belongs to the user.",
+            personalNotes: "My restored Cafe\u{301} notes.\n\n  Preserve this indentation."
+        )
+        let restoredURL = directory.appendingPathComponent("Restored original.md")
+        let restoredBytes = Data(MarkdownCodec.encode(restored).utf8)
+        try restoredBytes.write(to: restoredURL)
+        await reloadAndWait(store)
+        let loaded = try #require(store.notes.first { $0.id == id })
+        #expect(loaded.fileRevision == MeetingNote.contentRevision(restoredBytes))
+
+        gate.release()
+        await work.value
+
+        #expect(!recovery.isWorking)
+        #expect(recovery.message == RecordingRecovery.RecoveryError.noteAlreadySaved.localizedDescription)
+        #expect(calls == Array(RecordingRecoveryPausePoint.allCases.prefix(pausePoint.rawValue + 1)))
+        #expect(store.notes == [loaded])
+        #expect(store.notes.first?.personalNotes.utf8.elementsEqual(restored.personalNotes.utf8) == true)
+        #expect(try Data(contentsOf: restoredURL) == restoredBytes)
+        #expect(try Data(contentsOf: capture) == originalCapture)
+        #expect(try Data(contentsOf: extracted) == extractedBytes)
+        #expect(try Data(contentsOf: sidecar) == Data(strandedNotes.utf8))
+        #expect(recovery.cleanupFailures.isEmpty)
+        #expect(Set(try FileManager.default.contentsOfDirectory(atPath: directory.path))
+            == [".recordings", "Restored original.md"])
+    }
+
+    @Test(arguments: [false, true])
+    func aSavedNoteStopsAStaleRecoveryBeforeAnyProcessing(saveBeforeInvocation: Bool) async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        let capture = try writeRecording(UUID(), extensionName: "mp4", in: store.recordingsDirectory())
+        let originalCapture = try Data(contentsOf: capture)
+        let recovery = RecordingRecovery(
+            store: store,
+            extractAudio: { _, _ in Issue.record("A saved note must stop recovery before extraction.") },
+            transcribeAudio: { _, _ in
+                Issue.record("A saved note must stop recovery before transcription.")
+                return []
+            },
+            summarizeTranscript: { _, title in
+                Issue.record("A saved note must stop recovery before summarization.")
+                return MeetingInsights(title: title, summary: "", keyPoints: [], decisions: [], actionItems: [])
+            }
+        )
+        recovery.scan()
+        let orphan = try #require(recovery.orphans.first)
+        let restored = MeetingNote(
+            id: orphan.id, title: "Already restored",
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            endedAt: Date(timeIntervalSince1970: 1_700_000_060),
+            sourceApp: "Manual", summary: "User's original summary.",
+            personalNotes: "My own notes."
+        )
+        if saveBeforeInvocation { _ = try store.save(restored) }
+        recovery.recover(orphan, localeIdentifier: "en-AU")
+        let work = recovery.recoveryTaskForTesting
+        if !saveBeforeInvocation { _ = try store.save(restored) }
+        let saved = try #require(store.notes.first { $0.id == orphan.id })
+        let savedBytes = try Data(contentsOf: #require(saved.fileURL))
+        await work?.value
+
+        #expect(!recovery.isWorking)
+        #expect(recovery.recoveryTaskForTesting == nil)
+        #expect(recovery.message == RecordingRecovery.RecoveryError.noteAlreadySaved.localizedDescription)
+        #expect(store.notes == [saved])
+        #expect(try Data(contentsOf: #require(saved.fileURL)) == savedBytes)
+        #expect(try Data(contentsOf: capture) == originalCapture)
+        #expect(recovery.cleanupFailures.isEmpty)
+    }
+
+    @Test(arguments: [false, true])
+    func aStaleRecoverySelectionCannotStartInAnotherLibrary(switchBeforeInvocation: Bool) async throws {
+        let directory = try temporaryDirectory()
+        let otherLibrary = try temporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+            try? FileManager.default.removeItem(at: otherLibrary)
+        }
+        let store = store(in: directory)
+        let capture = try writeRecording(UUID(), extensionName: "mp4", in: store.recordingsDirectory())
+        let recovery = RecordingRecovery(
+            store: store,
+            extractAudio: { _, _ in Issue.record("A stale selection must not reach extraction.") },
+            transcribeAudio: { _, _ in
+                Issue.record("A stale selection must not reach transcription.")
+                return []
+            },
+            summarizeTranscript: { _, title in
+                Issue.record("A stale selection must not reach the model.")
+                return MeetingInsights(title: title, summary: "", keyPoints: [], decisions: [], actionItems: [])
+            }
+        )
+        recovery.scan()
+        let orphan = try #require(recovery.orphans.first)
+        if switchBeforeInvocation { store.storageURL = otherLibrary }
+        recovery.recover(orphan, localeIdentifier: "en-AU")
+        let work = recovery.recoveryTaskForTesting
+        if !switchBeforeInvocation { store.storageURL = otherLibrary }
+        await work?.value
+
+        #expect(recovery.recoveryTaskForTesting == nil)
+        #expect(!recovery.isWorking)
+        #expect(recovery.message == RecordingRecovery.RecoveryError.recordingLocationChanged.localizedDescription)
+        #expect(FileManager.default.fileExists(atPath: capture.path))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: otherLibrary.path).isEmpty)
+    }
+
+    @Test
+    func reassigningTheSameLibraryStillRecoversTypedNotesAndCleansTheirSidecar() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        let recordings = store.recordingsDirectory()
+        let id = UUID()
+        let capture = try writeRecording(id, extensionName: "mp4", in: recordings)
+        let audio = try writeRecording(id, extensionName: "m4a", in: recordings)
+        let sidecar = MeetingCoordinator.liveNotesURL(for: id, in: recordings)
+        let exactNotes = "Cafe\u{301} discussion.\n\n  Keep my indentation."
+        MeetingCoordinator.writeLiveNotes(exactNotes, to: sidecar)
+        let gate = RecordingRecoveryGate()
+        let recovery = RecordingRecovery(
+            store: store,
+            extractAudio: { _, _ in Issue.record("Existing extracted audio must be reused.") },
+            transcribeAudio: { url, _ in
+                #expect(url.standardizedFileURL == audio.standardizedFileURL)
+                return [TranscriptSegment(startTime: 0, duration: 3, text: "Synthetic review content.")]
+            },
+            summarizeTranscript: { _, _ in
+                await gate.hold()
+                return MeetingInsights(
+                    title: "Synthetic recovery", summary: "Synthetic summary.",
+                    keyPoints: [], decisions: [], actionItems: []
+                )
+            }
+        )
+        recovery.scan()
+        recovery.recover(try #require(recovery.orphans.first { $0.id == id }), localeIdentifier: "en-AU")
+        let work = try #require(recovery.recoveryTaskForTesting)
+        await gate.waitUntilHeld()
+        store.storageURL = directory
+        gate.release()
+        await work.value
+
+        let saved = try #require(store.notes.first { $0.id == id })
+        let noteURL = try #require(saved.fileURL)
+        #expect(noteURL.deletingLastPathComponent().standardizedFileURL == directory.standardizedFileURL)
+        #expect(saved.personalNotes.utf8.elementsEqual(exactNotes.utf8))
+        let markdown = try String(contentsOf: noteURL, encoding: .utf8)
+        let persisted = try #require(MarkdownCodec.decode(markdown, fileURL: noteURL))
+        #expect(persisted.personalNotes.utf8.elementsEqual(exactNotes.utf8))
+        #expect(!FileManager.default.fileExists(atPath: sidecar.path))
+        #expect(!FileManager.default.fileExists(atPath: capture.path))
+        #expect(recovery.orphans.isEmpty)
+    }
 
     private func recoveryCleanup(
         keepAudio: Bool,
@@ -412,5 +841,259 @@ struct RecordingRecoveryTests {
         #expect(failures == [second])
         #expect(!FileManager.default.fileExists(atPath: first.path))
         #expect(FileManager.default.fileExists(atPath: second.path))
+    }
+
+    // MARK: Automatic retention must not consume recovery input
+
+    private var retentionNow: Date {
+        Date(timeIntervalSince1970: 1_800_000_000)
+    }
+
+    private func completedNote(in store: MarkdownStore) throws -> MeetingNote {
+        try store.save(MeetingNote(
+            title: "Finished meeting \(UUID().uuidString)",
+            startedAt: retentionNow.addingTimeInterval(-3_600),
+            endedAt: retentionNow,
+            sourceApp: "Synthetic",
+            summary: "A safely saved conversation."
+        ))
+    }
+
+    private func expire(_ urls: [URL]) throws {
+        for url in urls {
+            try FileManager.default.setAttributes(
+                [.modificationDate: retentionNow.addingTimeInterval(-100 * 86_400)],
+                ofItemAtPath: url.path
+            )
+        }
+    }
+
+    @Test
+    func retentionExpiresCompletedAudioButPreservesRecoverySources() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        let saved = try completedNote(in: store)
+        let recordings = store.recordingsDirectory()
+        let keptAudio = try writeRecording(saved.id, extensionName: "m4a", in: recordings)
+        let orphanID = UUID()
+        let sources = try ["m4a", "mp4", "part-2.mp4", "part-12.mp4"].map {
+            try writeRecording(orphanID, extensionName: $0, in: recordings)
+        }
+        let unknown = recordings.appendingPathComponent("unrecognized.m4a")
+        try Data("unclassified audio".utf8).write(to: unknown)
+        try expire([keptAudio, unknown] + sources)
+        var trashed: [URL] = []
+
+        let removed = AudioRetention.sweep(
+            store: store, now: retentionNow, enabled: true, retentionDays: 90
+        ) { url in
+            trashed.append(url)
+            try FileManager.default.removeItem(at: url)
+        }
+
+        #expect(removed == [keptAudio.lastPathComponent])
+        #expect(trashed.map(\.lastPathComponent) == removed)
+        #expect(!FileManager.default.fileExists(atPath: keptAudio.path))
+        #expect(([unknown] + sources).allSatisfy {
+            FileManager.default.fileExists(atPath: $0.path)
+        })
+        #expect(FileManager.default.fileExists(atPath: try #require(saved.fileURL).path))
+        let recovery = RecordingRecovery(store: store)
+        recovery.scan()
+        #expect(recovery.orphans.map(\.id) == [orphanID])
+        #expect(recovery.orphans.first?.urls.count == sources.count)
+    }
+
+    @Test
+    func anUnfinishedSittingProtectsAudioEvenWhenItsNoteWasAlreadySaved() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        let saved = try completedNote(in: store)
+        let recordings = store.recordingsDirectory()
+        let audio = try writeRecording(saved.id, extensionName: "m4a", in: recordings)
+        let capture = try writeRecording(saved.id, extensionName: "part-12.mp4", in: recordings)
+        let partialAudio = try writeRecording(saved.id, extensionName: "part-12.m4a", in: recordings)
+        try expire([audio, capture, partialAudio])
+        var attempts: [URL] = []
+
+        let removed = AudioRetention.sweep(
+            store: store, now: retentionNow, enabled: true, retentionDays: 90
+        ) { attempts.append($0) }
+
+        #expect(removed.isEmpty)
+        #expect(attempts.isEmpty)
+        #expect([audio, capture, partialAudio].allSatisfy {
+            FileManager.default.fileExists(atPath: $0.path)
+        })
+    }
+
+    @Test
+    func retentionLeavesAudioAloneWhenTheSavedDocumentDisappearsOrChanges() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        let missing = try completedNote(in: store)
+        let changed = try completedNote(in: store)
+        let recordings = store.recordingsDirectory()
+        let audio = try [missing, changed].map {
+            try writeRecording($0.id, extensionName: "m4a", in: recordings)
+        }
+        try expire(audio)
+        try FileManager.default.removeItem(at: try #require(missing.fileURL))
+        try Data("An unfinished external replacement.".utf8)
+            .write(to: try #require(changed.fileURL))
+        var attempts: [URL] = []
+
+        let removed = AudioRetention.sweep(
+            store: store, now: retentionNow, enabled: true, retentionDays: 90
+        ) { attempts.append($0) }
+
+        #expect(removed.isEmpty)
+        #expect(attempts.isEmpty)
+        #expect(audio.allSatisfy { FileManager.default.fileExists(atPath: $0.path) })
+    }
+
+    @Test
+    func retentionDoesNotUseNotesFromThePreviousLibrary() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        let saved = try completedNote(in: store)
+        let otherLibrary = directory.appendingPathComponent("other", isDirectory: true)
+        store.storageURL = otherLibrary
+        let audio = try writeRecording(
+            saved.id, extensionName: "m4a", in: store.recordingsDirectory()
+        )
+        try expire([audio])
+        var attempts: [URL] = []
+
+        let removed = AudioRetention.sweep(
+            store: store, now: retentionNow, enabled: true, retentionDays: 90
+        ) { attempts.append($0) }
+
+        #expect(removed.isEmpty)
+        #expect(attempts.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: audio.path))
+    }
+
+    @Test
+    func disabledRetentionAndAudioInsideItsWindowAreUntouched() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        let saved = try completedNote(in: store)
+        let audio = try writeRecording(
+            saved.id, extensionName: "m4a", in: store.recordingsDirectory()
+        )
+        try expire([audio])
+        var attempts: [URL] = []
+
+        #expect(AudioRetention.sweep(
+            store: store, now: retentionNow, enabled: false, retentionDays: 90,
+            trashItem: { attempts.append($0) }
+        ).isEmpty)
+        try FileManager.default.setAttributes(
+            [.modificationDate: retentionNow.addingTimeInterval(-30 * 86_400)],
+            ofItemAtPath: audio.path
+        )
+        #expect(AudioRetention.sweep(
+            store: store, now: retentionNow, enabled: true, retentionDays: 90,
+            trashItem: { attempts.append($0) }
+        ).isEmpty)
+
+        #expect(attempts.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: audio.path))
+    }
+
+    @Test
+    func retentionWaitsForLibraryLoadingAndNeverUnlinksAfterATrashFailure() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        let saved = try completedNote(in: store)
+        let audio = try writeRecording(
+            saved.id, extensionName: "m4a", in: store.recordingsDirectory()
+        )
+        try expire([audio])
+        struct TrashUnavailable: Error {}
+        var attempts: [URL] = []
+        #expect(AudioRetention.sweep(
+            store: store, now: retentionNow, enabled: true, retentionDays: 90,
+            trashItem: { url in
+                attempts.append(url)
+                throw TrashUnavailable()
+            }
+        ).isEmpty)
+        #expect(attempts.count == 1)
+        #expect(FileManager.default.fileExists(atPath: audio.path))
+
+        store.reload()
+        #expect(store.isLoading)
+        #expect(AudioRetention.sweep(
+            store: store, now: retentionNow, enabled: true, retentionDays: 90,
+            trashItem: { attempts.append($0) }
+        ).isEmpty)
+        #expect(attempts.count == 1)
+    }
+
+    @Test
+    func explicitlyDeletingExpiredRecoveryAudioStillMovesEverySourceToTrash() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        _ = try completedNote(in: store)
+        let id = UUID()
+        let recordings = store.recordingsDirectory()
+        let sources = try ["m4a", "mp4", "part-2.mp4"].map {
+            try writeRecording(id, extensionName: $0, in: recordings)
+        }
+        try expire(sources)
+        #expect(AudioRetention.sweep(
+            store: store, now: retentionNow, enabled: true, retentionDays: 90,
+            trashItem: { _ in Issue.record("Recovery input must not expire.") }
+        ).isEmpty)
+        var trashed: [String] = []
+        let recovery = RecordingRecovery(store: store, trashItem: { url in
+            trashed.append(url.lastPathComponent)
+            try FileManager.default.removeItem(at: url)
+        })
+        recovery.scan()
+
+        recovery.delete(try #require(recovery.orphans.first))
+
+        #expect(Set(trashed) == Set(sources.map(\.lastPathComponent)))
+        #expect(recovery.orphans.isEmpty)
+        #expect(recovery.message == nil)
+    }
+}
+
+enum RecordingRecoveryPausePoint: Int, CaseIterable, Sendable {
+    case extraction, transcription, summary
+}
+
+/// Gates synthetic recovery work without a provider, polling or a timing race.
+@MainActor
+private final class RecordingRecoveryGate {
+    private var held: CheckedContinuation<Void, Never>?
+    private var waiting: CheckedContinuation<Void, Never>?
+
+    func hold() async {
+        await withCheckedContinuation { continuation in
+            held = continuation
+            waiting?.resume()
+            waiting = nil
+        }
+    }
+
+    func waitUntilHeld() async {
+        guard held == nil else { return }
+        await withCheckedContinuation { waiting = $0 }
+    }
+
+    func release() {
+        held?.resume()
+        held = nil
     }
 }

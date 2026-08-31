@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import Testing
 @testable import Nook
@@ -32,6 +33,30 @@ struct PrepBriefTests {
             decisions: decisions,
             actionItems: actionItems
         )
+    }
+
+    @Test
+    func savingNotesWithoutAnUpcomingEventDoesNotPublishAnAbsentBrief() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NookQuietPrep-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = MarkdownStore(noteLoader: { _, _ in .success((notes: [], issues: [])) })
+        store.storageURL = directory
+        let calendar = CalendarContextService(provider: EmptyPrepCalendarProvider())
+        let controller = PrepBriefController(store: store, calendar: calendar)
+        var publications = 0
+        let observation = controller.objectWillChange.sink { publications += 1 }
+        defer { observation.cancel() }
+
+        var saved = try store.save(sitting("Synthetic planning"))
+        saved.summary = "A newer saved summary."
+        _ = try store.save(saved)
+
+        #expect(calendar.currentUpcomingEvent == nil)
+        #expect(controller.current == nil)
+        #expect(publications == 0)
+        #expect(store.notes.first?.summary == saved.summary)
     }
 
     // MARK: Series identity
@@ -159,6 +184,63 @@ struct PrepBriefTests {
         )
     }
 
+    @Test
+    func copiesWithDifferentTitlesCannotPutAnotherSeriesIntoTheBrief() async throws {
+        var first = sitting("Platform sync", daysAgo: 2, decisions: ["Unreviewed platform decision"])
+        first.fileURL = URL(fileURLWithPath: "/synthetic/platform.md")
+        var second = first
+        second.title = "Budget review"
+        second.decisions = ["Unreviewed budget decision"]
+        second.fileURL = URL(fileURLWithPath: "/synthetic/budget-copy.md")
+        let unique = sitting("Platform sync", daysAgo: 7, decisions: ["Verified earlier decision"])
+        let cache = SeriesKeyCache()
+
+        for notes in [[first, second, unique], [unique, second, first]] {
+            let keys = await cache.keys(for: notes)
+            #expect(keys[first.id] == nil)
+            let brief = try #require(PrepBriefBuilder.build(
+                eventTitle: "Platform sync", startDate: Date(timeIntervalSince1970: 1_900_000_000),
+                notes: notes, noteSeriesKeys: keys
+            ))
+            #expect(brief.sittings.map(\.id) == [unique.id])
+            #expect(brief.lastDecisions == unique.decisions)
+            #expect(brief.totalDuration == unique.duration)
+            #expect(brief.omittedNoteCount == 1)
+        }
+    }
+
+    @Test
+    func allCopiedHistoryKeepsAWarningBriefWithoutInventingAFirstMeeting() throws {
+        let first = sitting("Design review", decisions: ["Unreviewed decision"])
+        var second = first
+        second.fileURL = URL(fileURLWithPath: "/synthetic/copy.md")
+
+        let brief = try #require(PrepBriefBuilder.build(
+            eventTitle: "Design review", startDate: Date(timeIntervalSince1970: 1_900_000_000),
+            notes: [first, second]
+        ))
+
+        #expect(brief.sittings.isEmpty)
+        #expect(brief.lastDecisions.isEmpty)
+        #expect(brief.mentionedActions.isEmpty)
+        #expect(brief.omittedNoteCount == 2)
+        #expect(brief.lastMetAt == nil)
+    }
+
+    @Test
+    func aCopiedDigestCannotMakeItsMeetingSiblingEligibleForPrep() throws {
+        let meeting = sitting("Design review")
+        var copy = meeting
+        copy.kind = .digest
+
+        let brief = try #require(PrepBriefBuilder.build(
+            eventTitle: "Design review", startDate: Date(), notes: [meeting, copy]
+        ))
+
+        #expect(brief.sittings.isEmpty)
+        #expect(brief.omittedNoteCount == 1)
+    }
+
     // MARK: - SeriesKeyCache
 
     /// The cache exists so a note whose title has not changed since the last
@@ -217,5 +299,17 @@ struct PrepBriefTests {
         let second = await cache.keys(for: [stays])
         #expect(second.count == 1)
         #expect(second[stays.id] != nil)
+    }
+}
+
+private struct EmptyPrepCalendarProvider: CalendarEventProviding {
+    func requestAccess() async -> Bool {
+        Issue.record("Passive prep observation must not request calendar access.")
+        return false
+    }
+
+    func events(between start: Date, end: Date) -> [CalendarMeetingEvent] {
+        Issue.record("The quiet prep fixture must not read calendar events.")
+        return []
     }
 }

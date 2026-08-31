@@ -255,6 +255,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ sender: NSApplication
     ) -> NSApplication.TerminateReply {
         let model = AppModel.shared
+        // Checkpoints are separate from Save. Even a cancelled quit should
+        // leave its latest completed recovery copy available after a crash.
+        model.draftJournal.flushSynchronously()
         if terminationTask != nil {
             // A second Cmd-Q while the first is still finalizing. Returning
             // .terminateLater again promises AppKit a reply that only the
@@ -271,9 +274,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard prepareNotesForTermination(model: model) else {
             return .terminateCancel
         }
+        model.draftJournal.flushSynchronously()
 
         let terminationState = model.meeting.terminationState
-        guard terminationState != .inactive else {
+        if terminationState == .inactive, !model.quickNote.isWorking {
             return .terminateNow
         }
         guard confirmMeetingTermination(terminationState, sender: sender) else {
@@ -281,11 +285,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         terminationTask = Task { @MainActor [weak self, weak sender] in
-            let ready = await model.meeting.prepareForApplicationTermination()
-            self?.terminationTask = nil
-            if !ready {
-                self?.showMeetingTerminationFailure()
+            // A CLI owns a separate process group. Exiting before its runner
+            // finishes cleanup would also remove the code that enforces the
+            // deadline, leaving the external operation alive after Nook quits.
+            guard await model.quickNote.prepareAssistantForTermination() else {
+                model.quickNote.cancelApplicationTermination()
+                self?.terminationTask = nil
+                self?.showAssistantTerminationFailure()
+                sender?.reply(toApplicationShouldTerminate: false)
+                return
             }
+            let meetingReady = await model.meeting.prepareForApplicationTermination()
+            var ready = meetingReady
+            if meetingReady, let self, let sender {
+                // Editing remains available while asynchronous cleanup runs.
+                // Recheck the actual drafts at the final exit boundary, not
+                // only the versions saved before waiting for the assistant.
+                ready = self.prepareMarkdownForTermination(model: model, sender: sender)
+                    && self.prepareNotesForTermination(model: model)
+                model.draftJournal.flushSynchronously()
+            } else if meetingReady {
+                ready = false
+            }
+            if !ready {
+                model.quickNote.cancelApplicationTermination()
+                model.meeting.cancelApplicationTermination()
+                if !meetingReady { self?.showMeetingTerminationFailure() }
+            }
+            self?.terminationTask = nil
             sender?.reply(toApplicationShouldTerminate: ready)
         }
         return .terminateLater
@@ -308,8 +335,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         switch alert.runModal() {
         case .alertFirstButtonReturn:
-            guard let noteID = draft.noteID,
-                  let note = model.store.notes.first(where: { $0.id == noteID })
+            guard let identity = draft.libraryIdentity,
+                  let note = model.store.note(matching: identity)
             else {
                 showSaveFailure("The original note is no longer in the current notes folder.")
                 return false
@@ -354,9 +381,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showTerminationAlreadyUnderWay() {
         let alert = NSAlert()
-        alert.messageText = "Nook is already finishing your meeting"
-        alert.informativeText = "Nook is writing up the meeting and removing its temporary capture files. It will quit on its own when that is done."
+        alert.messageText = "Nook is preparing to quit"
+        alert.informativeText = "Nook is saving your work and stopping active operations. It will quit on its own when that is done."
         alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    private func showAssistantTerminationFailure() {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Nook couldn’t stop the assistant before quitting"
+        alert.informativeText = "Nook will stay open while the assistant finishes stopping. Your saved note is kept, and its late result will not change your words. Text already sent cannot be recalled."
+        alert.addButton(withTitle: "Keep Nook Open")
         alert.runModal()
     }
 

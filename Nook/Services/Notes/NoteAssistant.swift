@@ -109,7 +109,7 @@ enum NoteAssistantEngine: String, CaseIterable, Codable, Identifiable, Sendable 
         case .claude:
             "Runs your installed Claude Code with your existing subscription. Note text is sent to Anthropic."
         case .codex:
-            "Runs your installed Codex CLI with your existing subscription. Note text is sent to OpenAI."
+            "Note text is sent to OpenAI through your installed Codex CLI. Codex can also read other local files."
         }
     }
 
@@ -141,6 +141,7 @@ enum NoteAssistantEngine: String, CaseIterable, Codable, Identifiable, Sendable 
 
 enum NoteAssistantError: LocalizedError {
     case unavailable(NoteAssistantEngine)
+    case unsupportedVersion(NoteAssistantEngine)
     case failed(String)
     case emptyResult
 
@@ -155,6 +156,8 @@ enum NoteAssistantError: LocalizedError {
             case .codex:
                 "The Codex CLI was not found. Install it and sign in, then try again."
             }
+        case .unsupportedVersion(let engine):
+            "Nook couldn’t confirm that your installed \(engine.toolName) supports the privacy protections required for note actions. Update the tool and try again. Your note was not sent."
         case .failed(let message):
             message
         case .emptyResult:

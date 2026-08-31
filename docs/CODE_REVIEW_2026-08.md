@@ -1,5 +1,10 @@
 # Code and product review, August 2026
 
+For the latest measured performance results, implemented follow-up and feature
+priorities, see the [31 August follow-up](REVIEW_FOLLOWUP_2026-08-31.md).
+The findings and test totals below describe the earlier review, not the current
+list of unresolved issues.
+
 A full review of the codebase across four angles: reliability, performance,
 data handling and safety, and UX/UI. High-severity findings were verified
 against source line by line. Nothing here was run against a live capture,

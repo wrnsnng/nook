@@ -18,6 +18,8 @@ enum SettingsPane: Hashable {
 }
 
 struct SettingsView: View {
+    private let storageLocations: @MainActor (URL) -> [StorageInventoryLocation]
+    private let reviewStorageInLibrary: @MainActor () -> Void
     @EnvironmentObject private var store: MarkdownStore
     @EnvironmentObject private var detector: MeetingDetector
     @EnvironmentObject private var meeting: MeetingCoordinator
@@ -30,6 +32,10 @@ struct SettingsView: View {
     @EnvironmentObject private var audioInputCheck: AudioInputCheckService
     @State private var pendingStorageURL: URL?
     @State private var storageMessage: String?
+    @State private var showingStorageInventory = false
+    // Keep one worker across sheet presentations. Closing a sheet cannot
+    // interrupt a stalled filesystem syscall; reopening must reuse its queue.
+    @StateObject private var storageInventory = StorageInventoryController()
     @State private var selectedPane: SettingsPane
     @State private var accessibilityGranted = TextInsertionService.isTrusted
     @State private var showingRestoreAllDefaultsConfirmation = false
@@ -37,8 +43,14 @@ struct SettingsView: View {
     /// main thread the first time About is shown.
     @State private var signature: NookCodeSignature?
 
-    init(initialPane: SettingsPane = .general) {
+    init(
+        initialPane: SettingsPane = .general,
+        storageLocations: @escaping @MainActor (URL) -> [StorageInventoryLocation],
+        reviewStorageInLibrary: @escaping @MainActor () -> Void
+    ) {
         _selectedPane = State(initialValue: initialPane)
+        self.storageLocations = storageLocations
+        self.reviewStorageInLibrary = reviewStorageInLibrary
     }
 
     var body: some View {
@@ -89,6 +101,13 @@ struct SettingsView: View {
                 .tag(SettingsPane.about)
         }
         .padding(20)
+        .sheet(isPresented: $showingStorageInventory) {
+            StorageInventoryView(
+                locations: storageLocations(store.storageURL),
+                reviewLibrary: reviewStorageInLibrary,
+                inventory: storageInventory
+            )
+        }
         .confirmationDialog(
             "Change the notes folder?",
             isPresented: Binding(
@@ -262,6 +281,11 @@ struct SettingsView: View {
             )
 
             AudioRetentionSettingsRow()
+
+            Button("Review Storage on This Mac…") {
+                storageInventory.prepareForPresentation()
+                showingStorageInventory = true
+            }
 
             if let storageMessage {
                 Label(storageMessage, systemImage: "exclamationmark.triangle")
@@ -493,6 +517,9 @@ struct SettingsView: View {
                 .fixedSize(horizontal: false, vertical: true)
             } else {
                 Picker("Assistant", selection: engineSelection) {
+                    if !quickNote.isSelectedAssistantAvailable {
+                        Text("Choose an assistant").tag(quickNote.engine)
+                    }
                     ForEach(quickNote.availableEngines) { engine in
                         Text(
                             engine.provider.map {
@@ -502,14 +529,12 @@ struct SettingsView: View {
                         .tag(engine)
                     }
                 }
-                .disabled(quickNote.availableEngines.count < 2)
-                .help(quickNote.engine.detail)
+                .disabled(!quickNote.canChooseAssistant)
+                .help(quickNote.selectedAssistantDescription)
                 .accessibilityLabel("Assistant for note actions")
-                .accessibilityValue(
-                    "\(quickNote.engine.title). \(quickNote.engine.detail)"
-                )
+                .accessibilityValue(quickNote.selectedAssistantDescription)
 
-                Text(quickNote.engine.detail)
+                Text(quickNote.selectedAssistantDescription)
                     .font(NookType.caption)
                     .foregroundStyle(
                         quickNote.engine.leavesTheMac
@@ -518,32 +543,32 @@ struct SettingsView: View {
                     )
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityLabel("Selected assistant")
-                    .accessibilityValue(
-                        "\(quickNote.engine.title). \(quickNote.engine.detail)"
-                    )
+                    .accessibilityValue(quickNote.selectedAssistantDescription)
+            }
 
-                if let provider = quickNote.engine.provider {
-                    HStack(alignment: .top, spacing: NookSpacing.small) {
-                        Image(systemName: "arrow.up.forward.app.fill")
-                            .foregroundStyle(NookPalette.warning)
-                            .accessibilityHidden(true)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Notes are sent to \(provider)")
-                                .font(NookType.caption.weight(.semibold))
-                            Text("Every note you run an action on leaves this Mac. Nothing else does, and nothing is sent until you use an action.")
-                                .font(NookType.caption)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        Spacer(minLength: 0)
-                        Button("Keep on this Mac") {
-                            quickNote.revokeConsent(for: quickNote.engine)
-                        }
-                        .help("Switch note actions back to the on-device assistant.")
+            // Availability and the next selected engine can change while an
+            // earlier external operation is still stopping. Its disclosure
+            // belongs to that operation until cleanup returns.
+            if let outboundEngine = quickNote.outboundEngine {
+                HStack(alignment: .top, spacing: NookSpacing.small) {
+                    Image(systemName: "arrow.up.forward.app.fill")
+                        .foregroundStyle(NookPalette.warning)
+                        .accessibilityHidden(true)
+                    Text(quickNote.outboundMessage)
+                        .font(NookType.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityLabel("Warning. \(quickNote.outboundMessage)")
+                    Spacer(minLength: 0)
+                    Button(quickNote.isStoppingAssistant ? "Stopping…" : "Keep on this Mac") {
+                        quickNote.revokeConsent(for: outboundEngine)
+                        quickNote.selectEngine(.onDevice)
                     }
-                    .padding(.vertical, 2)
-                    .accessibilityElement(children: .contain)
+                    .disabled(quickNote.isStoppingAssistant)
+                    .help("Return to the on-device assistant and request cancellation of any external action. Text already sent cannot be recalled.")
                 }
+                .padding(.vertical, 2)
+                .accessibilityElement(children: .contain)
             }
         } header: {
             Label("Note actions", systemImage: "wand.and.sparkles")
@@ -556,8 +581,11 @@ struct SettingsView: View {
         guard !quickNote.availableEngines.isEmpty else {
             return "Turn on Apple Intelligence in System Settings, or install Claude Code or Codex, to use note actions."
         }
+        guard quickNote.isSelectedAssistantAvailable else {
+            return "Choose an available assistant to use note actions. Editing and saving remain available. External assistants require your consent before any note is sent."
+        }
 
-        return "This is the default assistant for every new note. \(quickNote.engine.detail) You can still change it for a single note in the quick note window."
+        return "This is the default assistant for every new note. \(quickNote.engine.detail) You can also change this choice in the quick note window."
     }
 
     private var isAppleIntelligenceAvailable: Bool {
@@ -869,6 +897,15 @@ struct SettingsView: View {
                 }
             } header: {
                 Label("How privacy works", systemImage: "hand.raised.fill")
+            }
+
+            Section {
+                Button("Review Storage on This Mac…") {
+                    storageInventory.prepareForPresentation()
+                    showingStorageInventory = true
+                }
+            } footer: {
+                Text("See notes, audio, draft recovery, caches, and logs without reading their contents or deleting files.")
             }
         }
         .formStyle(.grouped)

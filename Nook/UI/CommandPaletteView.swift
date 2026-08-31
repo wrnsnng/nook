@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// One row of the command palette: a verb, a note, or an open action.
@@ -5,6 +6,7 @@ struct CommandPaletteItem: Identifiable, Equatable {
     enum Destination: Equatable {
         case verb
         case note(MeetingNote.ID)
+        case askLibrary
     }
 
     let id: String
@@ -20,6 +22,284 @@ struct CommandPaletteItem: Identifiable, Equatable {
 
     static func == (lhs: CommandPaletteItem, rhs: CommandPaletteItem) -> Bool {
         lhs.id == rhs.id
+    }
+}
+
+enum CommandPaletteCommandDisposition {
+    case dismiss
+    case keepPresented
+}
+
+/// Most commands wait for AppKit to restore the parent's responder before
+/// opening their destination. Ask replaces the palette inside the same modal
+/// session, so the parent cannot receive question text during sheet dismissal.
+struct CommandPalettePresentation {
+    private enum Phase { case idle, presented, destination, dismissing }
+    private var phase = Phase.idle
+    private var pendingCommand: CommandPaletteItem?
+
+    var canPresent: Bool { phase == .idle }
+    var isShowingDestination: Bool { phase == .destination }
+
+    var isPresented: Bool {
+        get { phase == .presented }
+        set {
+            if newValue {
+                present()
+            } else if phase == .presented {
+                phase = .dismissing
+            }
+        }
+    }
+
+    mutating func present() {
+        guard canPresent else { return }
+        pendingCommand = nil
+        phase = .presented
+    }
+
+    mutating func select(_ command: CommandPaletteItem) {
+        guard isPresented else { return }
+        pendingCommand = command
+        phase = .dismissing
+    }
+
+    @discardableResult
+    mutating func showDestination() -> Bool {
+        guard phase == .presented else { return false }
+        pendingCommand = nil
+        phase = .destination
+        return true
+    }
+
+    /// A citation still owes the normal editor leave guard, after Ask closes.
+    mutating func finishDestination(with command: CommandPaletteItem? = nil) {
+        guard phase == .destination else { return }
+        pendingCommand = command
+        phase = .dismissing
+    }
+
+    /// A folder change or a closing parent invalidates even a command whose
+    /// sheet has already started dismissing.
+    mutating func cancel() {
+        pendingCommand = nil
+        if phase == .presented || phase == .destination { phase = .dismissing }
+    }
+
+    mutating func takeDismissedCommand() -> CommandPaletteItem? {
+        guard phase == .dismissing else { return nil }
+        phase = .idle
+        let command = pendingCommand
+        pendingCommand = nil
+        return command
+    }
+}
+
+/// Establishes the native modal boundary in the shortcut action itself.
+/// SwiftUI's state-driven sheet left the parent accepting the first query
+/// characters while it scheduled presentation, even with defaultFocus.
+@MainActor
+final class CommandPaletteSheetPresenter: NSObject, ObservableObject {
+    private weak var parentWindow: NSWindow?
+    private weak var presentingWindow: NSWindow?
+    private var sheet: NSWindow?
+    private var presentationID: UUID?
+    private var isDismissing = false
+    private var onDismiss: (() -> Void)?
+    private var onInvalidation: (() -> Void)?
+
+    var canPresent: Bool {
+        guard let parentWindow else { return false }
+        // beginSheet otherwise queues behind an existing dialog. A palette
+        // must never appear later in response to keys typed into that dialog.
+        return presentationID == nil && parentWindow.attachedSheet == nil
+    }
+
+    func isCurrent(_ id: UUID) -> Bool { presentationID == id }
+
+    func attach(to window: NSWindow?) {
+        guard window !== parentWindow else { return }
+        invalidate()
+        if let parentWindow {
+            NotificationCenter.default.removeObserver(
+                self, name: NSWindow.willCloseNotification, object: parentWindow
+            )
+        }
+        parentWindow = window
+        if let window {
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(parentWillClose(_:)),
+                name: NSWindow.willCloseNotification, object: window
+            )
+        }
+    }
+
+    @discardableResult
+    func present(
+        id: UUID,
+        content: AnyView,
+        onDismiss: @escaping () -> Void,
+        onInvalidation: @escaping () -> Void
+    ) -> Bool {
+        guard canPresent, let parentWindow else { return false }
+        let hostingView = NSHostingView(rootView: content)
+        let sheet = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 464),
+            styleMask: [.titled, .fullSizeContentView],
+            backing: .buffered, defer: false
+        )
+        sheet.title = "Command palette"
+        sheet.titleVisibility = .hidden
+        sheet.titlebarAppearsTransparent = true
+        sheet.isReleasedWhenClosed = false
+        sheet.tabbingMode = .disallowed
+        sheet.contentView = hostingView
+        hostingView.layoutSubtreeIfNeeded()
+        sheet.setContentSize(hostingView.fittingSize)
+        sheet.layoutIfNeeded()
+        sheet.recalculateKeyViewLoop()
+        // Prepare the actual window before beginning the modal session. The
+        // SwiftUI-content overload returned before any sheet was attached.
+        guard canPresent, self.parentWindow === parentWindow else { return false }
+        presentationID = id
+        presentingWindow = parentWindow
+        self.onDismiss = onDismiss
+        self.onInvalidation = onInvalidation
+        isDismissing = false
+        self.sheet = sheet
+        parentWindow.beginSheet(sheet) { [weak self] _ in
+            self?.didDismiss(id)
+        }
+        if isCurrent(id), sheet.sheetParent === parentWindow { sheet.makeKey() }
+        return true
+    }
+
+    func dismiss(id: UUID? = nil) {
+        if let id, !isCurrent(id) { return }
+        guard !isDismissing, let sheet, let presentingWindow else { return }
+        isDismissing = true
+        presentingWindow.endSheet(sheet)
+    }
+
+    /// Keep the same native modal boundary while moving into a text-entry
+    /// destination. Ending this sheet first lets the parent's sidebar or
+    /// editor receive keys before a second sheet has appeared.
+    @discardableResult
+    func replaceContent(id: UUID, content: AnyView, title: String) -> Bool {
+        guard isCurrent(id), !isDismissing,
+              let sheet, let presentingWindow,
+              parentWindow === presentingWindow,
+              presentingWindow.attachedSheet === sheet else { return false }
+        let hostingView = NSHostingView(rootView: content)
+        guard sheet.makeFirstResponder(nil) else { return false }
+        sheet.initialFirstResponder = nil
+        sheet.contentView = hostingView
+        sheet.title = title
+        hostingView.layoutSubtreeIfNeeded()
+        sheet.setContentSize(hostingView.fittingSize)
+        sheet.layoutIfNeeded()
+        sheet.recalculateKeyViewLoop()
+        // Selecting through AppKit's prepared key-view loop is synchronous.
+        // An onAppear focus request alone still needs a SwiftUI update.
+        sheet.selectKeyView(following: hostingView)
+        return isCurrent(id) && !isDismissing
+            && presentingWindow.attachedSheet === sheet
+    }
+
+    func invalidate() {
+        guard presentationID != nil else { return }
+        onInvalidation?()
+        dismiss()
+    }
+
+    private func didDismiss(_ id: UUID) {
+        guard isCurrent(id) else { return }
+        // Native parent teardown need not pass through the palette's binding.
+        if !isDismissing { onInvalidation?() }
+        let completion = onDismiss
+        let dismissedSheet = sheet
+        sheet = nil
+        presentationID = nil
+        presentingWindow = nil
+        onDismiss = nil
+        onInvalidation = nil
+        isDismissing = false
+        dismissedSheet?.orderOut(nil)
+        dismissedSheet?.contentView = nil
+        completion?()
+    }
+
+    @objc private func parentWillClose(_ notification: Notification) {
+        invalidate()
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+}
+
+/// Captures this library's own window, never whichever app window happens to
+/// be key. Window attachment is synchronous and does not activate anything.
+struct CommandPaletteWindowAnchor: NSViewRepresentable {
+    let presenter: CommandPaletteSheetPresenter
+
+    func makeNSView(context: Context) -> CommandPaletteWindowTrackingView {
+        let view = CommandPaletteWindowTrackingView()
+        view.presenter = presenter
+        return view
+    }
+
+    func updateNSView(_ view: CommandPaletteWindowTrackingView, context: Context) {
+        view.presenter = presenter
+        presenter.attach(to: view.window)
+    }
+
+    static func dismantleNSView(_ view: CommandPaletteWindowTrackingView, coordinator: ()) {
+        view.presenter?.attach(to: nil)
+        view.presenter = nil
+    }
+}
+
+final class CommandPaletteWindowTrackingView: NSView {
+    weak var presenter: CommandPaletteSheetPresenter?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        presenter?.attach(to: window)
+    }
+}
+
+/// A native hosted sheet does not receive new value arguments from the
+/// library's body. Observe the existing controller so refreshed actions still
+/// reach the palette without replacing its query, selection, or view identity.
+struct CommandPaletteOpenActionsHost: View {
+    @ObservedObject var openActions: OpenActionsController
+    let content: ([OpenAction]) -> CommandPaletteView
+
+    var body: some View {
+        content(Array(openActions.entries.prefix(6)))
+    }
+}
+
+enum CommandPaletteCommands {
+    @MainActor
+    static func recording(
+        isRecording: Bool,
+        shortcuts: ShortcutStore,
+        start: @escaping () -> Void,
+        finish: @escaping () -> Void
+    ) -> CommandPaletteItem {
+        CommandPaletteItem(
+            id: isRecording ? "verb-finish" : "verb-record",
+            symbol: isRecording ? "stop.fill" : "waveform.badge.mic",
+            title: isRecording ? "Finish meeting" : "Start recording",
+            subtitle: nil,
+            destination: .verb,
+            shortcut: shortcuts.binding(
+                for: isRecording ? .finishMeeting : .startRecording
+            ).displayString,
+            perform: isRecording ? finish : start
+        )
     }
 }
 
@@ -50,18 +330,74 @@ struct CommandPaletteSection: Identifiable {
     }
 }
 
+/// A reload can reorder Finder copies without changing their UUID or date.
+/// Keep the chosen row's identity, and require another choice if it disappears.
+struct CommandPaletteSelection {
+    private(set) var itemID: String?
+
+    mutating func select(_ item: CommandPaletteItem) {
+        itemID = item.id
+    }
+
+    mutating func refresh(in items: [CommandPaletteItem], selectFirst: Bool = false) {
+        if selectFirst {
+            itemID = items.first?.id
+        } else if !items.contains(where: { $0.id == itemID }) {
+            itemID = nil
+        }
+    }
+
+    mutating func move(_ direction: Int, in items: [CommandPaletteItem]) {
+        guard !items.isEmpty else { return }
+        let index: Int
+        if let current = items.firstIndex(where: { $0.id == itemID }) {
+            index = min(max(current + direction, 0), items.count - 1)
+        } else {
+            index = direction < 0 ? items.count - 1 : 0
+        }
+        itemID = items[index].id
+    }
+
+    func selectedItem(in items: [CommandPaletteItem]) -> CommandPaletteItem? {
+        items.first { $0.id == itemID }
+    }
+}
+
+enum CommandPaletteNoteOrder {
+    static func ordered(_ notes: [MeetingNote], matching needle: String) -> [MeetingNote] {
+        let hits = needle.isEmpty ? notes : notes.filter { note in
+            note.title.localizedLowercase.contains(needle)
+                || note.summary.localizedLowercase.contains(needle)
+                || note.personalNotes.localizedLowercase.contains(needle)
+        }
+        let ordered = hits.sorted {
+            if !needle.isEmpty {
+                let leftLeads = $0.title.localizedLowercase.hasPrefix(needle)
+                let rightLeads = $1.title.localizedLowercase.hasPrefix(needle)
+                if leftLeads != rightLeads { return leftLeads }
+            }
+            if $0.startedAt != $1.startedAt { return $0.startedAt > $1.startedAt }
+            let leftPath = $0.libraryIdentity.filePath ?? ""
+            let rightPath = $1.libraryIdentity.filePath ?? ""
+            if leftPath != rightPath { return leftPath < rightPath }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+        return needle.isEmpty ? Array(ordered.prefix(5)) : ordered
+    }
+}
+
 /// A `⌘K` launcher over everything the library can do.
 ///
 /// Verbs stay visible so the palette teaches the app's actions while it
 /// jumps between them; notes arrive through the same matcher the sidebar
 /// search uses; open actions appear so follow-through is one keystroke away.
-/// Deliberately a plain sheet-hosted panel with standard list semantics
-/// rather than a custom window: focus handling and Escape belong to the
-/// platform.
+/// A native sheet owns the keyboard and accessibility boundary. An overlay
+/// left the underlying editor focused, so typing a query edited the note.
 struct CommandPaletteView: View {
     @Binding var isPresented: Bool
     @EnvironmentObject private var store: MarkdownStore
     @EnvironmentObject private var meeting: MeetingCoordinator
+    @EnvironmentObject private var shortcuts: ShortcutStore
 
     /// The sidebar's aggregated open items, so follow-through is one
     /// keystroke away.
@@ -70,41 +406,23 @@ struct CommandPaletteView: View {
     let createWeeklyDigest: () -> Void
     let showAskSheet: () -> Void
     let presentQuickNote: () -> Void
+    /// The host queues ordinary commands until dismissal, but can replace the
+    /// current sheet for Ask. Static snapshots deliberately perform no actions.
+    var onSelectCommand: (CommandPaletteItem) -> CommandPaletteCommandDisposition = { _ in .dismiss }
 
     @State private var query = ""
-    @State private var selectedIndex = 0
+    @State private var selection = CommandPaletteSelection()
+    @FocusState private var queryFocused: Bool
     /// The sections as of the last refresh. `sections` used to be computed
     /// straight in the body, lowercasing every note on every hover
-    /// (`selectedIndex` is `@State`, so a hover invalidated the view) and on
+    /// (`selection` is `@State`, so a hover invalidated the view) and on
     /// every tick the coordinator publishes while the palette happens to be
     /// open during a recording. Recomputed only from `refreshSections()`,
     /// called when the query, the notes, or whether a meeting is recording
     /// actually changes.
     @State private var cachedSections: [CommandPaletteSection] = []
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        ZStack {
-            // A dim behind the panel, and a click anywhere on it closes.
-            // Without one the palette floated over a fully lit library and
-            // read as another pane rather than as the thing with focus.
-            Rectangle()
-                .fill(.black.opacity(0.18))
-                .contentShape(Rectangle())
-                .onTapGesture { isPresented = false }
-                .accessibilityHidden(true)
-
-            panel
-        }
-        .ignoresSafeArea()
-        .transition(
-            reduceMotion
-                ? .opacity
-                : .opacity.combined(with: .scale(scale: 0.98))
-        )
-    }
-
-    private var panel: some View {
         VStack(spacing: 0) {
             searchHeader
             SoftDivider()
@@ -127,8 +445,6 @@ struct CommandPaletteView: View {
             RoundedRectangle(cornerRadius: NookRadius.surface, style: .continuous)
                 .stroke(.primary.opacity(0.12), lineWidth: 0.7)
         }
-        .shadow(color: .black.opacity(0.22), radius: 22, y: 10)
-        .padding(40)
         // Arrow navigation must work while the query field holds focus, which
         // field-level key handling cannot promise; hidden accelerators can.
         .background {
@@ -136,6 +452,9 @@ struct CommandPaletteView: View {
                 moveSelection(-1)
             }
             .keyboardShortcut(.upArrow, modifiers: [])
+            .focusable(false)
+            .allowsHitTesting(false)
+            .frame(width: 0, height: 0)
             .opacity(0)
             .accessibilityHidden(true)
 
@@ -143,17 +462,22 @@ struct CommandPaletteView: View {
                 moveSelection(1)
             }
             .keyboardShortcut(.downArrow, modifiers: [])
+            .focusable(false)
+            .allowsHitTesting(false)
+            .frame(width: 0, height: 0)
             .opacity(0)
             .accessibilityHidden(true)
         }
         .onExitCommand { isPresented = false }
+        // Register the field as the sheet's initial focus destination. Asking
+        // in onAppear required another focus update and let the first typed
+        // character reach the parent window during the presentation handoff.
+        .defaultFocus($queryFocused, true)
         .onAppear {
-            selectedIndex = 0
-            refreshSections()
+            refreshSections(selectFirst: true)
         }
         .onChange(of: query) { _, _ in
-            selectedIndex = 0
-            refreshSections()
+            refreshSections(selectFirst: true)
         }
         .onChange(of: store.notes) { _, _ in
             refreshSections()
@@ -161,6 +485,15 @@ struct CommandPaletteView: View {
         .onChange(of: meeting.phase) { _, _ in
             refreshSections()
         }
+        .onChange(of: openActionEntries) { _, _ in
+            refreshSections()
+        }
+        .onChange(of: shortcuts.overrides) { _, _ in
+            refreshSections()
+        }
+        // Give the sheet a named group without replacing the search field
+        // and Close button's own names in the accessibility tree.
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("Command palette")
     }
 
@@ -168,17 +501,29 @@ struct CommandPaletteView: View {
         HStack(spacing: NookSpacing.small) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
             TextField(
                 "Type a command or search notes",
                 text: $query
             )
             .textFieldStyle(.plain)
             .font(NookType.body)
+            .focused($queryFocused)
             .onSubmit(runSelected)
+            .accessibilityLabel("Search commands and notes")
 
-            Text("esc")
-                .font(NookType.micro)
-                .foregroundStyle(.tertiary)
+            Button {
+                isPresented = false
+            } label: {
+                Image(systemName: "xmark")
+                    .font(NookType.micro.weight(.semibold))
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.cancelAction)
+            .help("Close command palette (Escape)")
+            .accessibilityLabel("Close command palette")
         }
         .padding(.horizontal, 14)
         .frame(height: 44)
@@ -199,16 +544,20 @@ struct CommandPaletteView: View {
                     ForEach(sections) { section in
                         sectionHeader(section.title)
                         ForEach(section.items) { item in
-                            let index = items.firstIndex(of: item) ?? 0
-                            row(item, isSelected: index == selectedIndex)
-                                .id(index)
+                            row(item, isSelected: item.id == selection.itemID)
+                                .id(item.id)
                         }
                     }
                 }
                 .padding(.vertical, 4)
             }
-            .onChange(of: selectedIndex) { _, newIndex in
-                proxy.scrollTo(newIndex, anchor: .center)
+            .onChange(of: selection.itemID) { _, itemID in
+                if let itemID { proxy.scrollTo(itemID, anchor: .center) }
+            }
+            .onChange(of: items.map(\.id)) { _, _ in
+                if let itemID = selection.itemID {
+                    proxy.scrollTo(itemID, anchor: .center)
+                }
             }
         }
         // A ScrollView takes every point offered, which left a blank band
@@ -261,6 +610,7 @@ struct CommandPaletteView: View {
                                     ? Color.white.opacity(0.82) : .secondary
                             )
                             .lineLimit(1)
+                            .help(subtitle)
                     }
                 }
                 Spacer(minLength: NookSpacing.small)
@@ -291,27 +641,22 @@ struct CommandPaletteView: View {
         .buttonStyle(.plain)
         .onHover { hovering in
             guard hovering else { return }
-            if let index = items.firstIndex(where: { $0.id == item.id }) {
-                selectedIndex = index
-            }
+            selection.select(item)
         }
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private func moveSelection(_ direction: Int) {
-        guard !items.isEmpty else { return }
-        let next = selectedIndex + direction
-        selectedIndex = min(max(next, 0), items.count - 1)
+        selection.move(direction, in: items)
     }
 
     private func runSelected() {
-        guard items.indices.contains(selectedIndex) else { return }
-        run(items[selectedIndex])
+        guard let item = selection.selectedItem(in: items) else { return }
+        run(item)
     }
 
     private func run(_ item: CommandPaletteItem) {
-        isPresented = false
-        item.perform()
+        if onSelectCommand(item) == .dismiss { isPresented = false }
     }
 
     // MARK: - Items
@@ -324,8 +669,9 @@ struct CommandPaletteView: View {
     /// Called from `refreshSections()`'s call sites rather than from `body`,
     /// so a hover or a meter tick that changes none of the query, the notes,
     /// or the recording state does not lowercase and filter every note again.
-    private func refreshSections() {
+    private func refreshSections(selectFirst: Bool = false) {
         cachedSections = computeSections()
+        selection.refresh(in: items, selectFirst: selectFirst)
     }
 
     private func computeSections() -> [CommandPaletteSection] {
@@ -338,18 +684,17 @@ struct CommandPaletteView: View {
 
         let notes = orderedNotes(matching: needle).prefix(8).map { note in
             CommandPaletteItem(
-                id: "note-\(note.id.uuidString)",
+                id: "note-\(note.libraryIdentity.navigationKey)",
                 symbol: note.kind.symbol,
                 title: note.title,
-                subtitle: note.startedAt.formatted(
-                    date: .abbreviated,
-                    time: .shortened
-                ),
+                subtitle: store.duplicateNoteIDs.contains(note.id)
+                    ? note.fileURL?.lastPathComponent
+                    : note.startedAt.formatted(date: .abbreviated, time: .shortened),
                 destination: .note(note.id),
                 perform: {
                     NotificationCenter.default.post(
                         name: .nookOpenMeetingNote,
-                        object: note.id
+                        object: note.libraryIdentity
                     )
                 }
             )
@@ -389,51 +734,16 @@ struct CommandPaletteView: View {
     /// Title matches lead, then content matches, mirroring how a person
     /// scans their own library.
     private func orderedNotes(matching needle: String) -> [MeetingNote] {
-        guard !needle.isEmpty else {
-            return Array(store.notes.prefix(5))
-        }
-        let hits = store.notes.filter { note in
-            note.title.localizedLowercase.contains(needle)
-                || note.summary.localizedLowercase.contains(needle)
-                || note.personalNotes.localizedLowercase.contains(needle)
-        }
-        return hits.sorted {
-            let leftLeads = $0.title.localizedLowercase.hasPrefix(needle)
-            let rightLeads = $1.title.localizedLowercase.hasPrefix(needle)
-            if leftLeads != rightLeads { return leftLeads }
-            return $0.startedAt > $1.startedAt
-        }
+        CommandPaletteNoteOrder.ordered(store.notes, matching: needle)
     }
 
     private var verbs: [CommandPaletteItem] {
-        var list: [CommandPaletteItem] = []
-        if meeting.phase.isRecording {
-            list.append(
-                CommandPaletteItem(
-                    id: "verb-finish",
-                    symbol: "stop.fill",
-                    title: "Finish meeting",
-                    subtitle: nil,
-                    destination: .verb,
-                    // Matches the Meeting menu, which is where this shortcut
-                    // is declared.
-                    shortcut: "⇧⌘.",
-                    perform: { meeting.stopRecording() }
-                )
-            )
-        } else {
-            list.append(
-                CommandPaletteItem(
-                    id: "verb-record",
-                    symbol: "waveform.badge.mic",
-                    title: "Start recording",
-                    subtitle: nil,
-                    destination: .verb,
-                    shortcut: "⇧⌘R",
-                    perform: { meeting.startManualMeeting() }
-                )
-            )
-        }
+        var list = [CommandPaletteCommands.recording(
+            isRecording: meeting.phase.isRecording,
+            shortcuts: shortcuts,
+            start: { meeting.startManualMeeting() },
+            finish: { meeting.stopRecording() }
+        )]
         list.append(
             contentsOf: [
                 CommandPaletteItem(
@@ -457,7 +767,7 @@ struct CommandPaletteView: View {
                     symbol: "sparkle.magnifyingglass",
                     title: "Ask your library",
                     subtitle: nil,
-                    destination: .verb,
+                    destination: .askLibrary,
                     perform: { showAskSheet() }
                 ),
                 CommandPaletteItem(

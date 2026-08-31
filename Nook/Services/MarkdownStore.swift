@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 
 struct MarkdownLoadIssue: Identifiable, Hashable, Sendable {
@@ -19,10 +20,39 @@ final class MarkdownStore: ObservableObject {
         NoteDecodeCache?
     ) -> Result<LoadPayload, Error>
 
-    @Published private(set) var notes: [MeetingNote] = []
+    @Published private(set) var notes: [MeetingNote] = [] {
+        didSet {
+            // Derived alongside the library publication, not recalculated for
+            // every sidebar row or meter-driven render.
+            let counts = Dictionary(grouping: notes, by: \.id)
+            duplicateNoteIDs = Set(counts.compactMap { $0.value.count > 1 ? $0.key : nil })
+        }
+    }
+    private(set) var duplicateNoteIDs: Set<UUID> = []
+
+    func note(matching identity: LibraryNoteIdentity) -> MeetingNote? {
+        // Most rows have a different UUID. Avoid normalizing every unrelated
+        // path while retaining the full file check for copied identities.
+        notes.first { $0.id == identity.noteID && $0.libraryIdentity == identity }
+    }
+
+    func uniqueNote(id: UUID) -> MeetingNote? {
+        guard !duplicateNoteIDs.contains(id) else { return nil }
+        return notes.first { $0.id == id }
+    }
     @Published private(set) var loadIssues: [MarkdownLoadIssue] = []
     @Published private(set) var isLoading = false
+    /// A folder can change away and back while an operation awaits a model.
+    /// Its URL alone cannot authorize that old operation when it returns.
+    /// Ordinary reloads and saves deliberately do not advance this identity.
+    private(set) var storageGeneration = 0
     @Published var storageURL: URL {
+        willSet {
+            if newValue.standardizedFileURL != storageURL.standardizedFileURL {
+                storageGeneration &+= 1
+                onStorageDirectoryWillChange?()
+            }
+        }
         didSet {
             // Cached decodes belong to the directory they came from.
             decodeCache.clear()
@@ -30,17 +60,28 @@ final class MarkdownStore: ObservableObject {
     }
     @Published var lastError: String?
 
+    /// Editors keep their captured owner when a folder changes. These hooks
+    /// run at the mutation boundary, including changes made outside Settings.
+    var onStorageDirectoryWillChange: (@MainActor () -> Void)?
+    var onNoteDeleted: (@MainActor (MeetingNote) -> Void)?
+
     private let fileManager: FileManager
     private let noteLoader: NoteLoader
+    private let beforeWriteCommit: @MainActor (URL) throws -> Void
+    private let readCommittedBytes: @MainActor (URL) throws -> Data
     private let decodeCache = NoteDecodeCache()
     private var reloadGeneration = 0
 
     init(
         fileManager: FileManager = .default,
-        noteLoader: @escaping NoteLoader = MarkdownStore.loadNotes
+        noteLoader: @escaping NoteLoader = MarkdownStore.loadNotes,
+        readCommittedBytes: @escaping @MainActor (URL) throws -> Data = { try Data(contentsOf: $0) },
+        beforeWriteCommit: @escaping @MainActor (URL) throws -> Void = { _ in }
     ) {
         self.fileManager = fileManager
         self.noteLoader = noteLoader
+        self.beforeWriteCommit = beforeWriteCommit
+        self.readCommittedBytes = readCommittedBytes
         let configured = UserDefaults.standard.string(forKey: "storageDirectory")
         self.storageURL = configured.map(URL.init(fileURLWithPath:))
             ?? fileManager.homeDirectoryForCurrentUser
@@ -95,11 +136,12 @@ final class MarkdownStore: ObservableObject {
     @discardableResult
     func save(
         _ note: MeetingNote,
-        deliberatelyEditing: DeliberateEdit? = nil
+        deliberatelyEditing: DeliberateEdit? = nil,
+        validatingBeforeCommit: @MainActor () throws -> Void = {}
     ) throws -> MeetingNote {
         ensureDirectory()
         var saved = note
-        let known = notes.first(where: { $0.id == note.id })
+        let known = try knownNote(for: note)
         // A note keeps the file it was written to. Deriving the destination
         // from the title again meant a caller that had not held on to the URL,
         // and a title that grew as words were dictated, scattered one note
@@ -110,7 +152,7 @@ final class MarkdownStore: ObservableObject {
             ?? availableDestination(for: note)
         try refuseIfChangedElsewhere(
             destination,
-            lastSeen: note.fileModified ?? known?.fileModified
+            revision: note.fileRevision ?? known?.fileRevision
         )
 
         let markdown = MarkdownCodec.encode(note)
@@ -119,10 +161,15 @@ final class MarkdownStore: ObservableObject {
             with: note,
             deliberatelyEditing: deliberatelyEditing
         )
-        try markdown.write(to: destination, atomically: true, encoding: .utf8)
+        try commitMarkdown(
+            markdown, to: destination,
+            expectedRevision: note.fileRevision ?? known?.fileRevision,
+            validatingBeforeCommit: validatingBeforeCommit
+        )
         protectSensitiveFile(at: destination)
         saved.fileURL = destination
         saved.fileModified = Self.modificationDate(of: destination)
+        saved.fileRevision = MeetingNote.contentRevision(Data(markdown.utf8))
         invalidateReloadSnapshot()
         upsert(saved)
         lastError = nil
@@ -139,16 +186,54 @@ final class MarkdownStore: ObservableObject {
     @discardableResult
     func updatePersonalNotes(
         _ personalNotes: String,
-        for note: MeetingNote
+        for note: MeetingNote,
+        expectedPersonalNotes: String? = nil
     ) throws -> MeetingNote {
-        var updated = notes.first(where: { $0.id == note.id }) ?? note
-        updated.personalNotes = personalNotes.trimmingCharacters(
+        var updated = try knownNote(for: note) ?? note
+        let proposed = personalNotes.trimmingCharacters(
             in: .whitespacesAndNewlines
         )
+        let baseline = (expectedPersonalNotes ?? note.personalNotes)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        // A reload may supply fresher unrelated fields, but it must not turn
+        // an old personal draft into permission to overwrite new personal
+        // notes. Only the field's original baseline can authorize this edit.
+        // Canonically equivalent Unicode can still be somebody else's exact
+        // edit, so neither the baseline nor an already-applied proposal may
+        // authorize a different sequence of bytes.
+        guard updated.personalNotes.utf8.elementsEqual(baseline.utf8)
+            || updated.personalNotes.utf8.elementsEqual(proposed.utf8) else {
+            lastError = MarkdownStoreError.personalNotesChangedElsewhere
+                .errorDescription
+            throw MarkdownStoreError.personalNotesChangedElsewhere
+        }
+
+        // A preflight save also settles whitespace-only drafts. Re-encoding
+        // an unchanged field rewrote unrelated source formatting, including
+        // the file's final newline, before a failed regeneration kept the
+        // note. Verify the existing destination before accepting this no-op;
+        // an unchanged field must not hide an external edit or missing file.
+        if updated.personalNotes.utf8.elementsEqual(proposed.utf8),
+           let destination = updated.fileURL, let revision = updated.fileRevision {
+            try refuseIfChangedElsewhere(destination, revision: revision)
+            let snapshot = try Self.readMarkdown(at: destination)
+            guard snapshot.revision == revision else { throw changedFileError() }
+            guard var persisted = MarkdownCodec.decode(snapshot.markdown, fileURL: destination),
+                  persisted.id == updated.id,
+                  persisted.personalNotes.utf8.elementsEqual(proposed.utf8) else {
+                throw MarkdownStoreError.saveReadBackFailed
+            }
+            persisted.fileModified = Self.modificationDate(of: destination)
+            invalidateReloadSnapshot()
+            upsert(persisted)
+            lastError = nil
+            return persisted
+        }
+        updated.personalNotes = proposed
 
         guard
             let rehearsed = MarkdownCodec.decode(MarkdownCodec.encode(updated)),
-            rehearsed.personalNotes == updated.personalNotes
+            rehearsed.personalNotes.utf8.elementsEqual(updated.personalNotes.utf8)
         else {
             throw MarkdownStoreError.writeVerificationFailed
         }
@@ -167,7 +252,7 @@ final class MarkdownStore: ObservableObject {
                 markdown,
                 fileURL: destination
             ),
-            persisted.personalNotes == saved.personalNotes
+            persisted.personalNotes.utf8.elementsEqual(saved.personalNotes.utf8)
         else {
             throw MarkdownStoreError.saveReadBackFailed
         }
@@ -182,17 +267,101 @@ final class MarkdownStore: ObservableObject {
     /// completely rather than merging it.
     private func refuseIfChangedElsewhere(
         _ destination: URL,
-        lastSeen: Date?
+        revision: Data?
     ) throws {
-        guard let lastSeen,
-              let current = Self.modificationDate(of: destination),
-              // Second granularity on some volumes, so the same tolerance the
-              // Markdown editor uses.
-              current.timeIntervalSince(lastSeen) > 1
-        else { return }
+        var info = stat()
+        if lstat(destination.path, &info) != 0 {
+            guard errno == ENOENT else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            guard revision == nil else { throw CocoaError(.fileNoSuchFile) }
+            return
+        }
+        guard info.st_mode & S_IFMT == S_IFREG else {
+            throw MarkdownStoreError.unsafeSaveDestination
+        }
+        let current = try Data(contentsOf: destination)
+        if let revision, MeetingNote.contentRevision(current) == revision {
+            return
+        }
+        throw changedFileError()
+    }
+
+    private func changedFileError() -> MarkdownStoreError {
+        // Release the obsolete decode immediately. The reload independently
+        // checks exact bytes, even when another writer preserved timestamps.
+        decodeCache.clear()
         reload()
         lastError = MarkdownStoreError.fileChangedElsewhere.errorDescription
-        throw MarkdownStoreError.fileChangedElsewhere
+        return .fileChangedElsewhere
+    }
+
+    /// Prepare all bytes privately, then recheck the captured conflict baseline
+    /// immediately before publishing. The first check alone left encoding and
+    /// disk I/O between comparison and replacement. This narrows that interval;
+    /// it is not a transaction with an uncooperative external writer that races
+    /// the final comparison and rename. New destinations are always exclusive.
+    private func commitMarkdown(
+        _ markdown: String, to destination: URL, expectedRevision: Data?,
+        validatingBeforeCommit: @MainActor () throws -> Void = {}
+    ) throws {
+        let directoryURL = destination.deletingLastPathComponent()
+        let directory = open(directoryURL.path, O_RDONLY | O_DIRECTORY)
+        guard directory >= 0 else { throw writeError() }
+        defer { close(directory) }
+        let temporary = ".nook-write-\(UUID().uuidString).tmp"
+        let descriptor = openat(directory, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
+        guard descriptor >= 0 else { throw writeError() }
+        defer {
+            close(descriptor)
+            unlinkat(directory, temporary, 0)
+        }
+        let bytes = Data(markdown.utf8)
+        try bytes.withUnsafeBytes { buffer in
+            var offset = 0
+            while offset < buffer.count {
+                let written = Darwin.write(descriptor, buffer.baseAddress!.advanced(by: offset), buffer.count - offset)
+                if written < 0, errno == EINTR { continue }
+                guard written > 0 else { throw writeError() }
+                offset += written
+            }
+        }
+        guard fsync(descriptor) == 0 else { throw writeError() }
+        // A deterministic filesystem boundary for failure and concurrent-writer
+        // tests. Production supplies a no-op and never exposes the staging path.
+        try beforeWriteCommit(destination)
+        // A merge consumes two files. Rechecking only this destination would
+        // still allow an edit to its other source during staging to be lost.
+        try validatingBeforeCommit()
+        var openedDirectory = stat()
+        var currentDirectory = stat()
+        guard fstat(directory, &openedDirectory) == 0,
+              fstatat(AT_FDCWD, directoryURL.path, &currentDirectory, 0) == 0,
+              openedDirectory.st_dev == currentDirectory.st_dev,
+              openedDirectory.st_ino == currentDirectory.st_ino else {
+            throw changedFileError()
+        }
+        if expectedRevision != nil {
+            try refuseIfChangedElsewhere(destination, revision: expectedRevision)
+        }
+        let flags: UInt32 = expectedRevision == nil ? UInt32(RENAME_EXCL) : 0
+        guard renameatx_np(directory, temporary, directory, destination.lastPathComponent, flags) == 0 else {
+            if errno == EEXIST { throw changedFileError() }
+            if errno == ENOTSUP || errno == EOPNOTSUPP {
+                throw MarkdownStoreError.safeCreationUnsupported
+            }
+            throw writeError()
+        }
+        // This requests persistence of the directory entry. It is not a
+        // promise about device caches or survival of a sudden power loss.
+        _ = fsync(directory)
+        guard (try? readCommittedBytes(destination)) == bytes else {
+            throw MarkdownStoreError.saveReadBackFailed
+        }
+    }
+
+    private func writeError() -> Error {
+        POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
     }
 
     /// Refuses a save that would replace a file's contents with nothing.
@@ -273,25 +442,70 @@ final class MarkdownStore: ObservableObject {
     /// with content Nook had merely remembered. Clipboard copies may fall
     /// back; anything that can be saved back must not.
     func rawMarkdown(for note: MeetingNote) throws -> String {
-        guard let url = note.fileURL else {
-            return MarkdownCodec.encode(note)
-        }
-        return try String(contentsOf: url, encoding: .utf8)
+        try markdownSnapshot(for: note).markdown
     }
 
-    func saveRawMarkdown(_ markdown: String, for note: MeetingNote) throws {
+    struct FileSnapshot: Sendable {
+        let markdown: String
+        let revision: Data
+    }
+
+    /// The source editor and its revision must come from the same read. A
+    /// second read for a timestamp or digest could observe a different edit.
+    func markdownSnapshot(for note: MeetingNote) throws -> FileSnapshot {
+        guard let url = note.fileURL else {
+            let markdown = MarkdownCodec.encode(note)
+            return FileSnapshot(
+                markdown: markdown,
+                revision: MeetingNote.contentRevision(Data(markdown.utf8))
+            )
+        }
+        return try Self.readMarkdown(at: url)
+    }
+
+    nonisolated private static func readMarkdown(at url: URL) throws -> FileSnapshot {
+        let contents = try Data(contentsOf: url)
+        guard let markdown = String(data: contents, encoding: .utf8) else {
+            throw CocoaError(.fileReadInapplicableStringEncoding)
+        }
+        return FileSnapshot(
+            markdown: markdown,
+            revision: MeetingNote.contentRevision(contents)
+        )
+    }
+
+    func saveRawMarkdown(
+        _ markdown: String,
+        for note: MeetingNote,
+        expectedRevision: Data? = nil
+    ) throws {
         guard let url = note.fileURL else {
             throw CocoaError(.fileNoSuchFile)
         }
         guard var decoded = MarkdownCodec.decode(markdown, fileURL: url) else {
             throw MarkdownStoreError.invalidDocument
         }
-        try markdown.write(to: url, atomically: true, encoding: .utf8)
+        // Source editing can change content, but cannot redirect the library's
+        // stable identity or replace another note's in-memory entry.
+        guard decoded.id == note.id else {
+            throw MarkdownStoreError.noteIdentityChanged
+        }
+        try refuseIfChangedElsewhere(
+            url,
+            revision: expectedRevision ?? note.fileRevision
+                ?? knownNote(for: note)?.fileRevision
+        )
+        try commitMarkdown(
+            markdown, to: url,
+            expectedRevision: expectedRevision ?? note.fileRevision
+                ?? knownNote(for: note)?.fileRevision
+        )
         protectSensitiveFile(at: url)
         decoded.fileURL = url
         // Our own write is not an external change, so the whole-note save path
         // must see this timestamp as the one it last read.
         decoded.fileModified = Self.modificationDate(of: url)
+        decoded.fileRevision = MeetingNote.contentRevision(Data(markdown.utf8))
         invalidateReloadSnapshot()
         upsert(decoded)
         loadIssues.removeAll { $0.fileURL == url }
@@ -312,7 +526,7 @@ final class MarkdownStore: ObservableObject {
     /// may still be using.
     @discardableResult
     func renameManagedFile(for note: MeetingNote) throws -> MeetingNote {
-        let known = notes.first(where: { $0.id == note.id })
+        let known = try knownNote(for: note)
         guard let source = note.fileURL ?? known?.fileURL else {
             lastError = MarkdownStoreError.renameRequiresSavedNote.errorDescription
             throw MarkdownStoreError.renameRequiresSavedNote
@@ -331,7 +545,7 @@ final class MarkdownStore: ObservableObject {
 
         try refuseIfChangedElsewhere(
             sourceURL,
-            lastSeen: note.fileModified ?? known?.fileModified
+            revision: note.fileRevision ?? known?.fileRevision
         )
 
         let destination = availableDestination(
@@ -346,6 +560,7 @@ final class MarkdownStore: ObservableObject {
             var unchanged = note
             unchanged.fileURL = sourceURL
             unchanged.fileModified = Self.modificationDate(of: sourceURL)
+            unchanged.fileRevision = note.fileRevision ?? known?.fileRevision
             upsert(unchanged)
             lastError = nil
             return unchanged
@@ -365,8 +580,9 @@ final class MarkdownStore: ObservableObject {
         var renamed = note
         renamed.fileURL = destinationURL
         renamed.fileModified = Self.modificationDate(of: destinationURL)
+        renamed.fileRevision = note.fileRevision ?? known?.fileRevision
         invalidateReloadSnapshot()
-        upsert(renamed)
+        upsert(renamed, replacingFileURL: sourceURL)
         lastError = nil
         return renamed
     }
@@ -376,19 +592,31 @@ final class MarkdownStore: ObservableObject {
     /// Trashing rather than unlinking keeps the deletion reversible from the
     /// Finder, which matters for the only destructive action in the library.
     /// Kept audio in the recordings folder is left where it is; the existing
-    /// orphan cleanup and audio retention govern it. Returns false and sets
+    /// recovery controls let the user remove it explicitly. Returns false and sets
     /// `lastError` when nothing was deleted, leaving every list untouched.
     @discardableResult
-    func delete(_ note: MeetingNote) -> Bool {
+    func delete(
+        _ note: MeetingNote,
+        validatingBeforeTrash: @MainActor () throws -> Void = {}
+    ) -> Bool {
+        do {
+            try validatingBeforeTrash()
+        } catch {
+            lastError = error.localizedDescription
+            return false
+        }
         guard let url = note.fileURL else {
             // A note that has never been saved has no file to protect.
-            notes.removeAll { $0.id == note.id }
+            notes.removeAll { $0.id == note.id && $0.fileURL == nil }
+            onNoteDeleted?(note)
             return true
         }
         do {
-            if fileManager.fileExists(atPath: url.path) {
-                try fileManager.trashItem(at: url, resultingItemURL: nil)
+            guard fileManager.fileExists(atPath: url.path) else {
+                lastError = "The original note is no longer available. Unfinished edits and recovery copies were kept."
+                return false
             }
+            try fileManager.trashItem(at: url, resultingItemURL: nil)
         } catch {
             // A missing Trash is a safety boundary, not an invitation to
             // unlink the only copy. Keep both the file and the in-memory note
@@ -397,10 +625,50 @@ final class MarkdownStore: ObservableObject {
                 + error.localizedDescription
             return false
         }
-        notes.removeAll { $0.id == note.id }
+        // Copied Markdown can carry the same UUID at two different paths.
+        // Only the file actually moved to Trash has been deleted.
+        notes.removeAll {
+            $0.id == note.id && $0.fileURL?.standardizedFileURL == url.standardizedFileURL
+        }
         invalidateReloadSnapshot()
         lastError = nil
+        onNoteDeleted?(note)
         return true
+    }
+
+    /// A merge owns two saved snapshots. Checking only its surviving file
+    /// would still allow a newer absorbed file to be moved to Trash.
+    /// Recheck both at the write boundary and again before cleanup. This
+    /// narrows filesystem races; it is not a transaction with other writers.
+    func validateMergeSource(
+        _ note: MeetingNote, directory: URL, generation: Int
+    ) throws {
+        guard storageGeneration == generation,
+              storageURL.standardizedFileURL == directory.standardizedFileURL
+        else { throw NoteMergeError.libraryChanged }
+        guard !isLoading else { throw NoteMergeError.libraryLoading }
+        guard !duplicateNoteIDs.contains(note.id) else {
+            throw NoteMergeError.ambiguousSource
+        }
+        guard let url = note.fileURL,
+              url.deletingLastPathComponent().standardizedFileURL == directory.standardizedFileURL,
+              let revision = note.fileRevision,
+              let current = uniqueNote(id: note.id),
+              current.libraryIdentity == note.libraryIdentity,
+              current.fileRevision == revision
+        else { throw NoteMergeError.sourceChanged }
+        do {
+            try refuseIfChangedElsewhere(url, revision: revision)
+        } catch {
+            throw NoteMergeError.sourceChanged
+        }
+    }
+
+    /// A new pad checkpoints this destination before its first save so a
+    /// restart can distinguish an unfinished edit from a completed save whose
+    /// recovery cleanup was interrupted. The save still checks for conflicts.
+    func destinationForNewNote(_ note: MeetingNote) -> URL {
+        availableDestination(for: note)
     }
 
     func selectStorageDirectory() -> URL? {
@@ -490,13 +758,35 @@ final class MarkdownStore: ObservableObject {
         }
     }
 
-    private func upsert(_ note: MeetingNote) {
-        if let index = notes.firstIndex(where: { $0.id == note.id }) {
-            notes[index] = note
-        } else {
-            notes.append(note)
+    /// Finder copies can retain the same UUID. A file path disambiguates an
+    /// existing note; without one, choosing an arbitrary copy could overwrite
+    /// or hide another document.
+    private func knownNote(for note: MeetingNote) throws -> MeetingNote? {
+        let candidates = notes.filter { $0.id == note.id }
+        if let path = note.fileURL?.standardizedFileURL {
+            return candidates.first { $0.fileURL?.standardizedFileURL == path }
         }
-        notes.sort { $0.startedAt > $1.startedAt }
+        guard candidates.count <= 1 else {
+            throw MarkdownStoreError.ambiguousNoteIdentity
+        }
+        return candidates.first
+    }
+
+    private func upsert(_ note: MeetingNote, replacingFileURL: URL? = nil) {
+        let previousPath = (replacingFileURL ?? note.fileURL)?.standardizedFileURL
+        var updated = notes
+        if let index = updated.firstIndex(where: {
+            $0.id == note.id && $0.fileURL?.standardizedFileURL == previousPath
+        }) {
+            updated[index] = note
+        } else {
+            updated.append(note)
+        }
+        updated.sort { $0.startedAt > $1.startedAt }
+        // A published append exposed an unsorted library before a second
+        // publication sorted it. Recent-note and prep subscribers must see
+        // the complete, correctly ordered snapshot once for this mutation.
+        notes = updated
     }
 
     /// A detached reload is a snapshot of the directory before this mutation.
@@ -606,16 +896,18 @@ final class MarkdownStore: ObservableObject {
                 let modified = try? url.resourceValues(forKeys: [
                     .contentModificationDateKey
                 ]).contentModificationDate
-                if let modified, let cached = cache?.note(
-                    for: url,
-                    modified: modified
-                ) {
-                    notes.append(cached)
-                    continue
-                }
-
                 do {
-                    let markdown = try String(contentsOf: url, encoding: .utf8)
+                    let snapshot = try readMarkdown(at: url)
+                    if var cached = cache?.note(for: url, revision: snapshot.revision) {
+                        // The decoded content is identical, but its path
+                        // spelling or modification date may have changed.
+                        cached.fileURL = url
+                        cached.fileModified = modified
+                        cached.fileRevision = snapshot.revision
+                        notes.append(cached)
+                        continue
+                    }
+                    let markdown = snapshot.markdown
                     guard var note = MarkdownCodec.decode(
                         markdown,
                         fileURL: url
@@ -632,9 +924,8 @@ final class MarkdownStore: ObservableObject {
                     // what lets a later whole-note save notice somebody else
                     // edited it in between.
                     note.fileModified = modified
-                    if let modified {
-                        cache?.store(note, for: url, modified: modified)
-                    }
+                    note.fileRevision = snapshot.revision
+                    cache?.store(note, for: url, revision: snapshot.revision)
                     notes.append(note)
                 } catch {
                     issues.append(
@@ -645,6 +936,7 @@ final class MarkdownStore: ObservableObject {
                     )
                 }
             }
+            cache?.prune(keeping: urls)
             return .success(
                 (
                     notes: notes.sorted { $0.startedAt > $1.startedAt },
@@ -659,25 +951,36 @@ final class MarkdownStore: ObservableObject {
 
 enum MarkdownStoreError: LocalizedError {
     case invalidDocument
+    case noteIdentityChanged
+    case ambiguousNoteIdentity
     case writeVerificationFailed
     case saveReadBackFailed
     case fileChangedElsewhere
+    case personalNotesChangedElsewhere
     case wouldEmptyNote
     case renameRequiresSavedNote
     case renameRequiresManagedFile
     case renameSourceMissing
     case renameFailed
+    case unsafeSaveDestination
+    case safeCreationUnsupported
 
     var errorDescription: String? {
         switch self {
         case .invalidDocument:
             "The Markdown frontmatter is missing or invalid. Your changes haven’t been written."
+        case .ambiguousNoteIdentity:
+            "More than one file has this note’s ID. Open the specific file before saving. No files were changed."
+        case .noteIdentityChanged:
+            "A note’s ID cannot be changed in this editor. Keep the original ID to save. Your draft and the saved files were kept."
         case .writeVerificationFailed:
             "Nook couldn’t verify these changes would survive the Markdown round-trip, so your file was left untouched."
         case .saveReadBackFailed:
             "Nook saved this note but couldn’t read it back. Check the file before making more changes."
         case .fileChangedElsewhere:
-            "This file changed outside Nook, so it was reloaded instead of overwritten. Try your change again."
+            "This file changed outside Nook. Nothing was written. Review the current file before applying your changes."
+        case .personalNotesChangedElsewhere:
+            "My notes changed since this edit began. Nothing was written. Compare your draft with the current file before continuing."
         case .wouldEmptyNote:
             "Saving would have emptied this note, so nothing was written. Open the file to check it."
         case .renameRequiresSavedNote:
@@ -688,6 +991,10 @@ enum MarkdownStoreError: LocalizedError {
             "This note’s Markdown file is missing, so it was not renamed."
         case .renameFailed:
             "Nook couldn’t rename this note file, so the original was left unchanged."
+        case .unsafeSaveDestination:
+            "This note’s location is not a regular file. Nothing was written. Choose a different location."
+        case .safeCreationUnsupported:
+            "This notes folder does not support safe file creation. Nothing was written. Choose a folder on your Mac."
         }
     }
 }

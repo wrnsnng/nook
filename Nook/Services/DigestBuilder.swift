@@ -20,10 +20,45 @@ enum DigestBuilder {
         now: Date = Date()
     ) -> [MeetingNote] {
         let window = period(now: now)
-        return allNotes
+        return LibraryNoteAggregation.partition(allNotes).eligible
             .filter { $0.kind == .meeting }
             .filter { $0.startedAt >= window.start && $0.startedAt <= window.end }
             .sorted { $0.startedAt < $1.startedAt }
+    }
+
+    static func omittedMeetingCount(from allNotes: [MeetingNote], now: Date = Date()) -> Int {
+        let window = period(now: now)
+        return LibraryNoteAggregation.partition(allNotes).omitted.filter {
+            $0.kind == .meeting && $0.startedAt >= window.start && $0.startedAt <= window.end
+        }.count
+    }
+
+    /// An update has no explicit file choice. A duplicated candidate must
+    /// therefore be reviewed before one copy can become the weekly digest.
+    static func replacement(in notes: [MeetingNote], now: Date = Date()) throws -> MeetingNote? {
+        let window = period(now: now)
+        let candidates = notes.filter {
+            $0.kind == .digest && $0.startedAt >= window.start && $0.startedAt <= window.end
+        }
+        let omittedIDs = Set(LibraryNoteAggregation.partition(notes).omitted.map(\.id))
+        guard !candidates.contains(where: { omittedIDs.contains($0.id) }) else {
+            throw DigestBuildError.ambiguousReplacement
+        }
+        return candidates.first
+    }
+
+    /// Compiling can suspend. Never turn a previous target into permission to
+    /// update another copy, nor a previous absence into a second new digest.
+    static func validateReplacement(
+        _ original: MeetingNote?,
+        in notes: [MeetingNote],
+        now: Date
+    ) throws {
+        let current = try replacement(in: notes, now: now)
+        guard current?.libraryIdentity == original?.libraryIdentity,
+              current?.fileRevision == original?.fileRevision else {
+            throw DigestBuildError.changedReplacement
+        }
     }
 
     static func build(
@@ -31,6 +66,7 @@ enum DigestBuilder {
         now: Date = Date(),
         id: UUID = UUID(),
         fileURL: URL? = nil,
+        replacing existing: MeetingNote? = nil,
         overviewProvider: (@Sendable ([MeetingNote]) async -> String?)? = nil
     ) async -> MeetingNote {
         let window = period(now: now)
@@ -80,6 +116,9 @@ enum DigestBuilder {
             \(window.end.formatted(date: .abbreviated, time: .omitted)). \
             \(stats.joined(separator: ", ")).
             """
+        if omittedMeetingCount(from: allNotes, now: now) > 0 {
+            summary += "\n\n" + LibraryNoteAggregation.omissionMessage
+        }
         if let overview = await overviewProvider?(covered),
            !overview.trimmingCharacters(in: .whitespaces).isEmpty {
             summary += "\n\n\(overview.trimmingCharacters(in: .whitespaces))"
@@ -89,7 +128,11 @@ enum DigestBuilder {
         formatter.dateFormat = "MMM d"
         let title = "Week of \(formatter.string(from: window.start))"
 
-        return MeetingNote(
+        // A compiled update owns its overview and extracted outcomes, not
+        // the user's title, annotations, tasks or file revision. Keeping the
+        // original snapshot also makes an external edit during compilation
+        // a save conflict rather than permission to overwrite the newer file.
+        var digest = existing ?? MeetingNote(
             id: id,
             kind: .digest,
             title: title,
@@ -103,6 +146,12 @@ enum DigestBuilder {
             transcript: [],
             fileURL: fileURL
         )
+        digest.startedAt = window.start
+        digest.endedAt = window.end
+        digest.summary = summary
+        digest.keyPoints = keyPoints
+        digest.decisions = decisions
+        return digest
     }
 
     /// How much of the week was spent in captured conversation. Uses each
@@ -110,5 +159,19 @@ enum DigestBuilder {
     /// recorded time rather than the span between sittings.
     static func conversationTimeLabel(for seconds: TimeInterval) -> String {
         "\(NookElapsedTime.minutes(seconds)) of conversation"
+    }
+}
+
+enum DigestBuildError: LocalizedError, Equatable {
+    case ambiguousReplacement
+    case changedReplacement
+
+    var errorDescription: String? {
+        switch self {
+        case .ambiguousReplacement:
+            "The weekly digest has copies with a shared ID. Review the copies in your library before updating it."
+        case .changedReplacement:
+            "The library or weekly digest changed while it was being compiled. Review it and try again."
+        }
     }
 }

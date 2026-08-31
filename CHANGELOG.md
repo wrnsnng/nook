@@ -4,6 +4,165 @@ Nook follows a user-facing release-note model. Each published version has a
 Markdown note in [`Releases/`](Releases/) and a matching `v<version>` release in
 the [binary releases repository](https://github.com/wrnsnng/nook-releases/releases).
 
+## Unreleased
+
+## 1.20.0
+
+[Release notes](Releases/Nook-1.20.0.md)
+
+- Saving publishes one sorted Library snapshot, and draft-recovery status
+  updates stay within their sidebar section instead of invalidating the whole
+  Library. The native editor is configured at creation for long-paragraph
+  editing without changing engines during an edit.
+- Unchanged action lists, empty searches and absent prep briefs no longer
+  broadcast redundant Library updates. Changed file revisions, Reminders
+  receipts, errors and cancelled searches still update their own state.
+- Unrelated interface updates preserve active text composition. Explicit
+  Unicode-only replacements reach the native editor without replacing its
+  view, selection or focus.
+- Delayed recording summaries preserve Unicode-only edits, and recovery refuses
+  to overwrite a same-ID note restored while processing. Appended recordings
+  recheck both audio files before using their timeline or replacing kept audio;
+  a failed placement retains the session's original capture and extracted audio.
+- Library rows reuse their captured file identity instead of repeatedly
+  normalizing paths during rendering. Saving, renaming and reloading refresh
+  the identity while preserving original file URLs and copied-note ownership.
+- Saving My notes no longer reformats the file when only surrounding whitespace
+  changed. Original line breaks are kept, and a completed draft can be reconciled
+  after interrupted recovery cleanup without creating another note.
+- Library and detail notices reserve space above the content instead of covering
+  the title. Replacing or dismissing a notice keeps the editor and its selection.
+- Summary validation checks numeric wording against the transcript, including
+  quantities, percentages, currencies and codes. If a regenerated summary
+  fails that check, the existing note stays unchanged.
+- Sending an action to Reminders prevents overlapping exports across Library
+  windows, rechecks the source after permission, and keeps failed attempts
+  retryable. An unrelated successful export no longer hides an export failure.
+- Selecting a saved note skips path normalization for unrelated note IDs,
+  while copied notes still require their full file identity to match.
+- A failed summary regeneration keeps the existing summary even when useful
+  transcript highlights can be recovered. Fallback text no longer mislabels
+  every generation failure as a refusal. Regeneration errors now explain that
+  the existing note was kept, rather than claiming only the transcript remains.
+- Summary regeneration has an explicit Cancel control, rejects late results
+  after a notes-folder change, and preserves newer edits down to exact Unicode
+  bytes. Changed transcript or summary guidance requires a fresh request.
+- Merging settles unfinished drafts before taking its inputs and checks both
+  source files again before saving and cleanup. Cancellation, changed files,
+  uncertain saves and failed Trash operations explain what was retained;
+  repeated callbacks cannot append the same pair again in that window.
+  A selected clean Markdown editor advances to the merged source.
+- Recording recovery stays bound to its original folder across extraction,
+  transcription and summarization. Typed live notes stay beside their original
+  recording when the Library folder changes.
+- Merging rechecks recording file identity around asynchronous work and cleanup,
+  so a replaced or modified recording is not used with an older timeline or
+  removed by a failed-cleanup fallback.
+- The command palette uses a native sheet with a named search field and Close
+  control. Ask replaces the palette within its existing sheet; other commands
+  run after dismissal. Shortcut hints follow your bindings.
+  Native presentation keeps immediate query typing in the palette.
+  Search and Close retain distinct accessibility names, and opening or re-raising
+  Quick Note puts the cursor in its editor.
+- Shortcut recording belongs to its Settings window and cancels when that
+  window loses focus, closes or detaches, or Nook deactivates. Starting another
+  recorder in the same window cancels the first; cancellation clears stale
+  rejection text and held modifiers.
+- Quick Note filing excludes ambiguous meeting copies and rejects stale targets.
+  If the meeting saves but the quick-note copy cannot be removed, a persistent
+  warning explains the retained copy and the next draft starts fresh.
+- Conflict instructions wrap in small windows. Detail action failures remain
+  visible until dismissed, and long failure messages scroll with Dismiss kept
+  outside the scrolling text. A new notice starts at the top even when its text
+  matches the previous notice.
+- Transcript playback keeps Stop available when a search has no matches and
+  stops when you leave the Transcript tab.
+- Live transcripts gain a Jump to latest control for returning after scrolling
+  back through earlier lines. Returning to the bottom resumes following, and
+  short transcripts remain visible after longer content is replaced.
+- Ask keeps answers attached to the question that produced them, cancels on
+  dismissal, and keeps Cancel reachable for long questions. Changing notes
+  folders closes Ask and the palette instead of retaining old destinations.
+- Prominent buttons gain more readable dark-mode text. Custom button presses,
+  saved-status transitions and Quick Note reflow respect Reduce Motion, while
+  Increased Contrast strengthens custom outlines and dividers. Compact and
+  hidden panel presses also honor Reduce Motion without losing visible feedback.
+- Compact Flag acknowledgment uses a checkmark, and the hidden paused indicator
+  uses a pause symbol, so neither state depends on color alone.
+- Large libraries decode transcripts more quickly without changing their text
+  or identifiers. Quick Note counts words in the background and reuses the
+  result during interface updates, without delaying saves or draft recovery.
+- Quick Note also checks for dated tasks in the background. Old suggestions
+  disappear as soon as the words change, and reopening refreshes relative dates.
+  Programmatic editor replacements preserve exact Unicode text, and typing
+  clears an obsolete empty-note validation warning. Discard remains available
+  after clearing a saved pad, while a new empty pad has nothing to discard.
+- Common library searches use a faster matcher while preserving Unicode
+  behavior. Superseded searches and closed search controllers cancel their work.
+- Settings gains a storage overview with locations, file sizes and review
+  actions for notes, recordings, drafts, temporary save copies, caches and logs.
+  It does not open file contents, follow links or delete unfinished writing.
+- New notes cannot overwrite a file created during save preparation. Existing
+  notes are checked again before replacement, and recovery cleanup refuses
+  changed copies even when cleanup is retried.
+- CLI note actions limit process output, pass only a small explicit environment,
+  and stop their process group on cancellation or timeout. Failed or oversized
+  responses leave the note unchanged.
+- Quick Note and Settings explain when the selected assistant is unavailable.
+  Refreshing availability never silently switches to an external provider.
+  A running provider's warning stays visible while it stops, late output is
+  rejected, and another action waits for cleanup. Editing and saving stay usable.
+- Normal Quit waits for assistant cleanup and stays open if it has not finished
+  within five seconds. Drafts are checked again after asynchronous shutdown
+  work, and cancelling quit restores the normal operation gates.
+- Today and All changes preserve unsaved Markdown until Save, Discard or Cancel
+  settles the decision. Background reloads and meeting completion use the same
+  protection instead of changing the selected note behind the editor.
+- Library loading, load failures and empty Today results have distinct states.
+  Empty search feedback stays compact and names the active range; Show All
+  Notes keeps the search while expanding it to the whole library.
+- Search and library reloads detect external edits even when file timestamps
+  stay unchanged. Copied notes keep distinct rows, search results and command
+  palette selections; conflicting IDs open a read-only file review.
+- Duplicate note IDs no longer route action edits or appended recordings to
+  an arbitrary copy. Library answers, prep and weekly digests omit conflicting
+  copies with an explanation. Permission restarts wait for the original
+  destination to load and keep its file path through the retry.
+- Unfinished My notes, Markdown edits, and quick notes gain local recovery
+  checkpoints. After restart, recovered drafts can be reviewed, copied,
+  exported, or saved as separate notes without overwriting their originals.
+- Draft checkpoints preserve exact Unicode text. Markdown source edits cannot
+  change a note’s ID, copied files with duplicate IDs stay separate during
+  saves and deletion, and editors remain usable after an explicit file rename.
+- Recovery controls remain visible in short windows and with long draft text.
+  Failed-copy rows show wrapping filenames, and Finder controls name the file
+  they reveal. Draft titles and filenames use primary text for readability.
+  Unsupported recovery destinations keep the draft and explain how to save
+  somewhere else.
+- Audio conversion hands each input buffer over once under a lock, removing
+  Swift concurrency warnings while preserving the complete resampled stream.
+- Saved-audio transcription has a recording-length-aware deadline and responds
+  to cancellation without waiting for a stalled Speech cleanup call.
+- Automatic audio retention leaves recovery-only recordings and interrupted
+  capture remnants untouched. Audio whose note was deleted remains available
+  in Recovery until explicitly removed.
+- Saves compare exact file contents so fast external edits are not overwritten.
+  My notes, Quick Note and Markdown drafts retain their original save baseline
+  after a conflict, and Save and Quit refuses to discard an unsaved edit.
+- Rebuilding a weekly digest preserves its title, annotations, tasks and custom
+  sections. Digests can now save nonempty My notes.
+- Transcript playback finds the correct kept recording, respects audio that
+  starts partway through a note, and exposes passage controls to VoiceOver.
+  Transcript-wide display state is computed once per update instead of per row.
+- Live transcripts keep repeated phrases and corrections. Echo removal pairs
+  only matching, overlapping microphone and system segments, one pair at a time.
+  Recovered recording parts remain chronological after the ninth resumed part.
+- Dictation rewrites conservatively check numeric literals, negation and short
+  utterances, keeping the original words when those checks fail.
+- Note actions refuse incompatible CLI installations rather than omitting
+  required protections. Codex's local file-read access is disclosed explicitly,
+  and prior Codex consent must be renewed before another note action.
+
 ## 1.19.0
 
 - Meeting words are saved before summary work begins. New meetings and sessions

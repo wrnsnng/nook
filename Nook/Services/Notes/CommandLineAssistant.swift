@@ -1,4 +1,6 @@
+import Darwin
 import Foundation
+import Synchronization
 
 /// Runs a note action through a command-line tool the user has already signed
 /// into.
@@ -12,17 +14,28 @@ import Foundation
 /// as theirs puts the user's account at risk rather than Nook's.
 ///
 /// Note text is passed on standard input, never interpolated into a command
-/// line. No shell is involved at any point, so nothing in a note can be read as
-/// a command.
+/// line. No shell parses the note text. The provider's agent capabilities need
+/// separate restrictions, checked before handing it the note.
 actor CommandLineAssistant {
-    /// A rewrite is interactive. Past this the user is better served by an
-    /// error than by a spinner.
-    private static let timeout: Duration = .seconds(90)
+    private let actionLimits: CommandLineProcessLimits
+    private let helpLimits: CommandLineProcessLimits
 
     private var located: [NoteAssistantEngine: URL] = [:]
     private var searched: Set<NoteAssistantEngine> = []
     /// Each tool's help text, read once and kept for the life of the app run.
     private var helpTexts: [NoteAssistantEngine: String] = [:]
+
+    /// Overrides let tests exercise the real pipe and cancellation path using
+    /// synthetic executables, without discovering or invoking a provider.
+    init(
+        executables: [NoteAssistantEngine: URL] = [:],
+        actionLimits: CommandLineProcessLimits = .action,
+        helpLimits: CommandLineProcessLimits = .help
+    ) {
+        located = executables
+        self.actionLimits = actionLimits
+        self.helpLimits = helpLimits
+    }
 
     func locate(_ engine: NoteAssistantEngine) -> URL? {
         if let found = located[engine] { return found }
@@ -51,6 +64,7 @@ actor CommandLineAssistant {
         on note: String,
         using engine: NoteAssistantEngine
     ) async throws -> String {
+        try Task.checkCancellation()
         guard let executable = locate(engine) else {
             throw NoteAssistantError.unavailable(engine)
         }
@@ -59,10 +73,10 @@ actor CommandLineAssistant {
             throw NoteAssistantError.unavailable(engine)
         }
 
-        let arguments = Self.arguments(
+        let arguments = try Self.arguments(
             for: engine,
             instruction: action.instruction,
-            supportedFlagsIn: await help(for: engine, at: executable)
+            supportedFlagsIn: try await help(for: engine, at: executable)
         )
 
         return try await execute(
@@ -81,85 +95,69 @@ actor CommandLineAssistant {
     /// dictated speech and other people's writing, and it routinely reads as
     /// instructions. Sending it to a tool that can act would turn "remind me to
     /// clear the downloads folder" into something that clears the downloads
-    /// folder. These runs are therefore stripped down to what a rewrite needs:
-    /// no tools, no MCP servers, no user customisation, and no session file
-    /// left behind holding the note.
+    /// folder. Every run therefore requires the provider's restrictions on
+    /// tools, configuration, and session persistence. Codex's read-only sandbox
+    /// does not disable file reads, so these flags are not an independent
+    /// guarantee that the tool can see only the note passed on standard input.
     ///
-    /// The flags are filtered against the tool's own help text rather than
-    /// assumed, because an unrecognised flag is a hard exit on both tools and
-    /// Nook does not control which version is installed. `helpText` is nil when
-    /// the help could not be read, and the full set is used then: a run that
-    /// fails loudly is better than one that quietly runs unrestricted.
+    /// Compatibility must not weaken that boundary. Missing or unreadable
+    /// help refuses the run before the note is handed to a process; filtering
+    /// out unsupported flags silently restored the installed agent's powers.
     ///
     /// Pure, so the shape of the command line can be asserted in a test.
     static func arguments(
         for engine: NoteAssistantEngine,
         instruction: String,
         supportedFlagsIn helpText: String?
-    ) -> [String] {
-        func supported(_ flag: String) -> Bool {
-            guard let helpText else { return true }
-            return helpText.contains(flag)
-        }
-
+    ) throws -> [String] {
+        let requiredFlags: [String]
         switch engine {
         case .claude:
-            var arguments: [String] = []
-            if supported("--safe-mode") {
-                // No CLAUDE.md, skills, plugins, hooks, custom agents, or MCP
-                // servers. Authentication is untouched, which is the whole
-                // point of the bridge.
-                arguments.append("--safe-mode")
-            }
-            if supported("--tools") {
-                // The documented way to disable every built-in tool.
-                arguments.append(contentsOf: ["--tools", ""])
-            }
-            if supported("--strict-mcp-config") {
-                // With no --mcp-config alongside it, this means no MCP server
-                // at all, including any the user configured globally.
-                arguments.append("--strict-mcp-config")
-            }
-            if supported("--permission-mode") {
-                // Nothing runs without an approval, and a print-mode run has
-                // nobody there to give one.
-                arguments.append(contentsOf: ["--permission-mode", "manual"])
-            }
-            if supported("--no-session-persistence") {
-                // The note is not left in a transcript on disk afterwards.
-                arguments.append("--no-session-persistence")
-            }
-            // `-p` is last on purpose. `--tools` takes a list, so it would
-            // swallow the instruction as another tool name if the instruction
-            // followed it directly; a flag in between ends the list. `-p` is
-            // the one flag this bridge cannot work without, so it is always
-            // there to do that job.
-            arguments.append(contentsOf: ["-p", instruction])
-            return arguments
+            requiredFlags = [
+                "--safe-mode", "--tools", "--strict-mcp-config",
+                "--permission-mode", "--no-session-persistence"
+            ]
         case .codex:
-            var arguments = ["exec", "--skip-git-repo-check"]
-            if supported("--sandbox") {
-                // Codex has no way to switch its tools off, so the sandbox is
-                // the limit: commands it runs cannot write or reach the network.
-                arguments.append(contentsOf: ["--sandbox", "read-only"])
-            }
-            if supported("--ignore-user-config") {
-                // Where the user's MCP servers are configured, which the
-                // sandbox does not cover. Authentication is unaffected.
-                arguments.append("--ignore-user-config")
-            }
-            if supported("--ignore-rules") {
-                arguments.append("--ignore-rules")
-            }
-            if supported("--ephemeral") {
-                // No session file holding the note afterwards.
-                arguments.append("--ephemeral")
-            }
-            arguments.append(instruction)
-            return arguments
+            requiredFlags = [
+                "--skip-git-repo-check", "--sandbox", "--ignore-user-config",
+                "--ignore-rules", "--ephemeral"
+            ]
         case .onDevice:
             return []
         }
+        guard let helpText,
+              requiredFlags.allSatisfy({ advertises($0, in: helpText) }) else {
+            throw NoteAssistantError.unsupportedVersion(engine)
+        }
+        switch engine {
+        case .claude:
+            // The tool list is variadic. A flag between it and the prompt
+            // prevents the instruction from being read as another tool name.
+            return [
+                "--safe-mode", "--tools", "", "--strict-mcp-config",
+                "--permission-mode", "manual", "--no-session-persistence",
+                "-p", instruction
+            ]
+        case .codex:
+            // Ignoring configuration is separate from the sandbox:
+            // filesystem restrictions do not cover configured MCP servers.
+            return [
+                "exec", "--skip-git-repo-check", "--sandbox", "read-only",
+                "--ignore-user-config", "--ignore-rules", "--ephemeral",
+                instruction
+            ]
+        case .onDevice:
+            return []
+        }
+    }
+
+    /// Only an option declaration counts. A description mentioning a flag,
+    /// or a longer option such as `--tools-extra`, proves no support for it.
+    private static func advertises(_ flag: String, in helpText: String) -> Bool {
+        let escaped = NSRegularExpression.escapedPattern(for: flag)
+        let pattern = #"(?m)^[\t ]*(?:-[A-Za-z0-9],[\t ]*)?"#
+            + escaped + #"(?=[\t =,]|$)"#
+        return helpText.range(of: pattern, options: .regularExpression) != nil
     }
 
     /// The tool's own help text, read once per engine.
@@ -170,72 +168,35 @@ actor CommandLineAssistant {
     private func help(
         for engine: NoteAssistantEngine,
         at executable: URL
-    ) async -> String? {
+    ) async throws -> String? {
+        try Task.checkCancellation()
         if let cached = helpTexts[engine] { return cached }
         let arguments: [String] = switch engine {
         case .claude: ["--help"]
         case .codex: ["exec", "--help"]
         case .onDevice: []
         }
-        let text = await Self.readHelp(
-            executable: executable,
-            arguments: arguments
-        )
-        if let text {
-            helpTexts[engine] = text
-        }
-        return text
-    }
-
-    /// Runs `<tool> --help` and returns what it printed.
-    ///
-    /// Deliberately not routed through `execute`: nothing is written to this
-    /// process's standard input, there is no note involved, and a tool that
-    /// cannot print its own help within a few seconds is not one to wait on.
-    private static func readHelp(
-        executable: URL,
-        arguments: [String]
-    ) async -> String? {
         guard !arguments.isEmpty else { return nil }
-        let process = Process()
-        process.executableURL = executable
-        process.arguments = arguments
-        var environment = ProcessInfo.processInfo.environment
-        environment["PATH"] = Self.searchPath
-        process.environment = environment
-        process.currentDirectoryURL = URL(
-            fileURLWithPath: NSTemporaryDirectory()
-        )
-
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardOutput = stdout
-        process.standardError = stderr
         do {
-            try process.run()
+            // An empty input closes stdin immediately. Help must never inherit
+            // input from the app, and it is subject to the same bounded pump.
+            let result = try await CommandLineProcessRunner.run(
+                executable: executable, arguments: arguments, input: Data(),
+                environment: Self.environment, limits: helpLimits
+            )
+            guard result.exitStatus == 0,
+                  let text = String(data: result.stdout, encoding: .utf8),
+                  !text.isEmpty else { return nil }
+            helpTexts[engine] = text
+            return text
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
+            // A failed, oversized or incomplete help response establishes no
+            // support for the required restrictions. Never run with fewer.
             return nil
         }
-
-        let handle = ProcessHandle(process: process)
-        let timeout = Task {
-            try? await Task.sleep(for: Self.helpTimeout)
-            guard !Task.isCancelled else { return }
-            await handle.terminate()
-        }
-        // Both pipes again, for the reason `execute` drains both: a tool that
-        // fills the one nobody is reading never reaches the one that is.
-        async let errors = Self.readAll(stderr.fileHandleForReading)
-        let data = await Self.readAll(stdout.fileHandleForReading)
-        _ = await errors
-        await Self.waitForExit(handle)
-        timeout.cancel()
-
-        let text = String(decoding: data, as: UTF8.self)
-        return text.isEmpty ? nil : text
     }
-
-    private static let helpTimeout: Duration = .seconds(10)
 
     private func execute(
         executable: URL,
@@ -243,86 +204,33 @@ actor CommandLineAssistant {
         input: String,
         engine: NoteAssistantEngine
     ) async throws -> String {
-        let process = Process()
-        process.executableURL = executable
-        process.arguments = arguments
-        // A GUI app inherits almost no PATH, and these tools shell out to node
-        // and to their own helpers.
-        var environment = ProcessInfo.processInfo.environment
-        environment["PATH"] = Self.searchPath
-        process.environment = environment
-        // Somewhere harmless to run: these tools take the working directory as
-        // their context, and the user's notes folder is not it.
-        process.currentDirectoryURL = URL(
-            fileURLWithPath: NSTemporaryDirectory()
-        )
-
-        let stdin = Pipe()
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardInput = stdin
-        process.standardOutput = stdout
-        process.standardError = stderr
-
+        let result: CommandLineProcessResult
         do {
-            try process.run()
-        } catch {
+            result = try await CommandLineProcessRunner.run(
+                executable: executable, arguments: arguments, input: Data(input.utf8),
+                environment: Self.environment, limits: actionLimits
+            )
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch CommandLineProcessError.launchFailed {
             throw NoteAssistantError.unavailable(engine)
-        }
-
-        // The note is written after the readers and the deadline below exist,
-        // and off this actor.
-        //
-        // A pipe holds about 64KB. A note larger than that fills it, and the
-        // write then waits for the child to read, which a child busy printing
-        // to a pipe nobody is draining yet will never do. Writing here
-        // synchronously blocked one of the cooperative pool's threads for as
-        // long as that took, which is unrelated work across the whole app, and
-        // put the write in front of the only thing that could break the
-        // deadlock.
-        //
-        // Both pipes are drained at once, and the deadline runs alongside them.
-        //
-        // Reading one pipe to the end and then the other cannot work here.
-        // `readToEnd` returns only when the child closes that pipe, which for a
-        // healthy process means at exit, so a deadline placed after the reads
-        // could only ever be checked against an already-finished process. It
-        // also deadlocks whenever the child fills the pipe nobody is reading
-        // yet, which either of these tools can do by reporting progress on
-        // stderr while its result is still on stdout.
-        let timedOut = TimeoutFlag()
-        let handle = ProcessHandle(process: process)
-        let timeout = Task {
-            try? await Task.sleep(for: Self.timeout)
-            guard !Task.isCancelled else { return }
-            timedOut.set()
-            // Terminating closes the pipes, which is what releases the reads.
-            await handle.terminate()
-        }
-
-        async let written: Void = Self.writeAll(
-            Data(input.utf8),
-            to: stdin.fileHandleForWriting
-        )
-        async let output = Self.readAll(stdout.fileHandleForReading)
-        async let errors = Self.readAll(stderr.fileHandleForReading)
-        let outputData = await output
-        let errorData = await errors
-        // Returns once the child has read the note, or immediately once the
-        // child is gone and the pipe is broken. Awaited after the reads so a
-        // child that never reads its input cannot hold this up.
-        await written
-        await Self.waitForExit(handle)
-        timeout.cancel()
-
-        guard !timedOut.isSet else {
+        } catch CommandLineProcessError.timedOut {
             throw NoteAssistantError.failed(
                 "\(engine.title) took too long and was stopped. Your note is unchanged."
             )
+        } catch CommandLineProcessError.outputLimit {
+            throw NoteAssistantError.failed(
+                "\(engine.title) returned too much output and was stopped. Your note is unchanged."
+            )
+        } catch {
+            throw NoteAssistantError.failed(
+                "\(engine.title) could not finish exchanging the note. Your note is unchanged."
+            )
         }
-
-        guard process.terminationStatus == 0 else {
-            let message = String(decoding: errorData, as: UTF8.self)
+        guard result.exitStatus == 0 else {
+            // Provider diagnostics can contain note text. Keep them transient
+            // and small; neither output stream is written to an app log.
+            let message = String(decoding: result.stderr.prefix(4_096), as: UTF8.self)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             throw NoteAssistantError.failed(
                 message.isEmpty
@@ -330,45 +238,28 @@ actor CommandLineAssistant {
                     : message
             )
         }
-        return String(decoding: outputData, as: UTF8.self)
+        guard let text = String(data: result.stdout, encoding: .utf8) else {
+            throw NoteAssistantError.failed(
+                "\(engine.title) returned unreadable text. Your note is unchanged."
+            )
+        }
+        return text
     }
 
-    /// Reads a pipe to the end without blocking the actor.
-    ///
-    /// `readToEnd` is synchronous and waits on the child, so it is kept off the
-    /// cooperative pool: blocking one of those threads starves unrelated work
-    /// across the whole app.
-    private static func readAll(_ handle: FileHandle) async -> Data {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let data = (try? handle.readToEnd()) ?? Data()
-                continuation.resume(returning: data)
-            }
-        }
-    }
-
-    /// Writes a pipe to the end without blocking the actor, then closes it.
-    ///
-    /// `write(contentsOf:)` rather than `write(_:)`: the child may have exited
-    /// already, and the older call raises an Objective-C exception on a broken
-    /// pipe, which Swift cannot catch and which would take the app down.
-    private static func writeAll(_ data: Data, to handle: FileHandle) async {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                try? handle.write(contentsOf: data)
-                try? handle.close()
-                continuation.resume()
-            }
-        }
-    }
-
-    private static func waitForExit(_ handle: ProcessHandle) async {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                handle.waitUntilExit()
-                continuation.resume()
-            }
-        }
+    /// Construct, rather than filter, the environment. Reading the app's
+    /// environment would also read credentials and runtime injection options
+    /// that have no reason to cross this bridge. The CLI still locates its own
+    /// authentication through the account's real home directory.
+    static var environment: [String: String] {
+        [
+            "HOME": NSHomeDirectory(),
+            "USER": NSUserName(),
+            "LOGNAME": NSUserName(),
+            "PATH": searchPath,
+            "TMPDIR": NSTemporaryDirectory(),
+            "LANG": "en_US.UTF-8",
+            "LC_ALL": "en_US.UTF-8"
+        ]
     }
 
     private func executableName(for engine: NoteAssistantEngine) -> String? {
@@ -410,54 +301,369 @@ actor CommandLineAssistant {
     ).joined(separator: ":")
 }
 
-/// Carries a `Process` across the isolation boundaries this needs.
-///
-/// `Process` is not `Sendable`. What crosses here is limited to reading
-/// `isRunning` and `processIdentifier`, and calling `terminate` and
-/// `waitUntilExit`, all of which are safe to call from another thread.
-private final class ProcessHandle: @unchecked Sendable {
-    private let process: Process
+struct CommandLineProcessLimits: Sendable {
+    let stdoutBytes: Int
+    let stderrBytes: Int
+    let timeout: TimeInterval
+    var terminationGrace: TimeInterval = 0.3
 
-    init(process: Process) {
-        self.process = process
+    static let action = Self(stdoutBytes: 2 * 1_024 * 1_024, stderrBytes: 64 * 1_024, timeout: 90)
+    static let help = Self(stdoutBytes: 256 * 1_024, stderrBytes: 64 * 1_024, timeout: 10)
+}
+
+struct CommandLineProcessResult: Sendable {
+    let stdout: Data
+    let stderr: Data
+    let exitStatus: Int32
+}
+
+enum CommandLineProcessError: Error, Equatable {
+    case launchFailed
+    case timedOut
+    case outputLimit
+    case incompleteInput
+    case incompleteOutput
+    case ioFailure
+}
+
+/// One nonblocking pump owns each child's descriptors and lifecycle. Blocking
+/// FileHandle reads cannot be cancelled when a descendant keeps a pipe open;
+/// a separate writer can also block forever when the child ignores stdin.
+/// Polling all three pipes off the cooperative pool bounds both cases, and a
+/// finite read per turn stops an output flood from starving cancellation.
+enum CommandLineProcessRunner {
+    static func run(
+        executable: URL,
+        arguments: [String],
+        input: Data,
+        environment: [String: String],
+        limits: CommandLineProcessLimits
+    ) async throws -> CommandLineProcessResult {
+        try Task.checkCancellation()
+        let cancellation = ProcessCancellation()
+        let result = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation {
+                (continuation: CheckedContinuation<CommandLineProcessResult, any Error>) in
+                let operation: @Sendable () -> Void = {
+                    continuation.resume(with: Result {
+                        try pump(
+                            executable: executable, arguments: arguments, input: input,
+                            environment: environment, limits: limits,
+                            isCancelled: { cancellation.isCancelled }
+                        )
+                    })
+                }
+                DispatchQueue.global(qos: .userInitiated).async(execute: operation)
+            }
+        } onCancel: {
+            cancellation.cancel()
+        }
+        try Task.checkCancellation()
+        return result
     }
 
-    /// Asks the process to stop, then insists.
-    ///
-    /// `terminate()` sends SIGTERM, which a process is free to ignore or be too
-    /// stuck to handle. If that happens the pipes never reach end of file and
-    /// the read never returns, so the note would sit under a spinner with no
-    /// way back. The escalation bounds that.
-    func terminate() async {
-        guard process.isRunning else { return }
-        process.terminate()
+    private static func pump(
+        executable: URL,
+        arguments: [String],
+        input: Data,
+        environment: [String: String],
+        limits: CommandLineProcessLimits,
+        isCancelled: @Sendable () -> Bool
+    ) throws -> CommandLineProcessResult {
+        guard limits.stdoutBytes >= 0, limits.stderrBytes >= 0,
+              limits.timeout.isFinite, limits.timeout > 0,
+              limits.terminationGrace.isFinite, limits.terminationGrace >= 0 else {
+            throw CommandLineProcessError.launchFailed
+        }
+        if isCancelled() { throw CancellationError() }
+        let started = monotonicTime
+        let stdin = try ProcessPipe()
+        let stdout = try ProcessPipe()
+        let stderr = try ProcessPipe()
+        let pid = try spawn(
+            executable: executable, arguments: arguments, environment: environment,
+            stdin: stdin, stdout: stdout, stderr: stderr
+        )
+        stdin.closeRead()
+        stdout.closeWrite()
+        stderr.closeWrite()
 
-        try? await Task.sleep(for: .seconds(3))
-        guard process.isRunning else { return }
-        let pid = process.processIdentifier
-        guard pid > 0 else { return }
-        kill(pid, SIGKILL)
+        var ownsLeader = true
+        // Keep the leader waitable until every group signal is finished. If it
+        // were reaped first, its PID could be reused by an unrelated process.
+        defer {
+            stdin.closeWrite()
+            stdout.closeRead()
+            stderr.closeRead()
+            if ownsLeader {
+                _ = kill(-pid, SIGKILL)
+                reap(pid)
+            }
+        }
+        try stdin.configureParentWrite()
+        try stdout.configureParentRead()
+        try stderr.configureParentRead()
+        var output = Data()
+        var errors = Data()
+        var inputOffset = 0
+        var exitStatus: Int32?
+        var exitObservedAt: TimeInterval?
+        var stopReason: (any Error)?
+        var stoppedAt: TimeInterval?
+        if input.isEmpty { stdin.closeWrite() }
+
+        func stop(_ error: any Error, at now: TimeInterval) {
+            guard stopReason == nil else { return }
+            stopReason = error
+            stoppedAt = now
+            stdin.closeWrite()
+            _ = kill(-pid, SIGTERM)
+        }
+
+        while true {
+            let now = monotonicTime
+            if isCancelled() {
+                stop(CancellationError(), at: now)
+            } else if now - started >= limits.timeout {
+                stop(CommandLineProcessError.timedOut, at: now)
+            }
+
+            if exitStatus == nil {
+                var info = siginfo_t()
+                let status = waitid(P_PID, id_t(pid), &info, WEXITED | WNOHANG | WNOWAIT)
+                if status == 0, info.si_pid == pid {
+                    exitStatus = info.si_code == CLD_EXITED ? info.si_status : 128 + info.si_status
+                    exitObservedAt = now
+                    if inputOffset < input.count {
+                        stop(CommandLineProcessError.incompleteInput, at: now)
+                    }
+                } else if status != 0, errno != EINTR {
+                    // No signal after ownership was lost, even if another
+                    // subsystem unexpectedly reaped our child.
+                    ownsLeader = errno != ECHILD
+                    throw CommandLineProcessError.ioFailure
+                }
+            }
+            if exitStatus != nil, stdout.readFD < 0, stderr.readFD < 0 { break }
+            if let stoppedAt, now - stoppedAt >= limits.terminationGrace { break }
+            // A successful leader cannot leave a helper holding the caller
+            // open until the full action deadline. Allow buffered output to
+            // drain, then refuse an incomplete response and stop the group.
+            if let exitObservedAt, now - exitObservedAt >= 0.25 {
+                stop(CommandLineProcessError.incompleteOutput, at: now)
+            }
+
+            var descriptors = [
+                pollfd(fd: stdout.readFD, events: Int16(POLLIN), revents: 0),
+                pollfd(fd: stderr.readFD, events: Int16(POLLIN), revents: 0),
+                pollfd(fd: stdin.writeFD, events: Int16(POLLOUT), revents: 0)
+            ]
+            let ready = poll(&descriptors, nfds_t(descriptors.count), 20)
+            if ready < 0 {
+                if errno != EINTR { stop(CommandLineProcessError.ioFailure, at: monotonicTime) }
+                continue
+            }
+            do {
+                if descriptors[0].revents != 0 {
+                    try read(stdout, into: &output, limit: limits.stdoutBytes)
+                }
+                if descriptors[1].revents != 0 {
+                    try read(stderr, into: &errors, limit: limits.stderrBytes)
+                }
+                if stdin.writeFD >= 0, descriptors[2].revents != 0 {
+                    let written = input.withUnsafeBytes { bytes in
+                        Darwin.write(
+                            stdin.writeFD, bytes.baseAddress!.advanced(by: inputOffset),
+                            min(16_384, input.count - inputOffset)
+                        )
+                    }
+                    if written > 0 {
+                        inputOffset += written
+                        if inputOffset == input.count { stdin.closeWrite() }
+                    } else if written < 0, errno != EAGAIN, errno != EINTR {
+                        throw CommandLineProcessError.incompleteInput
+                    }
+                }
+            } catch {
+                stop(error, at: monotonicTime)
+            }
+        }
+        if let stopReason { throw stopReason }
+        guard let exitStatus else { throw CommandLineProcessError.ioFailure }
+        return CommandLineProcessResult(stdout: output, stderr: errors, exitStatus: exitStatus)
     }
 
-    func waitUntilExit() {
-        process.waitUntilExit()
+    private static func read(_ pipe: ProcessPipe, into data: inout Data, limit: Int) throws {
+        var buffer = [UInt8](repeating: 0, count: 16_384)
+        // Read at most one extra byte to detect overflow, but never append it.
+        let count = Darwin.read(pipe.readFD, &buffer, min(buffer.count - 1, limit - data.count) + 1)
+        if count == 0 {
+            pipe.closeRead()
+        } else if count > 0 {
+            guard count <= limit - data.count else { throw CommandLineProcessError.outputLimit }
+            data.append(contentsOf: buffer.prefix(count))
+        } else if errno != EAGAIN, errno != EINTR {
+            throw CommandLineProcessError.ioFailure
+        }
+    }
+
+    private static func spawn(
+        executable: URL,
+        arguments: [String],
+        environment: [String: String],
+        stdin: ProcessPipe,
+        stdout: ProcessPipe,
+        stderr: ProcessPipe
+    ) throws -> pid_t {
+        let argumentStrings = [executable.path] + arguments
+        let environmentStrings = environment.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }
+        guard (argumentStrings + environmentStrings).allSatisfy({ !$0.utf8.contains(0) }),
+              environment.keys.allSatisfy({ !$0.isEmpty && !$0.contains("=") }) else {
+            throw CommandLineProcessError.launchFailed
+        }
+        var actions: posix_spawn_file_actions_t?
+        try check(posix_spawn_file_actions_init(&actions))
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        var attributes: posix_spawnattr_t?
+        try check(posix_spawnattr_init(&attributes))
+        defer { posix_spawnattr_destroy(&attributes) }
+
+        try check(posix_spawn_file_actions_adddup2(&actions, stdin.readFD, STDIN_FILENO))
+        try check(posix_spawn_file_actions_adddup2(&actions, stdout.writeFD, STDOUT_FILENO))
+        try check(posix_spawn_file_actions_adddup2(&actions, stderr.writeFD, STDERR_FILENO))
+        try check(posix_spawn_file_actions_addchdir(&actions, NSTemporaryDirectory()))
+        // Creating the group inside posix_spawn avoids a setpgid race after
+        // exec. It is cleanup ownership, not a sandbox: a hostile tool can
+        // deliberately escape a process group or perform other allowed work.
+        try check(posix_spawnattr_setpgroup(&attributes, 0))
+        var defaults = sigset_t()
+        sigemptyset(&defaults)
+        for signal in [SIGPIPE, SIGTERM, SIGINT, SIGHUP] { sigaddset(&defaults, signal) }
+        try check(posix_spawnattr_setsigdefault(&attributes, &defaults))
+        var mask = sigset_t()
+        sigemptyset(&mask)
+        try check(posix_spawnattr_setsigmask(&attributes, &mask))
+        try check(posix_spawnattr_setflags(
+            &attributes,
+            Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK
+                  | POSIX_SPAWN_CLOEXEC_DEFAULT)
+        ))
+
+        let argv = try cStrings(argumentStrings)
+        defer { argv.forEach { free($0) } }
+        let envp = try cStrings(environmentStrings)
+        defer { envp.forEach { free($0) } }
+        var pid: pid_t = 0
+        let status = argv.withUnsafeBufferPointer { argvBuffer in
+            envp.withUnsafeBufferPointer { environmentBuffer in
+                posix_spawn(
+                    &pid, executable.path, &actions, &attributes,
+                    argvBuffer.baseAddress!, environmentBuffer.baseAddress!
+                )
+            }
+        }
+        try check(status)
+        return pid
+    }
+
+    private static func check(_ status: Int32) throws {
+        guard status == 0 else { throw CommandLineProcessError.launchFailed }
+    }
+
+    private static func cStrings(_ strings: [String]) throws -> [UnsafeMutablePointer<CChar>?] {
+        var pointers: [UnsafeMutablePointer<CChar>?] = []
+        for string in strings {
+            guard let pointer = strdup(string) else {
+                pointers.forEach { free($0) }
+                throw CommandLineProcessError.launchFailed
+            }
+            pointers.append(pointer)
+        }
+        pointers.append(nil)
+        return pointers
+    }
+
+    private static var monotonicTime: TimeInterval {
+        TimeInterval(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000
+    }
+
+    private static func reap(_ pid: pid_t) {
+        var status: Int32 = 0
+        let deadline = monotonicTime + 0.5
+        repeat {
+            let result = waitpid(pid, &status, WNOHANG)
+            if result == pid || (result < 0 && errno == ECHILD) { return }
+            usleep(1_000)
+        } while monotonicTime < deadline
+        // SIGKILL normally makes reaping immediate. Kernel-level stalls must
+        // not extend the UI deadline; only waiting, never signalling a reused
+        // PID, may outlive this request. All pipe ends are already closed.
+        let wait: @Sendable () -> Void = {
+            var status: Int32 = 0
+            while waitpid(pid, &status, 0) < 0 && errno == EINTR {}
+        }
+        DispatchQueue.global(qos: .utility).async(execute: wait)
     }
 }
 
-/// One-way flag shared between the deadline and the reader.
-private final class TimeoutFlag: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value = false
+private final class ProcessCancellation: Sendable {
+    private let value = Mutex(false)
 
-    func set() {
-        lock.lock()
-        value = true
-        lock.unlock()
+    var isCancelled: Bool { value.withLock { $0 } }
+    func cancel() { value.withLock { $0 = true } }
+}
+
+/// Used only on the pump's queue. Nonblocking flags apply to the parent's
+/// ends; children receive ordinary blocking stdin/stdout/stderr. CLOEXEC and
+/// spawn's close-by-default prevent unrelated descriptors entering a tool.
+private final class ProcessPipe {
+    private(set) var readFD: Int32 = -1
+    private(set) var writeFD: Int32 = -1
+
+    init() throws {
+        var descriptors: [Int32] = [-1, -1]
+        guard pipe(&descriptors) == 0 else { throw CommandLineProcessError.launchFailed }
+        readFD = descriptors[0]
+        writeFD = descriptors[1]
+        do {
+            readFD = try Self.prepare(readFD)
+            writeFD = try Self.prepare(writeFD)
+        } catch {
+            closeRead()
+            closeWrite()
+            throw error
+        }
     }
 
-    var isSet: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return value
+    private static func prepare(_ descriptor: Int32) throws -> Int32 {
+        // Keep pipe sources clear of dup2's standard-descriptor destinations,
+        // even when Nook happened to launch with a standard descriptor closed.
+        let result = fcntl(descriptor, F_DUPFD_CLOEXEC, 3)
+        guard result >= 0 else { throw CommandLineProcessError.launchFailed }
+        close(descriptor)
+        return result
     }
+
+    func closeRead() {
+        if readFD >= 0 { close(readFD); readFD = -1 }
+    }
+
+    func closeWrite() {
+        if writeFD >= 0 { close(writeFD); writeFD = -1 }
+    }
+
+    func configureParentRead() throws {
+        guard fcntl(readFD, F_SETFL, O_NONBLOCK) != -1 else {
+            throw CommandLineProcessError.ioFailure
+        }
+    }
+
+    func configureParentWrite() throws {
+        guard fcntl(writeFD, F_SETFL, O_NONBLOCK) != -1,
+              fcntl(writeFD, F_SETNOSIGPIPE, 1) != -1 else {
+            throw CommandLineProcessError.ioFailure
+        }
+    }
+
+    deinit { closeRead(); closeWrite() }
 }

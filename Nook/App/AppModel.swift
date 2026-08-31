@@ -22,12 +22,31 @@ enum NookWindowRole: String, Hashable {
     case liveNotes
 }
 
+/// Window actions and the first library publication may arrive in either
+/// order. A pending attachment needs both before its one launch presentation.
+struct LaunchPresentationGate {
+    private(set) var hasPresented = false
+
+    mutating func claim(
+        windowActionsInstalled: Bool,
+        libraryIsLoading: Bool,
+        pendingStartNeedsLibrary: Bool
+    ) -> Bool {
+        guard !hasPresented, windowActionsInstalled,
+              !libraryIsLoading || !pendingStartNeedsLibrary else { return false }
+        hasPresented = true
+        return true
+    }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     static let shared = AppModel()
 
     let appearance: NookAppearanceController
     let store: MarkdownStore
+    let draftJournal: DraftJournal
+    let draftRecovery: DraftRecoveryController
     let markdownDraft: MarkdownDraftController
     let personalNotesDraft: PersonalNotesDraftController
     let detector: MeetingDetector
@@ -47,14 +66,16 @@ final class AppModel: ObservableObject {
     private var closeLiveNotesAction: (@MainActor () -> Void)?
     private var visibleWindowRoles: Set<NookWindowRole> = []
     private weak var liveNotesWindow: NSWindow?
-    private var presentedLaunchExperience = false
+    private var launchPresentationGate = LaunchPresentationGate()
     private var cancellables: Set<AnyCancellable> = []
 
     private init() {
         let appearance = NookAppearanceController()
         let store = MarkdownStore()
-        let markdownDraft = MarkdownDraftController()
-        let personalNotesDraft = PersonalNotesDraftController()
+        let draftJournal = DraftJournal()
+        let draftRecovery = DraftRecoveryController(journal: draftJournal, store: store)
+        let markdownDraft = MarkdownDraftController(recovery: draftJournal)
+        let personalNotesDraft = PersonalNotesDraftController(recovery: draftJournal)
         let detector = MeetingDetector()
         let audioInputCheck = AudioInputCheckService()
         let meeting = MeetingCoordinator(
@@ -67,6 +88,8 @@ final class AppModel: ObservableObject {
         let notifications = MeetingNotificationService(meeting: meeting)
         self.appearance = appearance
         self.store = store
+        self.draftJournal = draftJournal
+        self.draftRecovery = draftRecovery
         self.markdownDraft = markdownDraft
         self.personalNotesDraft = personalNotesDraft
         self.detector = detector
@@ -79,7 +102,7 @@ final class AppModel: ObservableObject {
                 await audioInputCheck.stop()
             }
         )
-        let quickNote = QuickNoteController(store: store)
+        let quickNote = QuickNoteController(store: store, recovery: draftJournal)
         self.recovery = RecordingRecovery(store: store)
         dictation.quickNote = quickNote
         self.dictation = dictation
@@ -90,6 +113,24 @@ final class AppModel: ObservableObject {
         let prep = PrepBriefController(store: store, calendar: calendar)
         self.prep = prep
         self.audioInputCheck = audioInputCheck
+        store.onStorageDirectoryWillChange = {
+            markdownDraft.libraryWillChange()
+            personalNotesDraft.libraryWillChange()
+            quickNote.libraryWillChange()
+            draftJournal.flushSynchronously()
+        }
+        store.onNoteDeleted = { note in
+            markdownDraft.noteWasDeleted(note)
+            personalNotesDraft.noteWasDeleted(note)
+            quickNote.noteWasDeleted(note)
+            for id in Self.recoveryIDs(forDeleted: note, in: draftJournal.recoveredDrafts) {
+                draftJournal.resolve(id)
+            }
+        }
+        Task {
+            await draftJournal.scan()
+            await draftRecovery.reconcileCompletedDrafts()
+        }
         calendar.onUpcomingEvent = { [weak notifications, weak store] event in
             // The notification's Record action routes back through
             // MeetingNotificationService, so nothing starts without a tap.
@@ -155,6 +196,19 @@ final class AppModel: ObservableObject {
             .sink { [weak self] _ in
                 self?.recovery.scan()
                 AudioRetention.sweep(store: store)
+            }
+            .store(in: &cancellables)
+
+        store.$isLoading
+            .dropFirst()
+            .filter { !$0 }
+            .sink { [weak self] _ in
+                // Published sends before isLoading changes. The next main
+                // actor turn sees both the loaded notes and its settled flag.
+                // Keep observing in case another reload began before that turn.
+                Task { @MainActor [weak self] in
+                    self?.presentLaunchExperience()
+                }
             }
             .store(in: &cancellables)
 
@@ -228,6 +282,21 @@ final class AppModel: ObservableObject {
         .store(in: &cancellables)
 
         detector.start()
+    }
+
+    /// A recovered save can finish before cleanup. Deleting that new note
+    /// explicitly also discards its pending recovery transaction, even when
+    /// the checkpoint originally described an unsaved quick note elsewhere.
+    static func recoveryIDs(
+        forDeleted note: MeetingNote,
+        in checkpoints: [DraftCheckpoint]
+    ) -> [UUID] {
+        guard let path = note.fileURL?.standardizedFileURL.resolvingSymlinksInPath().path
+        else { return [] }
+        return checkpoints.filter { draft in
+            (draft.noteID == note.id && draft.originalFilePath == path)
+                || (draft.completion?.noteID == note.id && draft.completion?.targetPath == path)
+        }.map(\.id)
     }
 
     /// The diagnostic stream is deliberately composed at the app boundary so
@@ -388,8 +457,11 @@ final class AppModel: ObservableObject {
     }
 
     private func presentLaunchExperience() {
-        guard !presentedLaunchExperience else { return }
-        presentedLaunchExperience = true
+        guard launchPresentationGate.claim(
+            windowActionsInstalled: openLibraryAction != nil,
+            libraryIsLoading: store.isLoading,
+            pendingStartNeedsLibrary: MeetingCoordinator.pendingStartNeedsLibrary()
+        ) else { return }
 
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains(where: {

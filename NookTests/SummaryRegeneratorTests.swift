@@ -284,19 +284,71 @@ struct SummaryRegeneratorTests {
         #expect(merged.summary == regenerated.summary)
     }
 
+    @Test(arguments: [false, true])
+    func canonicalEquivalentConcurrentEditsRemainExactInEveryGeneratedField(reverse: Bool) {
+        let composed = "Caf\u{00e9} review"
+        let decomposed = "Cafe\u{0301} review"
+        let before = reverse ? decomposed : composed
+        let after = reverse ? composed : decomposed
+        #expect(before == after)
+        #expect(Data(before.utf8) != Data(after.utf8))
+        var starting = meetingNote()
+        starting.title = before
+        starting.summary = before
+        starting.keyPoints = ["Unchanged point", before]
+        starting.decisions = [before]
+        starting.actionItems = [before, "Unchanged action"]
+        var latest = starting
+        latest.title = after
+        latest.summary = after
+        latest.keyPoints[1] = after
+        latest.decisions[0] = after
+        latest.actionItems[0] = after
+        var generated = starting
+        generated.title = "Generated title"
+        generated.summary = "Generated summary"
+        generated.keyPoints = ["Generated point"]
+        generated.decisions = ["Generated decision"]
+        generated.actionItems = ["Generated action"]
+
+        let merged = SummaryRegenerator.mergingGeneratedFields(
+            from: generated, startingFrom: starting, into: latest
+        )
+
+        #expect(Data(merged.title.utf8) == Data(after.utf8))
+        #expect(Data(merged.summary.utf8) == Data(after.utf8))
+        #expect(merged.keyPoints.map { Data($0.utf8) } == latest.keyPoints.map { Data($0.utf8) })
+        #expect(merged.decisions.map { Data($0.utf8) } == latest.decisions.map { Data($0.utf8) })
+        #expect(merged.actionItems.map { Data($0.utf8) } == latest.actionItems.map { Data($0.utf8) })
+
+        // Protecting the edited title must not also block a genuinely unchanged
+        // field from receiving its requested regenerated content.
+        latest.summary = starting.summary
+        let partlyUnchanged = SummaryRegenerator.mergingGeneratedFields(
+            from: generated, startingFrom: starting, into: latest
+        )
+        #expect(Data(partlyUnchanged.title.utf8) == Data(after.utf8))
+        #expect(partlyUnchanged.summary == generated.summary)
+    }
+
     // MARK: A failed pass
 
-    @Test
-    func aFailedPassNamesTheReasonAndKeepsTheNote() async {
+    @Test(arguments: SummaryService.FailureReason.allCases)
+    func aFailedPassNamesTheReasonAndKeepsTheNote(reason: SummaryService.FailureReason) async {
         let recorder = StubRecorder()
         let note = meetingNote()
         let outcome = await SummaryRegenerator.regenerate(
             note,
-            using: failingSummarizer(recorder: recorder, reason: .modelBusy)
+            using: failingSummarizer(recorder: recorder, reason: reason)
         )
 
-        #expect(outcome == .retained(reason: .modelBusy))
+        #expect(outcome == .retained(reason: reason))
         #expect(recorder.calls == 1)
+        let message = RegenerationCopy.retainedMessage(for: reason)
+        #expect(message.hasPrefix("Your existing note is unchanged."))
+        #expect(!message.contains("only the transcript"))
+        #expect(!message.contains("no structured summary"))
+        #expect(!message.contains("without a structured summary"))
     }
 
     @Test
@@ -389,6 +441,19 @@ struct RegenerationStageTests {
             RegenerationCopy.headline(for: .writingUp) == "Writing up what it heard"
         )
         #expect(RegenerationCopy.detail(for: .writingUp) == "Nearly there")
+    }
+
+    @Test
+    func aRejectedWriteUpSaysTheExistingNoteSurvivedAndFailuresKeepTheirUsefulReasons() {
+        #expect(RegenerationCopy.retainedMessage(for: .ungrounded)
+            == "Your existing note is unchanged. The new summary did not match the transcript.")
+        let messages = SummaryService.FailureReason.allCases.map {
+            RegenerationCopy.retainedMessage(for: $0)
+        }
+        #expect(Set(messages).count == messages.count)
+        #expect(RegenerationCopy.retainedMessage(for: .appleIntelligenceOff).contains("Turn it on in System Settings"))
+        #expect(RegenerationCopy.retainedMessage(for: .modelBusy).contains("Try again in a moment"))
+        #expect(RegenerationCopy.retainedMessage(for: .timedOut).contains("Summarizing took too long"))
     }
 }
 

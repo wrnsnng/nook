@@ -5,10 +5,13 @@ struct LiveMeetingView: View {
     @EnvironmentObject private var meeting: MeetingCoordinator
     @EnvironmentObject private var shortcuts: ShortcutStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var transcriptScroll = LiveTranscriptScrollState()
     private let rendersForSnapshot: Bool
+    private let recordingControlsEnabled: Bool
 
-    init(rendersForSnapshot: Bool = false) {
+    init(rendersForSnapshot: Bool = false, recordingControlsEnabled: Bool = true) {
         self.rendersForSnapshot = rendersForSnapshot
+        self.recordingControlsEnabled = recordingControlsEnabled
     }
 
     var body: some View {
@@ -51,39 +54,84 @@ struct LiveMeetingView: View {
                 staticControlShelf
             }
         } else {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        liveHeader(title: title)
+            ScrollView {
+                // Only the header and transcript container live here. Making
+                // both levels lazy can retain an inflated transcript estimate
+                // after a large reset, leaving the viewport in blank space.
+                // Individual transcript rows remain lazy in transcriptStream.
+                VStack(alignment: .leading, spacing: 0) {
+                    liveHeader(title: title)
 
-                        if meeting.liveTranscript.segments.isEmpty,
-                           meeting.liveTranscript.latestText.isEmpty {
-                            listeningState
-                                .padding(.top, 48)
-                        } else {
-                            transcriptStream
+                    if meeting.liveTranscript.segments.isEmpty,
+                       meeting.liveTranscript.latestText.isEmpty {
+                        listeningState
+                            .padding(.top, 48)
+                    } else {
+                        transcriptStream
+                    }
+                }
+                .frame(maxWidth: 860, alignment: .leading)
+                .padding(.horizontal, 56)
+                .padding(.top, 48)
+                // The shelf reserves its own space through safeAreaInset.
+                .padding(.bottom, 18)
+                .frame(maxWidth: .infinity)
+            }
+            // The native edge is not sufficient for appended or reflowing
+            // text. Request it again only while following, then correct once
+            // measured layout grows, without starting a scroll animation.
+            .scrollPosition($transcriptScroll.position)
+            .defaultScrollAnchor(.bottom, for: .initialOffset)
+            .defaultScrollAnchor(.top, for: .alignment)
+            .onScrollGeometryChange(for: LiveTranscriptScrollState.Observation.self) { geometry in
+                transcriptScroll.observation(geometry)
+            } action: { _, observation in
+                updateScrollWithoutAnimation { $0.geometryChanged(observation) }
+            }
+            .onScrollPhaseChange { _, phase, context in
+                updateScrollWithoutAnimation {
+                    $0.phaseChanged(
+                        to: phase,
+                        isAtLatest: LiveTranscriptScrollState.isAtLatest(context.geometry)
+                    )
+                }
+            }
+            .onChange(of: meeting.liveTranscript.revision) { _, _ in
+                updateScrollWithoutAnimation { $0.transcriptChanged() }
+            }
+            .onAppear {
+                // Reopening the live view should reach the current words even
+                // when no new revision arrives, such as while capture is paused.
+                transcriptScroll.appeared()
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: 10) {
+                    if transcriptScroll.showsJumpToLatest {
+                        Button {
+                            withAnimation(NookMotion.quickAnimation(reduceMotion: reduceMotion)) {
+                                transcriptScroll.jumpToLatest()
+                            }
+                        } label: {
+                            Label("Jump to latest", systemImage: "arrow.down")
                         }
-
-                        Color.clear
-                            .frame(height: 1)
-                            .id("live-transcript-end")
+                        .buttonStyle(NookButtonStyle())
+                        .background(
+                            NookPalette.paper,
+                            in: RoundedRectangle(cornerRadius: NookRadius.control, style: .continuous)
+                        )
+                        .help("Show the latest words and follow new transcript updates")
+                        .accessibilityHint("Resumes following the live transcript")
                     }
-                    .frame(maxWidth: 860, alignment: .leading)
-                    .padding(.horizontal, 56)
-                    .padding(.top, 48)
-                    .padding(.bottom, 120)
-                    .frame(maxWidth: .infinity)
-                }
-                .onChange(of: meeting.liveTranscript.revision) { _, _ in
-                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.28)) {
-                        proxy.scrollTo("live-transcript-end", anchor: .bottom)
-                    }
-                }
-                .safeAreaInset(edge: .bottom, spacing: 0) {
                     liveControlShelf
                 }
             }
         }
+    }
+
+    private func updateScrollWithoutAnimation(_ update: (inout LiveTranscriptScrollState) -> Void) {
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { update(&transcriptScroll) }
     }
 
     private func liveHeader(title: String) -> some View {
@@ -234,6 +282,10 @@ struct LiveMeetingView: View {
         }
         .padding(.horizontal, 24)
         .padding(.bottom, 18)
+        // Synthetic replay can exercise the real scroll surface without
+        // exposing recording actions, including the compact shelf's shortcuts.
+        // Jump to latest lives outside this subtree and remains available.
+        .disabled(!recordingControlsEnabled)
     }
 
     private var fullLiveControls: some View {
@@ -428,7 +480,7 @@ struct LiveMeetingView: View {
 
             Label("Finish meeting", systemImage: "stop.fill")
                 .font(NookType.metadata)
-                .foregroundStyle(.white)
+                .foregroundStyle(NookPalette.prominentButtonForeground)
                 .padding(.horizontal, 14)
                 .frame(height: 32)
                 .background(
@@ -617,22 +669,22 @@ struct LiveMeetingView: View {
     }
 }
 
-private struct LiveShelfControlStyle: ButtonStyle {
+struct LiveShelfControlStyle: ButtonStyle {
     var tint: Color?
     var isDestructive = false
     var isCompact = false
-    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.isFocused) private var isFocused
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorSchemeContrast) private var contrast
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+        let isPressed = configuration.isPressed && isEnabled
+        let outline = self.outline(contrast: contrast)
+        return configuration.label
             .font(NookType.control)
             .lineLimit(1)
-            .foregroundStyle(
-                isDestructive
-                    ? AnyShapeStyle(Color.white)
-                    : AnyShapeStyle(tint ?? .primary)
-            )
+            .foregroundStyle(foregroundColor)
             .padding(.horizontal, isCompact ? 0 : 11)
             .frame(
                 width: isCompact ? 34 : nil,
@@ -640,34 +692,241 @@ private struct LiveShelfControlStyle: ButtonStyle {
             )
             .background {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(
-                        isDestructive
-                            ? AnyShapeStyle(
-                                NookPalette.danger.opacity(
-                                    configuration.isPressed ? 0.78 : 1
-                                )
-                            )
-                            : AnyShapeStyle(
-                                .primary.opacity(
-                                    configuration.isPressed ? 0.13 : 0.055
-                                )
-                            )
-                    )
+                    .fill(backgroundColor(isPressed: isPressed))
             }
             .overlay {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(
-                        .primary.opacity(
-                            colorScheme == .dark ? 0.11 : 0.075
-                        ),
-                        lineWidth: 0.6
+                        .primary.opacity(outline.opacity),
+                        lineWidth: outline.width
                     )
             }
-            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .opacity(isEnabled ? 1 : 0.42)
+            .scaleEffect(NookMotion.pressedScale(isPressed: isPressed, reduceMotion: reduceMotion))
+            .animation(NookMotion.quickAnimation(reduceMotion: reduceMotion), value: isPressed)
             .nookFocusRing(
                 RoundedRectangle(cornerRadius: 10, style: .continuous),
-                isVisible: isFocused
+                isVisible: isFocused && isEnabled
             )
+    }
+
+    var foregroundColor: Color {
+        // Resume's semantic green remains in the fill. Using it as small text
+        // over the pressed light surface fell below readable contrast.
+        isDestructive ? NookPalette.prominentButtonForeground : .primary
+    }
+
+    func backgroundColor(isPressed: Bool) -> Color {
+        if isDestructive {
+            // Dark-mode danger is pink, so use the shared dark filled-button
+            // ink and keep enough pressed fill to read over the glass shelf.
+            return NookPalette.danger.opacity(isPressed ? 0.90 : 1)
+        }
+        return (tint ?? .primary).opacity(isPressed ? 0.13 : 0.055)
+    }
+
+    func outline(contrast: ColorSchemeContrast) -> NookOutline.Metrics {
+        NookOutline.button(isProminent: isDestructive, contrast: contrast)
+    }
+}
+
+/// Owns only the scroll policy, not transcript content or accessibility focus.
+/// SwiftUI clears the edge position when the user scrolls. We release it as
+/// soon as scrolling begins too, so a new partial cannot fight that gesture.
+struct LiveTranscriptScrollState {
+    struct Extent: Equatable {
+        let contentHeight: CGFloat
+        let viewportHeight: CGFloat
+        let viewportWidth: CGFloat
+        let visibleHeight: CGFloat
+        let topInset: CGFloat
+        let bottomInset: CGFloat
+
+        var latestOffsetY: CGFloat {
+            max(-topInset, contentHeight + bottomInset - visibleHeight)
+        }
+
+        func isAtLatest(offsetY: CGFloat) -> Bool {
+            guard viewportHeight > 0, visibleHeight > 0 else { return false }
+            return abs(offsetY - latestOffsetY) <= 2
+        }
+    }
+
+    struct Observation: Equatable {
+        let isAtLatest: Bool
+        let generation: UInt
+        let extent: Extent?
+        let contentOffsetY: CGFloat?
+    }
+
+    var position = ScrollPosition(edge: .bottom)
+    private(set) var phase: ScrollPhase = .idle
+    private(set) var isAtLatest = true
+    private var generation: UInt = 0
+    private var lastExtent: Extent?
+    private var lastFollowingOffset: CGFloat?
+
+    var isFollowing: Bool {
+        position.edge == .bottom && !position.isPositionedByUser
+    }
+
+    var showsJumpToLatest: Bool {
+        !isFollowing && !isAtLatest
+    }
+
+    mutating func appeared() {
+        generation &+= 1
+        phase = .idle
+        isAtLatest = true
+        lastExtent = nil
+        lastFollowingOffset = nil
+        position.scrollTo(edge: .bottom)
+    }
+
+    mutating func jumpToLatest() {
+        generation &+= 1
+        lastFollowingOffset = nil
+        position.scrollTo(edge: .bottom)
+    }
+
+    /// Returns whether a fresh bottom request was made. The view applies these
+    /// automatic requests without animation; only an explicit Jump animates.
+    @discardableResult
+    mutating func transcriptChanged() -> Bool {
+        requestBottomWhileFollowing()
+    }
+
+    @discardableResult
+    mutating func phaseChanged(to phase: ScrollPhase, isAtLatest: Bool) -> Bool {
+        generation &+= 1
+        self.phase = phase
+        self.isAtLatest = isAtLatest
+        lastFollowingOffset = nil
+        switch phase {
+        case .interacting, .decelerating:
+            position.isPositionedByUser = true
+        case .idle:
+            // Use the geometry supplied with the phase, rather than an older
+            // visibility callback, when a gesture or momentum scroll ends.
+            if isAtLatest, position.isPositionedByUser {
+                position.scrollTo(edge: .bottom)
+                return true
+            }
+            // Growth during a touch or an explicit Jump waits until that
+            // interaction has settled rather than fighting it in flight.
+            if !isAtLatest { return requestBottomWhileFollowing() }
+        case .tracking:
+            // Tracking can be only a touch with no movement. Keep the anchor
+            // until actual interaction, even if words arrive during that touch.
+            break
+        case .animating:
+            // Our Jump action animates too. It must not be treated as the user
+            // scrolling away and detach the edge we just requested.
+            break
+        }
+        return false
+    }
+
+    func observation(isAtLatest: Bool) -> Observation {
+        Observation(isAtLatest: isAtLatest, generation: generation, extent: nil, contentOffsetY: nil)
+    }
+
+    func observation(_ geometry: ScrollGeometry) -> Observation {
+        observation(
+            extent: Self.measuredExtent(geometry),
+            offsetY: geometry.contentOffset.y
+        )
+    }
+
+    func observation(
+        extent: Extent,
+        offsetY: CGFloat
+    ) -> Observation {
+        Observation(
+            isAtLatest: extent.isAtLatest(offsetY: offsetY),
+            generation: generation,
+            extent: extent,
+            // An accessibility scrollbar can move without scroll phases or a
+            // user-positioned binding. Observe its offset only until detached,
+            // not every pixel while the user reads earlier passages.
+            contentOffsetY: isFollowing && phase == .idle ? offsetY : nil
+        )
+    }
+
+    @discardableResult
+    mutating func geometryChanged(_ observation: Observation) -> Bool {
+        // A transformed geometry callback can be delivered after a newer phase
+        // or explicit Jump. It must not overwrite that decision in either direction.
+        guard observation.generation == generation else { return false }
+        let previousExtent = lastExtent
+        let extentChanged = observation.extent != nil && observation.extent != previousExtent
+        let previousOffset = lastFollowingOffset
+        if let extent = observation.extent { lastExtent = extent }
+        if let offset = observation.contentOffsetY, let extent = observation.extent,
+           offset >= -extent.topInset - 2, offset <= extent.latestOffsetY + 2 {
+            lastFollowingOffset = offset
+        } else {
+            // A stale offset beyond newly shortened content is not a valid
+            // reading position. Its eventual backwards clamp is not Page Up.
+            lastFollowingOffset = nil
+        }
+        isAtLatest = observation.isAtLatest
+        if !isAtLatest, isFollowing, phase == .idle,
+           let previousExtent, let extent = observation.extent,
+           extent.viewportHeight == previousExtent.viewportHeight,
+           extent.viewportWidth == previousExtent.viewportWidth,
+           extent.visibleHeight == previousExtent.visibleHeight,
+           extent.topInset == previousExtent.topInset,
+           extent.bottomInset == previousExtent.bottomInset,
+           extent.contentHeight >= previousExtent.contentHeight,
+           let previousOffset, let offset = observation.contentOffsetY,
+           offset < previousOffset - 2 {
+            // A Page Up or accessibility move can be delivered with newly
+            // appended text. Growth alone must not outrank movement into
+            // history. Shrinking content and viewport changes can themselves
+            // move the offset backwards, so those still use layout correction.
+            generation &+= 1
+            lastFollowingOffset = nil
+            position.isPositionedByUser = true
+            return false
+        }
+        // Also handle user positioning that changes geometry without an active
+        // gesture, such as keyboard scrolling. Never interrupt ongoing momentum.
+        if isAtLatest, phase == .idle, position.isPositionedByUser {
+            position.scrollTo(edge: .bottom)
+            return true
+        }
+        // Appends, partial wrapping, viewport resize and shelf changes can
+        // finish layout after the revision's first request. Deduplicate by
+        // extent so the resulting offset callback cannot form a scroll loop.
+        if extentChanged, !isAtLatest { return requestBottomWhileFollowing() }
+        return false
+    }
+
+    private mutating func requestBottomWhileFollowing() -> Bool {
+        guard isFollowing, phase == .idle else { return false }
+        position.scrollTo(edge: .bottom)
+        return true
+    }
+
+    static func isAtLatest(_ geometry: ScrollGeometry) -> Bool {
+        measuredExtent(geometry).isAtLatest(offsetY: geometry.contentOffset.y)
+    }
+
+    private static func measuredExtent(_ geometry: ScrollGeometry) -> Extent {
+        // The native safe-area shelf reduces containerSize, but visibleRect
+        // still includes that inset. Subtracting the reduced container height
+        // counts the shelf twice and can never recognize the actual bottom.
+        // Clamp short content to its top inset rather than accepting old offsets
+        // beyond a newly shortened document as visible words.
+        Extent(
+            contentHeight: geometry.contentSize.height,
+            viewportHeight: geometry.containerSize.height,
+            viewportWidth: geometry.containerSize.width,
+            visibleHeight: geometry.visibleRect.height,
+            topInset: geometry.contentInsets.top,
+            bottomInset: geometry.contentInsets.bottom
+        )
     }
 }
 

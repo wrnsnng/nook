@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// What a merge needs from a summarizer.
 ///
@@ -75,13 +76,16 @@ enum NoteCombiner {
         case renameBeside
     }
 
-    enum CombineError: LocalizedError {
+    enum CombineError: LocalizedError, Equatable {
         case unsupportedKind
+        case audioChanged
 
         var errorDescription: String? {
             switch self {
             case .unsupportedKind:
                 "Digests are compiled overviews and cannot be merged."
+            case .audioChanged:
+                "A recording changed while merging. Review the recordings and retained notes before continuing."
             }
         }
     }
@@ -91,7 +95,9 @@ enum NoteCombiner {
         into target: MeetingNote,
         recordingsDirectory: URL,
         summarizer: some NoteSummarizing,
-        unusableAudioDestination: UnusableAudioDestination = .trash
+        unusableAudioDestination: UnusableAudioDestination = .trash,
+        fileManagerProvider: @escaping @MainActor @Sendable () -> FileManager = { .default },
+        validatingBeforeAudioCommit: @escaping @MainActor @Sendable () throws -> Void = {}
     ) async throws -> Result {
         guard target.kind != .digest, absorbed.kind != .digest else {
             throw CombineError.unsupportedKind
@@ -112,21 +118,28 @@ enum NoteCombiner {
             .appendingPathComponent("\(base.id.uuidString).m4a")
         let incomingAudioURL = recordingsDirectory
             .appendingPathComponent("\(incoming.id.uuidString).m4a")
-        let baseAudioExists = FileManager.default.fileExists(atPath: baseAudioURL.path)
-        let incomingAudioExists = FileManager.default
-            .fileExists(atPath: incomingAudioURL.path)
-        let baseAudioDuration = baseAudioExists
+        // Durations establish the merged timeline, so both paths belong to
+        // their pre-read snapshots, including a path that did not exist yet.
+        let baseAudio = try AudioFileSnapshot(url: baseAudioURL)
+        let incomingAudio = try AudioFileSnapshot(url: incomingAudioURL)
+        let baseAudioDuration = baseAudio.exists
             ? await NoteSessionAppend.audioDuration(of: baseAudioURL)
             : nil
-        let hadUsableBaseAudio = baseAudioExists && baseAudioDuration != nil
+        try Task.checkCancellation()
+        try baseAudio.validate()
+        try incomingAudio.validate()
+        let hadUsableBaseAudio = baseAudio.exists && baseAudioDuration != nil
         // The incoming side is checked the same way the base side is. Adopting
         // a file whose duration cannot be read handed the merged note a
         // recording nothing can play, and did it by overwriting or trashing
         // the audio the note already had.
-        let incomingAudioDuration = incomingAudioExists
+        let incomingAudioDuration = incomingAudio.exists
             ? await NoteSessionAppend.audioDuration(of: incomingAudioURL)
             : nil
-        let hadUsableIncomingAudio = incomingAudioExists
+        try Task.checkCancellation()
+        try baseAudio.validate()
+        try incomingAudio.validate()
+        let hadUsableIncomingAudio = incomingAudio.exists
             && incomingAudioDuration != nil
 
         // Where the incoming note's timeline begins. Kept-audio length is the
@@ -169,43 +182,85 @@ enum NoteCombiner {
         // An incoming recording nobody can read still belongs to somebody. Its
         // note is about to be trashed, so without this it would sit in the
         // recordings folder forever under an identifier no note claims.
-        let unreadableIncomingAudio = incomingAudioExists
+        let unreadableIncomingAudio = incomingAudio.exists
             && !hadUsableIncomingAudio
 
         let commitAudio: @Sendable () async throws -> Void = {
+            try Task.checkCancellation()
+            try baseAudio.validate()
+            try incomingAudio.validate()
             switch audioOutcome {
             case .concatenated:
                 // Both sides kept audio. One continuous file preserves moment
                 // playback across the whole merged timeline.
                 let combinedTemporaryURL = recordingsDirectory
                     .appendingPathComponent("merged-\(UUID().uuidString).m4a")
+                defer { try? FileManager.default.removeItem(at: combinedTemporaryURL) }
                 try await AudioExtractor.extractAudio(
                     from: [baseAudioURL, incomingAudioURL],
                     to: combinedTemporaryURL
                 )
-                _ = try FileManager.default.replaceItemAt(
-                    baseAudioURL,
-                    withItemAt: combinedTemporaryURL
-                )
-                // The joined file now holds every second of this audio, and
-                // the note it belonged to is about to be trashed, so leaving
-                // the source behind leaks a full duplicate recording.
-                discardMergedSourceAudio(at: incomingAudioURL)
-            case .adoptedFromAbsorbed:
-                try setAsideUnusableAudio(
-                    at: baseAudioURL,
-                    destination: unusableAudioDestination
-                )
-                try FileManager.default.moveItem(
-                    at: incomingAudioURL,
-                    to: baseAudioURL
-                )
-            case .targetOnly, .none:
-                if unreadableIncomingAudio {
-                    try setAsideUnusableAudio(
-                        at: incomingAudioURL,
-                        destination: unusableAudioDestination
+                // Extraction can take long enough for the folder, a source,
+                // or an editor to change. The final guard and file moves share
+                // the main actor so Nook cannot change scope between them.
+                try await MainActor.run {
+                    try Task.checkCancellation()
+                    try validatingBeforeAudioCommit()
+                    try baseAudio.validate()
+                    try incomingAudio.validate()
+                    let manager = fileManagerProvider()
+                    _ = try manager.replaceItemAt(
+                        baseAudioURL,
+                        withItemAt: combinedTemporaryURL
                     )
+                    let committedBase = try AudioFileSnapshot(url: baseAudioURL)
+                    guard committedBase.exists else { throw CombineError.audioChanged }
+                    // The joined file now holds every second of this audio,
+                    // and the note it belonged to is about to be trashed.
+                    try discardMergedSourceAudio(incomingAudio, fileManager: manager) {
+                        try validatingBeforeAudioCommit()
+                        try committedBase.validate()
+                    }
+                }
+            case .adoptedFromAbsorbed:
+                try await MainActor.run {
+                    try Task.checkCancellation()
+                    try validatingBeforeAudioCommit()
+                    try baseAudio.validate()
+                    try incomingAudio.validate()
+                    let manager = fileManagerProvider()
+                    try setAsideUnusableAudio(
+                        baseAudio,
+                        destination: unusableAudioDestination,
+                        fileManager: manager
+                    ) {
+                        try validatingBeforeAudioCommit()
+                        try incomingAudio.validate()
+                    }
+                    try validatingBeforeAudioCommit()
+                    try incomingAudio.validate()
+                    try AudioFileSnapshot.requireAbsence(at: baseAudioURL)
+                    try manager.moveItem(
+                        at: incomingAudioURL,
+                        to: baseAudioURL
+                    )
+                }
+            case .targetOnly, .none:
+                try await MainActor.run {
+                    try Task.checkCancellation()
+                    try validatingBeforeAudioCommit()
+                    try baseAudio.validate()
+                    try incomingAudio.validate()
+                    if unreadableIncomingAudio {
+                        try setAsideUnusableAudio(
+                            incomingAudio,
+                            destination: unusableAudioDestination,
+                            fileManager: fileManagerProvider()
+                        ) {
+                            try validatingBeforeAudioCommit()
+                            try baseAudio.validate()
+                        }
+                    }
                 }
             }
         }
@@ -226,6 +281,9 @@ enum NoteCombiner {
             transcript: appended.transcript,
             fallbackTitle: fallbackTitle
         )
+        try Task.checkCancellation()
+        try baseAudio.validate()
+        try incomingAudio.validate()
 
         // A merge must not quietly undo the user's own work. The model is
         // rerun because the combined conversation genuinely has a new shape,
@@ -259,6 +317,8 @@ enum NoteCombiner {
             appended.extraSections,
             incoming.extraSections
         )
+        try baseAudio.validate()
+        try incomingAudio.validate()
         return Result(
             merged: merged,
             absorbed: incoming,
@@ -274,12 +334,17 @@ enum NoteCombiner {
     /// somebody may want back, and this is the one place a merge would
     /// otherwise unlink a recording the user asked Nook to keep. The Trash
     /// keeps it recoverable; on a volume without one, moving it aside does.
+    @MainActor
     private static func setAsideUnusableAudio(
-        at url: URL,
-        destination: UnusableAudioDestination
+        _ source: AudioFileSnapshot,
+        destination: UnusableAudioDestination,
+        fileManager manager: FileManager,
+        validatingBeforeMove: () throws -> Void
     ) throws {
-        let manager = FileManager.default
-        guard manager.fileExists(atPath: url.path) else { return }
+        try validatingBeforeMove()
+        try source.validate()
+        guard source.exists else { return }
+        let url = source.url
         if destination == .trash {
             do {
                 try manager.trashItem(at: url, resultingItemURL: nil)
@@ -290,6 +355,10 @@ enum NoteCombiner {
                 // the failure.
             }
         }
+        // A failed Trash call can take time. Its failure does not authorize
+        // moving a replacement that arrived at the same path meanwhile.
+        try validatingBeforeMove()
+        try source.validate()
         let stamp = String(UUID().uuidString.prefix(8)).lowercased()
         try manager.moveItem(
             at: url,
@@ -306,15 +375,75 @@ enum NoteCombiner {
     /// still undoable from the Finder. A volume without a Trash still must not
     /// be left holding a duplicate of the merged note's own audio, so the
     /// unlink is the fallback rather than the first move. Failing to remove it
-    /// is not a failure of the merge: the audio is already safe in the file
-    /// the note points at.
-    private static func discardMergedSourceAudio(at url: URL) {
-        let manager = FileManager.default
-        guard manager.fileExists(atPath: url.path) else { return }
+    /// is not a failure of the merge when both snapshots are unchanged: the
+    /// audio is already safe in the file the note points at. A replacement is
+    /// different and must escape as a partial failure, keeping its new bytes.
+    @MainActor
+    private static func discardMergedSourceAudio(
+        _ source: AudioFileSnapshot,
+        fileManager manager: FileManager,
+        validatingBeforeMove: () throws -> Void
+    ) throws {
+        try validatingBeforeMove()
+        try source.validate()
+        guard source.exists else { return }
         do {
-            try manager.trashItem(at: url, resultingItemURL: nil)
+            try manager.trashItem(at: source.url, resultingItemURL: nil)
         } catch {
-            try? manager.removeItem(at: url)
+            try validatingBeforeMove()
+            try source.validate()
+            try? manager.removeItem(at: source.url)
+        }
+    }
+
+    /// Metadata catches replaced files and in-place writes without loading a
+    /// recording into memory on the main actor. Access time is deliberately
+    /// excluded because reading audio may change it. These last checks narrow
+    /// races; an uncooperative writer can still race a check and a file move.
+    struct AudioFileSnapshot: Sendable {
+        private struct Identity: Equatable, Sendable {
+            let device: dev_t
+            let inode: ino_t
+            let size: off_t
+            let modifiedSeconds: Int
+            let modifiedNanoseconds: Int
+            let changedSeconds: Int
+            let changedNanoseconds: Int
+        }
+
+        let url: URL
+        private let identity: Identity?
+        var exists: Bool { identity != nil }
+
+        init(url: URL) throws {
+            self.url = url
+            identity = try Self.readIdentity(at: url)
+        }
+
+        func validate() throws {
+            guard try Self.readIdentity(at: url) == identity else {
+                throw CombineError.audioChanged
+            }
+        }
+
+        static func requireAbsence(at url: URL) throws {
+            guard try readIdentity(at: url) == nil else { throw CombineError.audioChanged }
+        }
+
+        private static func readIdentity(at url: URL) throws -> Identity? {
+            var info = stat()
+            guard lstat(url.path, &info) == 0 else {
+                if errno == ENOENT { return nil }
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            guard info.st_mode & S_IFMT == S_IFREG else { throw CombineError.audioChanged }
+            return Identity(
+                device: info.st_dev, inode: info.st_ino, size: info.st_size,
+                modifiedSeconds: info.st_mtimespec.tv_sec,
+                modifiedNanoseconds: info.st_mtimespec.tv_nsec,
+                changedSeconds: info.st_ctimespec.tv_sec,
+                changedNanoseconds: info.st_ctimespec.tv_nsec
+            )
         }
     }
 
