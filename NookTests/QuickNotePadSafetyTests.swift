@@ -173,6 +173,23 @@ struct QuickNotePadSafetyTests {
         return directory
     }
 
+    /// A saved note's content with the save stamp normalized.
+    ///
+    /// `saveIfNeeded()` always sets `endedAt` to the moment of the write, and
+    /// the debounced autosave scheduled by setting `text` can legitimately
+    /// rewrite the note while a test is still running. Comparing raw bytes
+    /// therefore failed whenever those two writes straddled a second, which is
+    /// why these tests flaked on CI and passed on faster machines. Only the
+    /// stamp is normalized: the words, the title, and every other field still
+    /// have to match exactly, which is what these tests are really asserting.
+    private func savedContent(of file: URL) throws -> String {
+        try String(contentsOf: file, encoding: .utf8).replacingOccurrences(
+            of: "(?m)^ended: .*$",
+            with: "ended: <written>",
+            options: .regularExpression
+        )
+    }
+
     private func store(in directory: URL, fileManager: FileManager = .default) -> MarkdownStore {
         let store = MarkdownStore(fileManager: fileManager, noteLoader: { _, _ in
             .success((notes: [], issues: []))
@@ -454,7 +471,7 @@ struct QuickNotePadSafetyTests {
         pad.text = "Original synthetic thought."
         let saved = try #require(pad.saveIfNeeded())
         let file = try #require(saved.fileURL)
-        let originalBytes = try Data(contentsOf: file)
+        let originalContent = try savedContent(of: file)
         let savedAt = pad.lastSavedAt
 
         pad.text = ""
@@ -470,7 +487,7 @@ struct QuickNotePadSafetyTests {
         #expect(pad.hasUnsavedEdits)
         #expect(pad.lastSavedAt == savedAt)
         #expect(Data(pad.text.utf8) == Data(restored.utf8))
-        #expect(try Data(contentsOf: file) == originalBytes)
+        #expect(try savedContent(of: file) == originalContent)
         #expect(store.notes.first?.summary == saved.summary)
     }
 
@@ -531,7 +548,7 @@ struct QuickNotePadSafetyTests {
         pad.text = "Original synthetic thought."
         let saved = try #require(pad.saveIfNeeded())
         let file = try #require(saved.fileURL)
-        let originalBytes = try Data(contentsOf: file)
+        let originalContent = try savedContent(of: file)
         pad.text = ""
         #expect(pad.saveIfNeeded() == nil)
 
@@ -541,7 +558,7 @@ struct QuickNotePadSafetyTests {
         #expect(pad.message == failure)
         #expect(pad.hasUnsavedFailure)
         #expect(pad.hasUnsavedEdits)
-        #expect(try Data(contentsOf: file) == originalBytes)
+        #expect(try savedContent(of: file) == originalContent)
     }
 
     @Test
@@ -981,7 +998,7 @@ struct QuickNotePadSafetyTests {
         pad.text = original
         let saved = try #require(pad.saveIfNeeded())
         let file = try #require(saved.fileURL)
-        let originalBytes = try Data(contentsOf: file)
+        let originalContent = try savedContent(of: file)
         let operation = try #require(pad.run(.summarize))
         try await waitForAssistant(assistant)
         #expect(pad.runningEngine == .codex)
@@ -1005,7 +1022,7 @@ struct QuickNotePadSafetyTests {
         #expect(pad.run(.tidy) == nil)
         #expect(pad.hasConsented(to: .codex) == !revokeConsent)
         #expect(pad.text.utf8.elementsEqual(original.utf8))
-        #expect(try Data(contentsOf: file) == originalBytes)
+        #expect(try savedContent(of: file) == originalContent)
 
         // This supported summary would append to unchanged input if accepted.
         // The fake deliberately ignores cancellation and returns it anyway.
@@ -1016,7 +1033,7 @@ struct QuickNotePadSafetyTests {
         #expect(pad.outboundEngine == nil && pad.outboundMessage.isEmpty)
         #expect(pad.canRunAction)
         #expect(pad.text.utf8.elementsEqual(original.utf8))
-        #expect(try Data(contentsOf: file) == originalBytes)
+        #expect(try savedContent(of: file) == originalContent)
         pad.text += " Keep the cafe\u{301} notes."
         let laterSave = try #require(pad.saveIfNeeded())
         #expect(laterSave.summary.utf8.elementsEqual(pad.text.utf8))
@@ -1187,7 +1204,7 @@ struct QuickNotePadSafetyTests {
         pad.text = "Review the launch plan."
         let saved = try #require(pad.saveIfNeeded())
         let file = try #require(saved.fileURL)
-        let originalBytes = try Data(contentsOf: file)
+        let originalContent = try savedContent(of: file)
         let action = try #require(pad.run(.summarize))
         try await waitForAssistant(assistant)
 
@@ -1211,7 +1228,7 @@ struct QuickNotePadSafetyTests {
         #expect(!pad.canRunAction)
         #expect(pad.run(.tidy) == nil)
         #expect(pad.text == "Review the launch plan.")
-        #expect(try Data(contentsOf: file) == originalBytes)
+        #expect(try savedContent(of: file) == originalContent)
 
         pad.cancelApplicationTermination()
         #expect(!pad.isPreparingForTermination && pad.canRunAction)
@@ -1239,7 +1256,7 @@ struct QuickNotePadSafetyTests {
         pad.text = "Review the launch plan."
         let saved = try #require(pad.saveIfNeeded())
         let file = try #require(saved.fileURL)
-        let originalBytes = try Data(contentsOf: file)
+        let originalContent = try savedContent(of: file)
         let action = try #require(pad.run(.summarize))
         try await waitForAssistant(assistant)
 
@@ -1258,7 +1275,7 @@ struct QuickNotePadSafetyTests {
         await action.value
         #expect(!pad.isWorking && !pad.isStoppingAssistant)
         #expect(pad.text == "Review the launch plan.")
-        #expect(try Data(contentsOf: file) == originalBytes)
+        #expect(try savedContent(of: file) == originalContent)
         #expect(pad.canRunAction)
         pad.close()
     }
