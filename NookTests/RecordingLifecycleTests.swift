@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import Testing
 @testable import Nook
@@ -1144,6 +1145,143 @@ struct LiveSummarySchedulingTests {
 
         #expect(short < medium)
         #expect(medium < long)
+    }
+}
+
+/// The audio meter, the clock and the captions publish many times a second
+/// while a meeting runs. While they lived on the coordinator every view that
+/// held it, including the whole Library window, re-laid itself out on each
+/// tick and pinned a core (1.19.0 and 1.20.0 shipped that way). They now
+/// publish through `MeetingCoordinator.live`, so only the small views that
+/// draw a level, a caption or a clock pay for them.
+@MainActor
+struct LiveSignalPublicationTests {
+    /// Fixed so a second `setPreviewState` can repeat the identical phase.
+    private static let startedAt = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    private static let phase = MeetingPhase.recording(
+        title: "Review",
+        startedAt: startedAt
+    )
+
+    private func recording() -> MeetingCoordinator {
+        // A stubbed loader and a scratch directory keep this suite off the
+        // real notes folder. The bare `MarkdownStore()` reloads it from disk
+        // on the main actor, and these assertions need nothing from it, so
+        // paying that cost would only add main-actor contention to a parallel
+        // run for no coverage.
+        let store = MarkdownStore(noteLoader: { _, _ in
+            .success((notes: [], issues: []))
+        })
+        store.storageURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "NookLiveSignals-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        let coordinator = MeetingCoordinator(
+            store: store,
+            detector: MeetingDetector()
+        )
+        coordinator.setPreviewState(
+            phase: Self.phase,
+            elapsed: 120,
+            liveTranscript: .empty,
+            audioLevel: 0.2
+        )
+        return coordinator
+    }
+
+    private func caption(_ text: String) -> LiveTranscriptState {
+        LiveTranscriptState(
+            segments: [TranscriptSegment(startTime: 0, duration: 4, text: text)]
+        )
+    }
+
+    @Test
+    func aNewCaptionPublishesOnTheLiveSignalsAndNotOnTheCoordinator() {
+        let coordinator = recording()
+        var coordinatorPublications = 0
+        var livePublications = 0
+        let coordinatorObservation = coordinator.objectWillChange
+            .sink { coordinatorPublications += 1 }
+        let liveObservation = coordinator.live.objectWillChange
+            .sink { livePublications += 1 }
+        defer {
+            coordinatorObservation.cancel()
+            liveObservation.cancel()
+        }
+
+        // One segment is well short of the four new lines the live summary
+        // waits for, so nothing else is scheduled: only the caption changes.
+        coordinator.receiveLiveTranscriptForTesting(
+            caption("We agreed on the owners.")
+        )
+
+        #expect(livePublications == 1)
+        #expect(coordinatorPublications == 0)
+        #expect(coordinator.liveTranscript.latestText == "We agreed on the owners.")
+        #expect(coordinator.live.liveTranscript == coordinator.liveTranscript)
+    }
+
+    @Test
+    func meterAndClockTicksPublishOnTheLiveSignalsAndReadBackThroughTheCoordinator() {
+        let coordinator = recording()
+        var coordinatorPublications = 0
+        var livePublications = 0
+        let coordinatorObservation = coordinator.objectWillChange
+            .sink { coordinatorPublications += 1 }
+        let liveObservation = coordinator.live.objectWillChange
+            .sink { livePublications += 1 }
+        defer {
+            coordinatorObservation.cancel()
+            liveObservation.cancel()
+        }
+
+        coordinator.setPreviewState(
+            phase: Self.phase,
+            elapsed: 42,
+            liveTranscript: .empty,
+            audioLevel: 0.5
+        )
+
+        // `setPreviewState` writes elapsed, the transcript and the level, one
+        // publication each on the live signals. It also re-assigns `phase`,
+        // `isPaused` and `liveInsights` on the coordinator every call, and a
+        // `@Published` assignment publishes even when the value is unchanged,
+        // so the coordinator sees exactly those three slow writes and nothing
+        // for the fast values. Moving a fast value back onto the coordinator
+        // would make it four here and two above.
+        #expect(livePublications == 3)
+        #expect(coordinatorPublications == 3)
+
+        #expect(coordinator.elapsed == 42)
+        #expect(coordinator.audioLevel == 0.5)
+        #expect(coordinator.live.elapsed == 42)
+        #expect(coordinator.live.audioLevel == 0.5)
+    }
+
+    @Test
+    func pausingStillPublishesOnTheCoordinator() {
+        let coordinator = recording()
+        // Watch the pause property itself rather than `objectWillChange`,
+        // which the phase assignment inside `setPreviewState` would satisfy
+        // on its own; this proves pause state still travels through the
+        // coordinator after the fast signals moved off it.
+        var pausePublications = 0
+        let pauseObservation = coordinator.$isPaused
+            .dropFirst()
+            .sink { _ in pausePublications += 1 }
+        defer { pauseObservation.cancel() }
+
+        coordinator.setPreviewState(
+            phase: Self.phase,
+            elapsed: 120,
+            liveTranscript: .empty,
+            audioLevel: 0.2,
+            isPaused: true
+        )
+
+        #expect(coordinator.isPaused)
+        #expect(pausePublications == 1)
     }
 }
 

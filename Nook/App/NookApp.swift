@@ -132,6 +132,13 @@ struct NookApp: App {
     }
 }
 
+/// The `MenuBarExtra` label. Every re-render of this view re-lays out the
+/// status item in the system menu bar, so it must observe nothing faster
+/// than phase and pause changes: the elapsed clock, which ticks once a
+/// second, lives in `MenuBarRecordingClock` below and observes
+/// `MeetingLiveSignals` on its own. Nothing in this view's body or its
+/// computed properties may read the coordinator's `elapsed`, `audioLevel`
+/// or `liveTranscript` forwarders; they do not subscribe a view to changes.
 private struct NookMenuBarLabel: View {
     @EnvironmentObject private var meeting: MeetingCoordinator
     @EnvironmentObject private var updater: NookUpdateController
@@ -140,20 +147,14 @@ private struct NookMenuBarLabel: View {
         HStack(spacing: 3) {
             Group {
                 if meeting.phase.isRecording {
-                    HStack(spacing: 5) {
-                        Image(
-                            systemName: meeting.isPaused
-                                ? "pause.fill"
-                                : "record.circle.fill"
-                        )
-                        .frame(width: 13)
-                        Text(elapsedLabel)
-                            .font(.system(.caption, design: .monospaced))
-                            .monospacedDigit()
-                            .frame(width: elapsedWidth, alignment: .leading)
-                    }
+                    MenuBarRecordingClock(
+                        live: meeting.live,
+                        isPaused: meeting.isPaused,
+                        name: buildName
+                    )
                 } else {
                     Image(systemName: menuBarSymbol)
+                        .accessibilityLabel(idleAccessibilityLabel)
                 }
             }
 
@@ -166,6 +167,9 @@ private struct NookMenuBarLabel: View {
                 Text("DEV")
                     .font(.system(size: 9, weight: .heavy, design: .rounded))
                     .opacity(0.75)
+                    // Spoken as part of `buildName` by whichever branch is
+                    // showing, so it must not also be read out on its own.
+                    .accessibilityHidden(true)
             }
         }
         .foregroundStyle(
@@ -175,13 +179,14 @@ private struct NookMenuBarLabel: View {
                     : NookPalette.danger)
                 : .primary
         )
-        .accessibilityLabel(
-            accessibilityLabel
-        )
     }
 
     private var isOfficialBuild: Bool {
         NookBuildIdentity.permitsOfficialUpdates
+    }
+
+    private var buildName: String {
+        isOfficialBuild ? "Nook" : "Nook, development build"
     }
 
     private var menuBarSymbol: String {
@@ -194,33 +199,58 @@ private struct NookMenuBarLabel: View {
         return meeting.phase.menuBarSymbol
     }
 
-    private var accessibilityLabel: String {
-        let name = isOfficialBuild ? "Nook" : "Nook, development build"
-        if meeting.isPaused {
-            return "\(name), recording paused, \(elapsedSpokenLabel)"
-        }
-        if meeting.phase.isRecording {
-            return "\(name), recording, \(elapsedSpokenLabel)"
-        }
+    /// The label while nothing records. The recording label depends on the
+    /// elapsed clock and so is produced inside `MenuBarRecordingClock`.
+    private var idleAccessibilityLabel: String {
         if let version = updater.availableVersion {
-            return "\(name), version \(version) is ready"
+            return "\(buildName), version \(version) is ready"
         }
-        return name
+        return buildName
+    }
+}
+
+/// The recording half of the menu bar label: state icon plus elapsed clock.
+///
+/// The only part of the status item that observes `MeetingLiveSignals`, so
+/// its meter, caption and clock publishes land on this small view and not on
+/// `NookMenuBarLabel` around it. The spoken label is assembled here too,
+/// because it includes the elapsed time and would otherwise drag the parent
+/// back into observing it.
+private struct MenuBarRecordingClock: View {
+    @ObservedObject var live: MeetingLiveSignals
+    let isPaused: Bool
+    /// "Nook" or "Nook, development build"; see `NookMenuBarLabel`.
+    let name: String
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(
+                systemName: isPaused
+                    ? "pause.fill"
+                    : "record.circle.fill"
+            )
+            .frame(width: 13)
+            Text(NookElapsedTime.clock(live.elapsed))
+                .font(.system(.caption, design: .monospaced))
+                .monospacedDigit()
+                .frame(width: elapsedWidth, alignment: .leading)
+        }
+        .accessibilityLabel(accessibilityLabel)
     }
 
-    private var elapsedLabel: String {
-        NookElapsedTime.clock(meeting.elapsed)
+    private var accessibilityLabel: String {
+        let spoken = NookElapsedTime.spoken(live.elapsed)
+        if isPaused {
+            return "\(name), recording paused, \(spoken)"
+        }
+        return "\(name), recording, \(spoken)"
     }
 
     /// Fixed so the clock does not shove the menu-bar item sideways once a
     /// second, but sized to the format actually on screen. At an hour the
     /// string grows to "1:05:23" and the old single width clipped it.
     private var elapsedWidth: CGFloat {
-        meeting.elapsed >= 3_600 ? 56 : 38
-    }
-
-    private var elapsedSpokenLabel: String {
-        NookElapsedTime.spoken(meeting.elapsed)
+        live.elapsed >= 3_600 ? 56 : 38
     }
 }
 

@@ -1,6 +1,13 @@
 import AppKit
 import SwiftUI
 
+/// The panel shell observes `MeetingCoordinator` for its slow state only
+/// (phase, captions on or off, panel mode, hidden). Audio level, elapsed time
+/// and the live transcript are read exclusively by small leaf views that
+/// observe `meeting.live` (`MeetingLiveSignals`); nothing in this body, its
+/// computed views or its accessibility strings touches them. Before that
+/// split the frame animation and shape layout below re-ran on every 80 ms
+/// meter tick for the whole recording.
 struct NotchPanelView: View {
     @EnvironmentObject private var meeting: MeetingCoordinator
     @EnvironmentObject private var geometry: NotchPanelGeometry
@@ -160,63 +167,62 @@ struct NotchPanelView: View {
     }
 
     private func hiddenRestoreButton(attachedToCamera: Bool) -> some View {
-        Button {
-            meeting.restoreTopPanel()
-        } label: {
-            HStack(spacing: 6) {
-                Text(elapsedLabel)
-                    .font(NookType.code)
-                    .monospacedDigit()
-                    .contentTransition(.numericText())
+        let isPaused = meeting.isPaused
+        return RecordingSpokenLabel(live: meeting.live, describe: { spokenElapsed in
+            "\(isPaused ? "Recording paused" : "Recording"), \(spokenElapsed). Show meeting panel"
+        }) {
+            Button {
+                meeting.restoreTopPanel()
+            } label: {
+                HStack(spacing: 6) {
+                    NotchRecordingClock(live: meeting.live)
 
-                Group {
-                    if meeting.isPaused {
-                        Image(systemName: "pause.fill")
-                            .font(.system(size: 6, weight: .bold))
-                    } else {
-                        Circle()
+                    Group {
+                        if isPaused {
+                            Image(systemName: "pause.fill")
+                                .font(.system(size: 6, weight: .bold))
+                        } else {
+                            Circle()
+                        }
                     }
-                }
-                .foregroundStyle(
-                    meeting.isPaused
-                        ? NookPalette.warning
-                        : NookPalette.danger
-                )
-                .frame(width: 6, height: 6)
-                .shadow(
-                    color: (
-                        meeting.isPaused
+                    .foregroundStyle(
+                        isPaused
                             ? NookPalette.warning
                             : NookPalette.danger
-                    ).opacity(0.45),
-                    radius: 3
-                )
-                .accessibilityHidden(true)
-            }
-            .foregroundStyle(.white.opacity(isHovering ? 1 : 0.86))
-            .frame(width: 86, height: geometry.topInset)
-            .background {
-                UnevenRoundedRectangle(
-                    topLeadingRadius: attachedToCamera ? 0 : 8,
-                    bottomLeadingRadius: attachedToCamera ? 0 : 8,
-                    bottomTrailingRadius: 8,
-                    topTrailingRadius: attachedToCamera ? 0 : 8,
-                    style: .continuous
-                )
-                .fill(Color.black.opacity(isHovering ? 1 : 0.97))
-                .overlay(alignment: .bottom) {
-                    Rectangle()
-                        .fill(.white.opacity(isHovering ? 0.10 : 0.045))
-                        .frame(height: 0.5)
+                    )
+                    .frame(width: 6, height: 6)
+                    .shadow(
+                        color: (
+                            isPaused
+                                ? NookPalette.warning
+                                : NookPalette.danger
+                        ).opacity(0.45),
+                        radius: 3
+                    )
+                    .accessibilityHidden(true)
                 }
+                .foregroundStyle(.white.opacity(isHovering ? 1 : 0.86))
+                .frame(width: 86, height: geometry.topInset)
+                .background {
+                    UnevenRoundedRectangle(
+                        topLeadingRadius: attachedToCamera ? 0 : 8,
+                        bottomLeadingRadius: attachedToCamera ? 0 : 8,
+                        bottomTrailingRadius: 8,
+                        topTrailingRadius: attachedToCamera ? 0 : 8,
+                        style: .continuous
+                    )
+                    .fill(Color.black.opacity(isHovering ? 1 : 0.97))
+                    .overlay(alignment: .bottom) {
+                        Rectangle()
+                            .fill(.white.opacity(isHovering ? 0.10 : 0.045))
+                            .frame(height: 0.5)
+                    }
+                }
+                .contentShape(Rectangle())
             }
-            .contentShape(Rectangle())
+            .buttonStyle(HiddenRecordingIndicatorStyle())
+            .help("Show meeting panel")
         }
-        .buttonStyle(HiddenRecordingIndicatorStyle())
-        .help("Show meeting panel")
-        .accessibilityLabel(
-            "\(meeting.isPaused ? "Recording paused" : "Recording"), \(elapsedSpokenLabel). Show meeting panel"
-        )
         .accessibilityHint("Restores the compact recording controls")
         .onHover(perform: updateHoverState)
     }
@@ -516,7 +522,7 @@ struct NotchPanelView: View {
                             insights: meeting.liveInsights,
                             isRefreshing: meeting.liveSummaryIsRefreshing,
                             updatedAt: meeting.liveSummaryUpdatedAt,
-                            wordCount: meeting.liveTranscript.wordCount,
+                            live: meeting.live,
                             refresh: meeting.refreshLiveSummary
                         )
                     case .notes:
@@ -553,8 +559,8 @@ struct NotchPanelView: View {
         HStack(spacing: 0) {
             HStack(spacing: 8) {
                 LiveStatusIndicator(
-                    isPaused: meeting.isPaused,
-                    level: meeting.audioLevel
+                    live: meeting.live,
+                    isPaused: meeting.isPaused
                 )
 
                 Text(title)
@@ -569,12 +575,8 @@ struct NotchPanelView: View {
                 .accessibilityHidden(true)
 
             HStack(spacing: 4) {
-                Text(elapsedLabel)
-                    .font(NookType.code)
+                NotchRecordingClock(live: meeting.live)
                     .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                    .contentTransition(.numericText())
-                    .accessibilityLabel(elapsedSpokenLabel)
 
                 recordingControls
 
@@ -592,91 +594,96 @@ struct NotchPanelView: View {
     }
 
     private func compactRecordingContent(title: String) -> some View {
-        HStack(spacing: 8) {
-            Button {
-                meeting.expandTopPanel()
-            } label: {
-                HStack(spacing: 8) {
-                    RecordingWaveform(
-                        level: meeting.isPaused ? 0 : meeting.audioLevel,
-                        isActive: !meeting.isPaused,
-                        barCount: 18,
-                        minimumHeight: 1.5
-                    )
-                    .frame(width: 78, height: 13)
-                    .opacity(meeting.isPaused ? 0.34 : 0.88)
+        let isPaused = meeting.isPaused
+        return RecordingSpokenLabel(live: meeting.live, describe: { spokenElapsed in
+            "\(isPaused ? "Paused" : "Recording") \(title), \(spokenElapsed)"
+        }) {
+            HStack(spacing: 8) {
+                RecordingSpokenLabel(live: meeting.live, describe: { spokenElapsed in
+                    "Expand \(title), \(spokenElapsed)"
+                }) {
+                    Button {
+                        meeting.expandTopPanel()
+                    } label: {
+                        HStack(spacing: 8) {
+                            NotchCompactWaveform(
+                                live: meeting.live,
+                                isPaused: isPaused
+                            )
+                            .frame(width: 78, height: 13)
+                            .opacity(isPaused ? 0.34 : 0.88)
 
-                    Text(meeting.isPaused ? "Paused" : elapsedLabel)
-                        .font(NookType.code)
-                        .foregroundStyle(
-                            meeting.isPaused
-                                ? NookPalette.warning
-                                : .secondary
-                        )
-                        .monospacedDigit()
-                        .contentTransition(.numericText())
-                        .frame(minWidth: 42, alignment: .leading)
+                            NotchRecordingClock(
+                                live: meeting.live,
+                                overrideText: isPaused ? "Paused" : nil
+                            )
+                            .foregroundStyle(
+                                isPaused
+                                    ? NookPalette.warning
+                                    : .secondary
+                            )
+                            .frame(minWidth: 42, alignment: .leading)
 
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 7, weight: .bold))
-                        .foregroundStyle(.secondary)
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 7, weight: .bold))
+                                .foregroundStyle(.secondary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Expand meeting workspace")
                 }
-                .contentShape(Rectangle())
+
+                Spacer(minLength: 0)
+
+                compactRecordingControls
             }
-            .buttonStyle(.plain)
-            .help("Expand meeting workspace")
-            .accessibilityLabel(
-                "Expand \(title), \(elapsedSpokenLabel)"
+            .accessibilityElement(children: .contain)
+        }
+    }
+
+    private var compactRecordingControls: some View {
+        HStack(spacing: 2) {
+            CompactMeetingControl(
+                // Distinct from the chevron that collapses the expanded
+                // panel: hiding puts the whole surface away behind the
+                // camera, collapsing only takes the workspace down a size,
+                // and one glyph for both said they did the same thing.
+                symbol: "arrow.up.to.line",
+                label: "Hide top panel",
+                action: meeting.hideTopPanel
             )
 
-            Spacer(minLength: 0)
+            CompactMeetingControl(
+                symbol: meeting.isPaused ? "play.fill" : "pause.fill",
+                label: meeting.isPaused
+                    ? "Resume recording"
+                    : "Pause recording",
+                tint: meeting.isPaused ? NookPalette.success : nil,
+                action: meeting.togglePause
+            )
+            .disabled(meeting.pauseTransitionInFlight)
 
-            HStack(spacing: 2) {
-                CompactMeetingControl(
-                    // Distinct from the chevron that collapses the expanded
-                    // panel: hiding puts the whole surface away behind the
-                    // camera, collapsing only takes the workspace down a size,
-                    // and one glyph for both said they did the same thing.
-                    symbol: "arrow.up.to.line",
-                    label: "Hide top panel",
-                    action: meeting.hideTopPanel
-                )
+            CompactMeetingControl(
+                symbol: meeting.momentAcknowledgedAt == nil
+                    ? "flag.fill" : "checkmark",
+                label: "Flag this moment",
+                tint: meeting.momentAcknowledgedAt == nil
+                    ? nil : NookPalette.success,
+                action: meeting.flagMoment
+            )
+            .accessibilityValue(
+                meeting.momentAcknowledgedAt == nil ? "" : "Moment flagged"
+            )
 
-                CompactMeetingControl(
-                    symbol: meeting.isPaused ? "play.fill" : "pause.fill",
-                    label: meeting.isPaused
-                        ? "Resume recording"
-                        : "Pause recording",
-                    tint: meeting.isPaused ? NookPalette.success : nil,
-                    action: meeting.togglePause
-                )
-                .disabled(meeting.pauseTransitionInFlight)
-
-                CompactMeetingControl(
-                    symbol: meeting.momentAcknowledgedAt == nil
-                        ? "flag.fill" : "checkmark",
-                    label: "Flag this moment",
-                    tint: meeting.momentAcknowledgedAt == nil
-                        ? nil : NookPalette.success,
-                    action: meeting.flagMoment
-                )
-                .accessibilityValue(
-                    meeting.momentAcknowledgedAt == nil ? "" : "Moment flagged"
-                )
-
-                CompactMeetingControl(
-                    symbol: "stop.fill",
-                    label: "Finish meeting",
-                    tint: NookPalette.danger,
-                    action: meeting.stopRecording
-                )
-                .disabled(meeting.pauseTransitionInFlight)
-            }
+            CompactMeetingControl(
+                symbol: "stop.fill",
+                label: "Finish meeting",
+                tint: NookPalette.danger,
+                action: meeting.stopRecording
+            )
+            .disabled(meeting.pauseTransitionInFlight)
         }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(
-            "\(meeting.isPaused ? "Paused" : "Recording") \(title), \(elapsedSpokenLabel)"
-        )
     }
 
     private var transcriptWorkspace: some View {
@@ -684,9 +691,8 @@ struct NotchPanelView: View {
         // for the expanded panel; a second animated thread here competed
         // with it instead of adding information.
         NotchCaptionStream(
-            lines: meeting.liveTranscript.notchCaptionLines,
-            fallback: liveCaptionFallback,
-            revision: meeting.liveTranscript.revision
+            live: meeting.live,
+            notice: meeting.liveCaptionNotice
         )
     }
 
@@ -838,13 +844,6 @@ struct NotchPanelView: View {
         }
     }
 
-    private var liveCaptionFallback: String {
-        if let notice = meeting.liveCaptionNotice { return notice }
-        return meeting.audioLevel > 0.08
-            ? "Finding the words…"
-            : "Listening for the first words…"
-    }
-
     private func panelFailureMessage(_ message: String) -> String {
         if let permission = meeting.requiredPermission {
             return permission.instruction
@@ -857,14 +856,6 @@ struct NotchPanelView: View {
             return "Allow Microphone access in Privacy & Security, then try again."
         }
         return message
-    }
-
-    private var elapsedLabel: String {
-        NookElapsedTime.clock(meeting.elapsed)
-    }
-
-    private var elapsedSpokenLabel: String {
-        NookElapsedTime.spoken(meeting.elapsed)
     }
 
     private var phaseIdentity: String {
@@ -1078,14 +1069,81 @@ private struct CompactMeetingControl: View {
     }
 }
 
-private struct LiveStatusIndicator: View {
+/// The elapsed clock shared by the expanded chrome, the compact bar and the
+/// hidden indicator. Observes `MeetingLiveSignals` so that object's meter,
+/// caption and clock publishes re-render this text alone rather than the
+/// panel shell; the spoken label is attached here for the same
+/// reason, since it reads the clock too.
+private struct NotchRecordingClock: View {
+    @ObservedObject var live: MeetingLiveSignals
+    /// Shown in place of the clock; the compact bar says "Paused" while the
+    /// expanded chrome and the hidden indicator keep counting.
+    var overrideText: String? = nil
+
+    var body: some View {
+        Text(overrideText ?? NookElapsedTime.clock(live.elapsed))
+            .font(NookType.code)
+            .monospacedDigit()
+            .contentTransition(.numericText())
+            .accessibilityLabel(
+                overrideText ?? NookElapsedTime.spoken(live.elapsed)
+            )
+    }
+}
+
+/// Attaches a spoken label that includes the elapsed time to `content`.
+///
+/// The panel's buttons and its compact container describe themselves as
+/// "Recording <title>, 4 minutes 12 seconds" and similar. Assembling that
+/// string in `NotchPanelView` would drag its whole body back into observing
+/// the clock, so the string is built here from `describe(spokenElapsed)`
+/// with the slow parts (title, pause state) captured by the caller.
+private struct RecordingSpokenLabel<Content: View>: View {
+    @ObservedObject var live: MeetingLiveSignals
+    let describe: (String) -> String
+    let content: Content
+
+    init(
+        live: MeetingLiveSignals,
+        describe: @escaping (String) -> String,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.live = live
+        self.describe = describe
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .accessibilityLabel(describe(NookElapsedTime.spoken(live.elapsed)))
+    }
+}
+
+/// The compact bar's waveform, observing the meter here rather than in the
+/// panel. `RecordingWaveform` itself is shared with the Library window and
+/// keeps its plain `level` parameter.
+private struct NotchCompactWaveform: View {
+    @ObservedObject var live: MeetingLiveSignals
     let isPaused: Bool
-    let level: Double
+
+    var body: some View {
+        RecordingWaveform(
+            level: isPaused ? 0 : live.audioLevel,
+            isActive: !isPaused,
+            barCount: 18,
+            minimumHeight: 1.5
+        )
+    }
+}
+
+private struct LiveStatusIndicator: View {
+    @ObservedObject var live: MeetingLiveSignals
+    let isPaused: Bool
 
     var body: some View {
         HStack(spacing: 6) {
             NookPresence(
-                state: .listening(level: level, isPaused: isPaused),
+                state: .listening(level: live.audioLevel, isPaused: isPaused),
                 size: 18,
                 showsSurface: false
             )
@@ -1262,7 +1320,9 @@ private struct LiveSummaryPanel: View {
     let insights: MeetingInsights?
     let isRefreshing: Bool
     let updatedAt: Date?
-    let wordCount: Int
+    /// Held, not observed: only `LiveSummaryWaitingText` reads the word
+    /// count, so the transcript's ~10 Hz updates stop at that leaf.
+    let live: MeetingLiveSignals
     let refresh: () -> Void
 
     var body: some View {
@@ -1322,13 +1382,7 @@ private struct LiveSummaryPanel: View {
                 HStack(spacing: 10) {
                     Image(systemName: "text.append")
                         .foregroundStyle(NookPalette.accent)
-                    Text(
-                        wordCount == 0
-                            ? "A faithful summary will appear as the conversation develops."
-                            : "Finding the shape of the conversation…"
-                    )
-                    .font(NookType.metadata)
-                    .foregroundStyle(.secondary)
+                    LiveSummaryWaitingText(live: live)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -1353,6 +1407,22 @@ private struct LiveSummaryPanel: View {
                 : "Generated locally · on this Mac"
         }
         return "Updated \(updatedAt.formatted(.relative(presentation: .named))) · on this Mac"
+    }
+}
+
+/// What the summary tab says before there is a summary. Reads the transcript
+/// word count from `MeetingLiveSignals` so the panel around it does not.
+private struct LiveSummaryWaitingText: View {
+    @ObservedObject var live: MeetingLiveSignals
+
+    var body: some View {
+        Text(
+            live.liveTranscript.wordCount == 0
+                ? "A faithful summary will appear as the conversation develops."
+                : "Finding the shape of the conversation…"
+        )
+        .font(NookType.metadata)
+        .foregroundStyle(.secondary)
     }
 }
 
@@ -1456,11 +1526,30 @@ private struct DetachedNotesPanel: View {
 }
 
 private struct NotchCaptionStream: View {
-    let lines: [LiveCaptionLine]
-    let fallback: String
-    let revision: Int
+    @ObservedObject var live: MeetingLiveSignals
+    /// A caption-specific notice from the coordinator (for example that
+    /// captions are unavailable); shown in place of the listening hint.
+    let notice: String?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var lines: [LiveCaptionLine] {
+        live.liveTranscript.notchCaptionLines
+    }
+
+    private var revision: Int {
+        live.liveTranscript.revision
+    }
+
+    /// Decided here rather than in the panel because the hint follows the
+    /// meter: "Finding the words" once someone is audibly speaking, so the
+    /// audio level has to be read by a view that observes it.
+    private var fallback: String {
+        if let notice { return notice }
+        return live.audioLevel > 0.08
+            ? "Finding the words…"
+            : "Listening for the first words…"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
