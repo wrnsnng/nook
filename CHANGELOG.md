@@ -6,6 +6,15 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
+## 1.20.1
+
+[Release notes](Releases/Nook-1.20.1.md)
+
+- Recording no longer pins a CPU core: the Library window had begun
+  re-laying itself out on every audio meter tick, and the meter, clock and
+  live captions now publish to the small views that draw them instead of
+  to every window holding the meeting coordinator.
+
 ## 1.20.0
 
 [Release notes](Releases/Nook-1.20.0.md)

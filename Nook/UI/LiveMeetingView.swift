@@ -1,6 +1,14 @@
 import AppKit
 import SwiftUI
 
+/// This is the Library window's detail pane, so every re-render of it re-lays
+/// out that whole window. The fast outputs (`audioLevel`, `elapsed`,
+/// `liveTranscript`) are therefore read only inside the small private leaf
+/// views further down this file, each observing `meeting.live` through
+/// `@ObservedObject var live`. Nothing in this struct's body, helpers or
+/// modifiers may read them: the coordinator's forwarders (`meeting.audioLevel`
+/// and friends) compile but never update a view, and reading `meeting.live.x`
+/// here would drag the whole window along at 10 to 12 Hz.
 struct LiveMeetingView: View {
     @EnvironmentObject private var meeting: MeetingCoordinator
     @EnvironmentObject private var shortcuts: ShortcutStore
@@ -43,7 +51,7 @@ struct LiveMeetingView: View {
             VStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 0) {
                     liveHeader(title: title)
-                    transcriptStream
+                    transcriptStream(showsListeningState: false)
                 }
                 .frame(maxWidth: 860, alignment: .leading)
                 .padding(.horizontal, 56)
@@ -61,13 +69,8 @@ struct LiveMeetingView: View {
                 // Individual transcript rows remain lazy in transcriptStream.
                 VStack(alignment: .leading, spacing: 0) {
                     liveHeader(title: title)
-
-                    if meeting.liveTranscript.segments.isEmpty,
-                       meeting.liveTranscript.latestText.isEmpty {
-                        listeningState
-                            .padding(.top, 48)
-                    } else {
-                        transcriptStream
+                    transcriptStream(showsListeningState: true) {
+                        updateScrollWithoutAnimation { $0.transcriptChanged() }
                     }
                 }
                 .frame(maxWidth: 860, alignment: .leading)
@@ -95,9 +98,6 @@ struct LiveMeetingView: View {
                         isAtLatest: LiveTranscriptScrollState.isAtLatest(context.geometry)
                     )
                 }
-            }
-            .onChange(of: meeting.liveTranscript.revision) { _, _ in
-                updateScrollWithoutAnimation { $0.transcriptChanged() }
             }
             .onAppear {
                 // Reopening the live view should reach the current words even
@@ -138,11 +138,9 @@ struct LiveMeetingView: View {
         VStack(alignment: .leading, spacing: 20) {
             HStack {
                 HStack(spacing: 7) {
-                    NookPresence(
-                        state: .listening(
-                            level: meeting.audioLevel,
-                            isPaused: meeting.isPaused
-                        ),
+                    LiveListeningPresence(
+                        live: meeting.live,
+                        isPaused: meeting.isPaused,
                         size: 20,
                         showsSurface: false
                     )
@@ -167,20 +165,18 @@ struct LiveMeetingView: View {
                 .accessibilityAddTraits(.isHeader)
 
             HStack(spacing: 18) {
-                NookMetadataLabel(
-                    title: elapsedLabel,
-                    symbol: "clock",
-                    tint: .secondary
-                )
+                LiveClock(live: meeting.live) { clock in
+                    NookMetadataLabel(
+                        title: clock,
+                        symbol: "clock",
+                        tint: .secondary
+                    )
+                }
                 .monospacedDigit()
                 .contentTransition(.numericText())
 
-                NookMetadataLabel(
-                    title: "\(meeting.liveTranscript.wordCount) words",
-                    symbol: "text.word.spacing",
-                    tint: .secondary
-                )
-                .contentTransition(.numericText())
+                LiveWordCount(live: meeting.live)
+                    .contentTransition(.numericText())
 
                 NookMetadataLabel(
                     title: "System audio + microphone",
@@ -193,76 +189,17 @@ struct LiveMeetingView: View {
         }
     }
 
-    private var transcriptStream: some View {
-        LazyVStack(alignment: .leading, spacing: 0) {
-            ForEach(meeting.liveTranscript.segments) { segment in
-                LiveTranscriptRow(segment: segment)
-                    .id(segment.id)
-                    // A new line sliding up is the motion Reduce Motion is
-                    // asking Nook not to make, so it fades in instead.
-                    .transition(
-                        reduceMotion
-                            ? .opacity
-                            : .asymmetric(
-                                insertion: .opacity
-                                    .combined(with: .move(edge: .bottom)),
-                                removal: .opacity
-                            )
-                    )
-            }
-
-            if !meeting.liveTranscript.latestText.isEmpty {
-                LivePartialRow(
-                    source: meeting.liveTranscript.latestSource,
-                    text: meeting.liveTranscript.latestText
-                )
-                .id("partial-\(meeting.liveTranscript.latestSource.rawValue)")
-            }
-
-            if let notice = meeting.liveCaptionNotice {
-                Label(notice, systemImage: "info.circle")
-                    .font(NookType.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.vertical, 18)
-            }
-        }
-        .padding(.top, 14)
-        .animation(
-            reduceMotion ? nil : .easeOut(duration: 0.24),
-            value: meeting.liveTranscript.segments.count
+    private func transcriptStream(
+        showsListeningState: Bool,
+        onTranscriptChanged: (() -> Void)? = nil
+    ) -> some View {
+        LiveTranscriptStream(
+            live: meeting.live,
+            isPaused: meeting.isPaused,
+            captionNotice: meeting.liveCaptionNotice,
+            showsListeningState: showsListeningState,
+            onTranscriptChanged: onTranscriptChanged
         )
-    }
-
-    private var listeningState: some View {
-        VStack(spacing: 18) {
-            NookPresence(
-                state: .listening(
-                    level: meeting.audioLevel,
-                    isPaused: meeting.isPaused
-                ),
-                size: 68
-            )
-
-            VStack(spacing: 6) {
-                Text(
-                    meeting.isPaused
-                        ? "Capture paused"
-                        : (meeting.audioLevel > 0.08
-                            ? "Finding the words…"
-                            : "Listening…")
-                )
-                    .font(NookType.spokenEmphasized)
-                Text(
-                    meeting.isPaused
-                        ? "Resume when you’re ready. Nothing is saved while paused."
-                        : "The first words will appear here as they’re spoken."
-                )
-                    .font(NookType.body)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 52)
     }
 
     private var liveControlShelf: some View {
@@ -290,9 +227,9 @@ struct LiveMeetingView: View {
 
     private var fullLiveControls: some View {
         HStack(spacing: 16) {
-            RecordingWaveform(
-                level: meeting.isPaused ? 0 : meeting.audioLevel,
-                isActive: !meeting.isPaused,
+            LiveWaveform(
+                live: meeting.live,
+                isPaused: meeting.isPaused,
                 barCount: 18
             )
             .frame(width: 92, height: 26)
@@ -314,14 +251,14 @@ struct LiveMeetingView: View {
 
     private var compactLiveControls: some View {
         HStack(spacing: 8) {
-            RecordingWaveform(
-                level: meeting.isPaused ? 0 : meeting.audioLevel,
-                isActive: !meeting.isPaused,
+            LiveWaveform(
+                live: meeting.live,
+                isPaused: meeting.isPaused,
                 barCount: 14
             )
             .frame(width: 54, height: 22)
 
-            Text(elapsedLabel)
+            LiveClock(live: meeting.live) { Text($0) }
                 .font(NookType.code)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
@@ -391,7 +328,7 @@ struct LiveMeetingView: View {
             Text(meeting.isPaused ? "Capture paused" : "Capturing locally")
                 .font(NookType.metadata)
                 .lineLimit(1)
-            Text(elapsedLabel)
+            LiveClock(live: meeting.live) { Text($0) }
                 .font(NookType.code)
                 .foregroundStyle(.secondary)
                 .contentTransition(.numericText())
@@ -448,9 +385,9 @@ struct LiveMeetingView: View {
 
     private var staticControlShelf: some View {
         HStack(spacing: 16) {
-            RecordingWaveform(
-                level: meeting.isPaused ? 0 : meeting.audioLevel,
-                isActive: !meeting.isPaused,
+            LiveWaveform(
+                live: meeting.live,
+                isPaused: meeting.isPaused,
                 barCount: 18
             )
             .frame(width: 92, height: 26)
@@ -458,7 +395,7 @@ struct LiveMeetingView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(meeting.isPaused ? "Capture paused" : "Capturing locally")
                     .font(NookType.metadata)
-                Text(elapsedLabel)
+                LiveClock(live: meeting.live) { Text($0) }
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(.secondary)
             }
@@ -523,20 +460,7 @@ struct LiveMeetingView: View {
                         .frame(maxWidth: 650)
                 }
 
-                if !meeting.liveTranscript.segments.isEmpty {
-                    HStack(spacing: 20) {
-                        Label(
-                            "\(meeting.liveTranscript.wordCount) words captured",
-                            systemImage: "text.word.spacing"
-                        )
-                        Label(
-                            "\(meeting.liveTranscript.segments.count) passages",
-                            systemImage: "quote.bubble"
-                        )
-                    }
-                    .font(NookType.metadata)
-                    .foregroundStyle(.secondary)
-                }
+                LiveProcessingStats(live: meeting.live)
 
                 if step != .discarding, meeting.canCancelProcessing {
                     Button("Cancel and discard recording") {
@@ -627,10 +551,6 @@ struct LiveMeetingView: View {
                     .foregroundStyle(.secondary)
             }
         }
-    }
-
-    private var elapsedLabel: String {
-        NookElapsedTime.clock(meeting.elapsed)
     }
 
     private var topPanelActionLabel: String {
@@ -927,6 +847,192 @@ struct LiveTranscriptScrollState {
             topInset: geometry.contentInsets.top,
             bottomInset: geometry.contentInsets.bottom
         )
+    }
+}
+
+/// The transcript column: finalized rows, the in-progress partial and, until
+/// anything has been said, the listening placeholder. It also raises the
+/// revision trigger for follow-the-bottom scrolling through
+/// `onTranscriptChanged`, so the scroll state itself can stay next to the
+/// ScrollView in `LiveMeetingView` while the fast reads stay down here.
+private struct LiveTranscriptStream: View {
+    @ObservedObject var live: MeetingLiveSignals
+    let isPaused: Bool
+    let captionNotice: String?
+    let showsListeningState: Bool
+    let onTranscriptChanged: (() -> Void)?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        // The trigger sits outside the branch so switching from the listening
+        // placeholder to the first words does not reset it.
+        content
+            .onChange(of: live.liveTranscript.revision) { _, _ in
+                onTranscriptChanged?()
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if showsListeningState,
+           live.liveTranscript.segments.isEmpty,
+           live.liveTranscript.latestText.isEmpty {
+            LiveListeningState(live: live, isPaused: isPaused)
+                .padding(.top, 48)
+        } else {
+            stream
+        }
+    }
+
+    private var stream: some View {
+        LazyVStack(alignment: .leading, spacing: 0) {
+            ForEach(live.liveTranscript.segments) { segment in
+                LiveTranscriptRow(segment: segment)
+                    .id(segment.id)
+                    // A new line sliding up is the motion Reduce Motion is
+                    // asking Nook not to make, so it fades in instead.
+                    .transition(
+                        reduceMotion
+                            ? .opacity
+                            : .asymmetric(
+                                insertion: .opacity
+                                    .combined(with: .move(edge: .bottom)),
+                                removal: .opacity
+                            )
+                    )
+            }
+
+            if !live.liveTranscript.latestText.isEmpty {
+                LivePartialRow(
+                    source: live.liveTranscript.latestSource,
+                    text: live.liveTranscript.latestText
+                )
+                .id("partial-\(live.liveTranscript.latestSource.rawValue)")
+            }
+
+            if let notice = captionNotice {
+                Label(notice, systemImage: "info.circle")
+                    .font(NookType.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 18)
+            }
+        }
+        .padding(.top, 14)
+        .animation(
+            reduceMotion ? nil : .easeOut(duration: 0.24),
+            value: live.liveTranscript.segments.count
+        )
+    }
+}
+
+private struct LiveListeningState: View {
+    @ObservedObject var live: MeetingLiveSignals
+    let isPaused: Bool
+
+    var body: some View {
+        VStack(spacing: 18) {
+            NookPresence(
+                state: .listening(
+                    level: live.audioLevel,
+                    isPaused: isPaused
+                ),
+                size: 68
+            )
+
+            VStack(spacing: 6) {
+                Text(
+                    isPaused
+                        ? "Capture paused"
+                        : (live.audioLevel > 0.08
+                            ? "Finding the words…"
+                            : "Listening…")
+                )
+                    .font(NookType.spokenEmphasized)
+                Text(
+                    isPaused
+                        ? "Resume when you’re ready. Nothing is saved while paused."
+                        : "The first words will appear here as they’re spoken."
+                )
+                    .font(NookType.body)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 52)
+    }
+}
+
+/// Thin observers that forward one fast value into a shared subview. Those
+/// subviews are used elsewhere with plain values, so they are wrapped rather
+/// than taught about `MeetingLiveSignals`.
+private struct LiveListeningPresence: View {
+    @ObservedObject var live: MeetingLiveSignals
+    let isPaused: Bool
+    let size: CGFloat
+    var showsSurface = true
+
+    var body: some View {
+        NookPresence(
+            state: .listening(level: live.audioLevel, isPaused: isPaused),
+            size: size,
+            showsSurface: showsSurface
+        )
+    }
+}
+
+private struct LiveWaveform: View {
+    @ObservedObject var live: MeetingLiveSignals
+    let isPaused: Bool
+    let barCount: Int
+
+    var body: some View {
+        RecordingWaveform(
+            level: isPaused ? 0 : live.audioLevel,
+            isActive: !isPaused,
+            barCount: barCount
+        )
+    }
+}
+
+private struct LiveClock<Content: View>: View {
+    @ObservedObject var live: MeetingLiveSignals
+    @ViewBuilder let content: (String) -> Content
+
+    var body: some View {
+        content(NookElapsedTime.clock(live.elapsed))
+    }
+}
+
+private struct LiveWordCount: View {
+    @ObservedObject var live: MeetingLiveSignals
+
+    var body: some View {
+        NookMetadataLabel(
+            title: "\(live.liveTranscript.wordCount) words",
+            symbol: "text.word.spacing",
+            tint: .secondary
+        )
+    }
+}
+
+private struct LiveProcessingStats: View {
+    @ObservedObject var live: MeetingLiveSignals
+
+    var body: some View {
+        if !live.liveTranscript.segments.isEmpty {
+            HStack(spacing: 20) {
+                Label(
+                    "\(live.liveTranscript.wordCount) words captured",
+                    systemImage: "text.word.spacing"
+                )
+                Label(
+                    "\(live.liveTranscript.segments.count) passages",
+                    systemImage: "quote.bubble"
+                )
+            }
+            .font(NookType.metadata)
+            .foregroundStyle(.secondary)
+        }
     }
 }
 

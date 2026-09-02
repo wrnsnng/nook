@@ -317,7 +317,6 @@ struct LibraryView: View {
     @EnvironmentObject private var markdownDraft: MarkdownDraftController
     @EnvironmentObject private var personalNotesDraft: PersonalNotesDraftController
     @EnvironmentObject private var prep: PrepBriefController
-    @EnvironmentObject private var meeting: MeetingCoordinator
     @EnvironmentObject private var recovery: RecordingRecovery
     @EnvironmentObject private var shortcuts: ShortcutStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -353,6 +352,12 @@ struct LibraryView: View {
     /// that type for why this view reads a plain, rarely-changing `@State`
     /// value here rather than holding the coordinator itself.
     @State private var currentPhase: MeetingPhase = .idle
+    /// Mirrors `meeting.localeIdentifier` through the same observer, for the
+    /// recovery section's Recover action. Starts on the same fallback the
+    /// coordinator itself uses until the observer first appears. Holding the
+    /// coordinator here just to read this value made the whole window
+    /// re-render on every meter tick (1.19.0 regression).
+    @State private var currentLocaleIdentifier = Locale.current.identifier
     /// The last grouping pass's inputs, and its result. Recomputed only when
     /// `groupingCacheKey` no longer matches; see
     /// `LibraryGroupingCacheKey` for why this exists.
@@ -442,7 +447,10 @@ struct LibraryView: View {
             // See `MeetingPhaseObserver`: this is the only place in the view
             // that subscribes to the coordinator, so meter ticks land here
             // instead of on the sidebar's grouping and filtering.
-            MeetingPhaseObserver(phase: $currentPhase)
+            MeetingPhaseObserver(
+                phase: $currentPhase,
+                localeIdentifier: $currentLocaleIdentifier
+            )
             // A hidden accelerator so the palette reaches from anywhere in
             // the window, toolbar focus included.
             Button("Command Palette", action: presentCommandPalette)
@@ -737,7 +745,10 @@ struct LibraryView: View {
             )
         }
         .environmentObject(store)
-        .environmentObject(meeting)
+        // Reached through the app model rather than an `@EnvironmentObject`
+        // on `LibraryView`; see `MeetingPhaseObserver` for why this view must
+        // not subscribe to the coordinator.
+        .environmentObject(AppModel.shared.meeting)
         .environmentObject(shortcuts)
 
         let didPresent = commandPaletteSheet.present(
@@ -858,7 +869,7 @@ struct LibraryView: View {
             openActionsSection
             LibraryRecoverySection(
                 recovery: recovery,
-                localeIdentifier: meeting.localeIdentifier
+                localeIdentifier: currentLocaleIdentifier
             )
             LibraryDraftRecoverySection()
 
@@ -1693,26 +1704,41 @@ struct LibraryView: View {
     }
 }
 
-/// Mirrors only `meeting.phase` into a plain `@State` value on `LibraryView`.
+/// Mirrors `meeting.phase` and `meeting.localeIdentifier` into plain `@State`
+/// values on `LibraryView`.
 ///
 /// `MeetingCoordinator` is one `ObservableObject` that publishes phase
-/// alongside audio level (up to ~12 Hz) and live transcript (up to ~10 Hz)
-/// while a meeting records. Holding `@EnvironmentObject` directly on
+/// alongside `isPaused`, `panelMode`, `liveNotes` and the live summary
+/// state while a meeting records (its audio level, elapsed clock and live
+/// transcript have since moved to `MeetingLiveSignals`, which only the leaf
+/// views drawing them observe). Holding `@EnvironmentObject` directly on
 /// `LibraryView` subscribes to all of that at once, since Combine's
 /// `objectWillChange` does not distinguish which published property
-/// changed: every tick would invalidate the whole view, including the
-/// sidebar's note grouping and filtering, for a phase that changes only a
-/// handful of times per meeting. This bridge is the one place that pays the
-/// tick rate; its own body does nothing but compare and store a value, so
-/// the cost of absorbing those ticks here is negligible.
+/// changed: every keystroke in the live notes would invalidate the whole
+/// view, including the sidebar's note grouping and filtering, for a phase
+/// that changes only a handful of times per meeting. This bridge is the one
+/// place that pays that rate; its own body does nothing but compare and
+/// store a value, so the cost of absorbing those changes here is negligible.
+///
+/// Anything else `LibraryView` needs from the coordinator must come through
+/// this bridge too, never through a subscription on the view itself. 1.19.0
+/// added one back to read the transcription locale and the Library window
+/// spent most of a recording re-laying itself out for meter ticks.
 private struct MeetingPhaseObserver: View {
     @EnvironmentObject private var meeting: MeetingCoordinator
     @Binding var phase: MeetingPhase
+    @Binding var localeIdentifier: String
 
     var body: some View {
         Color.clear
-            .onAppear { phase = meeting.phase }
+            .onAppear {
+                phase = meeting.phase
+                localeIdentifier = meeting.localeIdentifier
+            }
             .onChange(of: meeting.phase) { _, newValue in phase = newValue }
+            .onChange(of: meeting.localeIdentifier) { _, newValue in
+                localeIdentifier = newValue
+            }
     }
 }
 
@@ -1773,9 +1799,11 @@ private struct LibraryRecordingToolbar: View {
 }
 
 /// The sidebar's "Now" row, isolated into its own view so only this small
-/// section re-renders on the coordinator's meter ticks (elapsed at ~1 Hz,
-/// audio level at up to ~12 Hz while recording) instead of the sidebar's
-/// note grouping and filtering above it.
+/// section re-renders on the coordinator's changes (phase, pause, live
+/// notes) instead of the sidebar's note grouping and filtering above it.
+/// The row's elapsed clock ticks once a second from `MeetingLiveSignals`,
+/// which `LiveSidebarRow` observes on its own; this section must not read
+/// the coordinator's `elapsed` forwarder, which does not subscribe a view.
 private struct LibraryLiveSection: View {
     @EnvironmentObject private var meeting: MeetingCoordinator
     let selection: LibrarySelection?
@@ -1785,7 +1813,7 @@ private struct LibraryLiveSection: View {
             Section {
                 LiveSidebarRow(
                     phase: meeting.phase,
-                    elapsed: meeting.elapsed,
+                    live: meeting.live,
                     isPaused: meeting.isPaused,
                     isSelected: selection == .live
                 )
@@ -2176,9 +2204,12 @@ private struct MeetingRow: View {
     }
 }
 
+/// Observes `MeetingLiveSignals` for the elapsed clock in its detail line,
+/// so that object's meter, caption and clock publishes re-render this row
+/// alone rather than the sidebar around it.
 private struct LiveSidebarRow: View {
     let phase: MeetingPhase
-    let elapsed: TimeInterval
+    @ObservedObject var live: MeetingLiveSignals
     let isPaused: Bool
     let isSelected: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -2238,7 +2269,7 @@ private struct LiveSidebarRow: View {
 
     private var detail: String {
         if phase.isRecording {
-            return "\(isPaused ? "Paused" : "Live") · \(NookElapsedTime.clock(elapsed))"
+            return "\(isPaused ? "Paused" : "Live") · \(NookElapsedTime.clock(live.elapsed))"
         }
         if case .processing(let step) = phase { return step.rawValue }
         return "Open for details"

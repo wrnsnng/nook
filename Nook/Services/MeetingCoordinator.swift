@@ -122,11 +122,37 @@ struct SummaryProgress: Equatable, Sendable {
     let total: Int
 }
 
+/// The coordinator's fast-moving outputs, split into their own object so
+/// that observers of `MeetingCoordinator` do not pay for them.
+///
+/// `audioLevel` publishes up to ~12 times a second and `liveTranscript` up to
+/// ~10 while anyone speaks; `elapsed` once a second. Combine's
+/// `objectWillChange` does not say which property changed, so while these
+/// lived on the coordinator every view holding it re-rendered on every tick,
+/// including the whole Library window (1.19.0 and 1.20.0 spent most of a
+/// recording re-laying that window out). Only the small views that actually
+/// draw a level, a caption or a clock should observe this object, through
+/// `@ObservedObject var live: MeetingLiveSignals` fed with `meeting.live`.
+/// Reading `meeting.audioLevel` and friends on the coordinator still works
+/// for non-view code, but does not subscribe a view to changes.
+@MainActor
+final class MeetingLiveSignals: ObservableObject {
+    @Published fileprivate(set) var audioLevel = 0.0
+    @Published fileprivate(set) var elapsed: TimeInterval = 0
+    @Published fileprivate(set) var liveTranscript = LiveTranscriptState.empty
+}
+
 @MainActor
 final class MeetingCoordinator: ObservableObject {
     @Published private(set) var phase: MeetingPhase = .idle
-    @Published private(set) var elapsed: TimeInterval = 0
-    @Published private(set) var liveTranscript = LiveTranscriptState.empty
+    /// Fast-changing outputs; see `MeetingLiveSignals`. Views draw from this.
+    let live = MeetingLiveSignals()
+    /// Non-observing conveniences for the coordinator's own logic, tests and
+    /// previews. A SwiftUI body reading these will NOT update when they change;
+    /// observe `live` instead.
+    var audioLevel: Double { live.audioLevel }
+    var elapsed: TimeInterval { live.elapsed }
+    var liveTranscript: LiveTranscriptState { live.liveTranscript }
     @Published private(set) var liveInsights: MeetingInsights?
     @Published private(set) var liveSummaryIsRefreshing = false
     @Published private(set) var liveSummaryUpdatedAt: Date?
@@ -155,7 +181,6 @@ final class MeetingCoordinator: ObservableObject {
         }
     }
     @Published private(set) var liveNotesDetached = false
-    @Published private(set) var audioLevel = 0.0
     /// Moments flagged during the live recording, in flag order.
     @Published private(set) var liveMoments: [MeetingMoment] = []
     /// Set briefly after a flag so the panel can acknowledge it without a
@@ -626,7 +651,7 @@ final class MeetingCoordinator: ObservableObject {
         activeElapsedStartedAt = nil
         elapsedTask?.cancel()
         isPaused = true
-        audioLevel = 0
+        live.audioLevel = 0
         targetAudioLevel = 0
 
         pauseTask = Task { [weak self] in
@@ -901,7 +926,7 @@ final class MeetingCoordinator: ObservableObject {
             attachedNoteID: attachedNoteID
         )
         activeDraft = draft
-        liveTranscript = .empty
+        live.liveTranscript = .empty
         liveInsights = nil
         liveSummaryUpdatedAt = nil
         liveSummaryIsRefreshing = false
@@ -921,7 +946,7 @@ final class MeetingCoordinator: ObservableObject {
         stopRequestedDuringPauseTransition = false
         accumulatedElapsed = 0
         activeElapsedStartedAt = nil
-        audioLevel = 0
+        live.audioLevel = 0
         targetAudioLevel = 0
         phase = .processing(.preparing)
         onPresentationRequested?()
@@ -1472,12 +1497,12 @@ final class MeetingCoordinator: ObservableObject {
             // everything, because that is the user asking.
             activeDraft = nil
             processingTask = nil
-            elapsed = 0
+            live.elapsed = 0
             accumulatedElapsed = 0
             activeElapsedStartedAt = nil
             isPaused = false
             pauseTransitionInFlight = false
-            audioLevel = 0
+            live.audioLevel = 0
             processingCancellationRequested = false
             processingOwnsAttachedScaffold = false
             stopRequestedDuringPauseTransition = false
@@ -1635,12 +1660,12 @@ final class MeetingCoordinator: ObservableObject {
     ) {
         activeDraft = nil
         processingTask = nil
-        elapsed = 0
+        live.elapsed = 0
         accumulatedElapsed = 0
         activeElapsedStartedAt = nil
         isPaused = false
         pauseTransitionInFlight = false
-        audioLevel = 0
+        live.audioLevel = 0
         liveCaptionNotice = nil
         liveNotes = ""
         liveInsights = nil
@@ -2216,7 +2241,7 @@ final class MeetingCoordinator: ObservableObject {
         elapsedTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self, let activeElapsedStartedAt else { return }
-                elapsed = accumulatedElapsed
+                live.elapsed = accumulatedElapsed
                     + Date().timeIntervalSince(activeElapsedStartedAt)
                 try? await Task.sleep(for: .seconds(1))
             }
@@ -2240,13 +2265,15 @@ final class MeetingCoordinator: ObservableObject {
                     )
                 targetAudioLevel = max(targetAudioLevel * 0.76, fresh)
                 if level < 0.008 { level = 0 }
-                // Publishing writes objectWillChange for every observer of the
-                // coordinator, panel and menus included. Writing the settled
-                // value every 80 ms through hours of silence invalidated all
-                // of them for output that never changed; only real movement,
-                // or the drop to zero once it has finished easing, publishes.
+                // Publishing now lands only on the leaf views observing
+                // `live` (level ring, waveform, clocks, captions), but the
+                // gate is still worth keeping:
+                // writing the settled value every 80 ms through hours of
+                // silence would redraw them for changes nobody can see. Only
+                // real movement, or the drop to zero once it has finished
+                // easing, publishes.
                 if abs(level - audioLevel) >= 0.01 || (level == 0 && audioLevel != 0) {
-                    audioLevel = level
+                    live.audioLevel = level
                 }
                 try? await Task.sleep(for: .milliseconds(80))
             }
@@ -2286,7 +2313,7 @@ final class MeetingCoordinator: ObservableObject {
     }
 
     private func receiveLiveTranscript(_ state: LiveTranscriptState) {
-        liveTranscript = state
+        live.liveTranscript = state
         noteStalledLiveTrack(in: state)
         scheduleLiveSummary(force: false)
     }
@@ -2433,9 +2460,9 @@ final class MeetingCoordinator: ObservableObject {
         isPaused: Bool = false
     ) {
         self.phase = phase
-        self.elapsed = elapsed
-        self.liveTranscript = liveTranscript
-        self.audioLevel = audioLevel
+        live.elapsed = elapsed
+        live.liveTranscript = liveTranscript
+        live.audioLevel = audioLevel
         self.isPaused = isPaused
         if let panelMode { self.panelMode = panelMode }
         self.liveInsights = liveInsights
@@ -2475,16 +2502,16 @@ final class MeetingCoordinator: ObservableObject {
         processingCancellationRequested = false
         processingOwnsAttachedScaffold = false
         stopRequestedDuringPauseTransition = false
-        elapsed = 0
+        live.elapsed = 0
         accumulatedElapsed = 0
         activeElapsedStartedAt = nil
         isPaused = false
         pauseTransitionInFlight = false
         pauseTask = nil
-        audioLevel = 0
+        live.audioLevel = 0
         targetAudioLevel = 0
         liveCaptionNotice = nil
-        liveTranscript = .empty
+        live.liveTranscript = .empty
         liveNotes = ""
         liveInsights = nil
         liveSummaryUpdatedAt = nil

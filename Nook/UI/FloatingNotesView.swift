@@ -4,8 +4,11 @@ struct FloatingNotesView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var meeting: MeetingCoordinator
     /// One focus request when the window opens. A polled focus state used
-    /// to sit here, and during a meeting this window re-renders with every
-    /// meter tick, which kept blurring the field it had just focused.
+    /// to sit here, and at the time this window re-rendered with every
+    /// meter tick, which kept blurring the field it had just focused. The
+    /// clock now lives in its own leaf (`FloatingNotesClock`) observing
+    /// `MeetingLiveSignals`, so the window itself no longer re-renders on
+    /// ticks, but a one-shot token remains the right shape here.
     @State private var focusToken = 0
 
     var body: some View {
@@ -65,11 +68,7 @@ struct FloatingNotesView: View {
 
             Spacer()
 
-            Text(elapsedLabel)
-                .font(NookType.code)
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
-                .contentTransition(.numericText())
+            FloatingNotesClock(live: meeting.live)
         }
         .accessibilityElement(children: .combine)
     }
@@ -88,16 +87,28 @@ struct FloatingNotesView: View {
             "Start a meeting to attach these notes"
         }
     }
+}
 
-    private var elapsedLabel: String {
-        NookElapsedTime.clock(meeting.elapsed)
+/// The header's elapsed clock, the one part of this window that observes
+/// `MeetingLiveSignals`. Kept as its own leaf so that object's meter, caption
+/// and clock publishes re-render this text alone and not `FloatingNotesView`, whose body only
+/// needs phase and pause state from the coordinator.
+private struct FloatingNotesClock: View {
+    @ObservedObject var live: MeetingLiveSignals
+
+    var body: some View {
+        Text(NookElapsedTime.clock(live.elapsed))
+            .font(NookType.code)
+            .foregroundStyle(.secondary)
+            .monospacedDigit()
+            .contentTransition(.numericText())
     }
 }
 
 /// The live-notes editor alone, binding straight to `meeting.liveNotes`.
 ///
 /// `FloatingNotesView` itself still needs the coordinator for its header's
-/// elapsed clock, so it cannot avoid observing `MeetingCoordinator`
+/// phase and pause state, so it cannot avoid observing `MeetingCoordinator`
 /// altogether; pulling the editor out here at least keeps it from being
 /// entangled with the header and the window bridge in one body, and matches
 /// `NookNotesEditor`'s own fix (see its `updateNSView`) that already makes an
