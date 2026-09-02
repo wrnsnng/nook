@@ -470,6 +470,10 @@ struct QuickNotePadSafetyTests {
         #expect(pad.hasUnsavedEdits)
         #expect(pad.lastSavedAt == savedAt)
         #expect(Data(pad.text.utf8) == Data(restored.utf8))
+        if let now = try? Data(contentsOf: file), now != originalBytes {
+            print("NOOKDEBUG expected>>>\(String(decoding: originalBytes, as: UTF8.self))<<<")
+            print("NOOKDEBUG actual>>>\(String(decoding: now, as: UTF8.self))<<<")
+        }
         #expect(try Data(contentsOf: file) == originalBytes)
         #expect(store.notes.first?.summary == saved.summary)
     }
@@ -541,6 +545,10 @@ struct QuickNotePadSafetyTests {
         #expect(pad.message == failure)
         #expect(pad.hasUnsavedFailure)
         #expect(pad.hasUnsavedEdits)
+        if let now = try? Data(contentsOf: file), now != originalBytes {
+            print("NOOKDEBUG expected>>>\(String(decoding: originalBytes, as: UTF8.self))<<<")
+            print("NOOKDEBUG actual>>>\(String(decoding: now, as: UTF8.self))<<<")
+        }
         #expect(try Data(contentsOf: file) == originalBytes)
     }
 
@@ -1005,6 +1013,10 @@ struct QuickNotePadSafetyTests {
         #expect(pad.run(.tidy) == nil)
         #expect(pad.hasConsented(to: .codex) == !revokeConsent)
         #expect(pad.text.utf8.elementsEqual(original.utf8))
+        if let now = try? Data(contentsOf: file), now != originalBytes {
+            print("NOOKDEBUG expected>>>\(String(decoding: originalBytes, as: UTF8.self))<<<")
+            print("NOOKDEBUG actual>>>\(String(decoding: now, as: UTF8.self))<<<")
+        }
         #expect(try Data(contentsOf: file) == originalBytes)
 
         // This supported summary would append to unchanged input if accepted.
@@ -1016,6 +1028,10 @@ struct QuickNotePadSafetyTests {
         #expect(pad.outboundEngine == nil && pad.outboundMessage.isEmpty)
         #expect(pad.canRunAction)
         #expect(pad.text.utf8.elementsEqual(original.utf8))
+        if let now = try? Data(contentsOf: file), now != originalBytes {
+            print("NOOKDEBUG expected>>>\(String(decoding: originalBytes, as: UTF8.self))<<<")
+            print("NOOKDEBUG actual>>>\(String(decoding: now, as: UTF8.self))<<<")
+        }
         #expect(try Data(contentsOf: file) == originalBytes)
         pad.text += " Keep the cafe\u{301} notes."
         let laterSave = try #require(pad.saveIfNeeded())
@@ -1211,6 +1227,10 @@ struct QuickNotePadSafetyTests {
         #expect(!pad.canRunAction)
         #expect(pad.run(.tidy) == nil)
         #expect(pad.text == "Review the launch plan.")
+        if let now = try? Data(contentsOf: file), now != originalBytes {
+            print("NOOKDEBUG expected>>>\(String(decoding: originalBytes, as: UTF8.self))<<<")
+            print("NOOKDEBUG actual>>>\(String(decoding: now, as: UTF8.self))<<<")
+        }
         #expect(try Data(contentsOf: file) == originalBytes)
 
         pad.cancelApplicationTermination()
@@ -1258,6 +1278,10 @@ struct QuickNotePadSafetyTests {
         await action.value
         #expect(!pad.isWorking && !pad.isStoppingAssistant)
         #expect(pad.text == "Review the launch plan.")
+        if let now = try? Data(contentsOf: file), now != originalBytes {
+            print("NOOKDEBUG expected>>>\(String(decoding: originalBytes, as: UTF8.self))<<<")
+            print("NOOKDEBUG actual>>>\(String(decoding: now, as: UTF8.self))<<<")
+        }
         #expect(try Data(contentsOf: file) == originalBytes)
         #expect(pad.canRunAction)
         pad.close()
