@@ -211,8 +211,23 @@ struct QuickNotePadSafetyTests {
         return try #require(restarted.recoveredDrafts.first)
     }
 
+    /// Waits for the injected assistant to be entered.
+    ///
+    /// The deadline is a guard against a wedged test, not an assertion about
+    /// how quickly the pad reacts. `withDeadline` runs its operation as a
+    /// `@MainActor` task, and the assistant is only entered once the pad's own
+    /// main-actor task is scheduled, so the wait is really queueing behind
+    /// every other main-actor test the suite is running in parallel. Five
+    /// seconds was inside that queueing delay on CI: these tests failed there
+    /// roughly half the time, on whichever test lost the race, while passing
+    /// locally. `CommandLineProcessTests` documents the same failure shape.
+    /// A wedged assistant still fails here, just later.
+    private static let assistantDeadline: Double = 60
+
     private func waitForAssistant(_ assistant: DelayedQuickNoteAssistant, starts: Int = 1) async throws {
-        let started = await withDeadline(seconds: 5) { await assistant.waitForStarts(starts) }
+        let started = await withDeadline(seconds: Self.assistantDeadline) {
+            await assistant.waitForStarts(starts)
+        }
         if started != true { await assistant.finish() }
         try #require(started == true, "The injected assistant should start without invoking a real provider.")
     }
@@ -1120,7 +1135,9 @@ struct QuickNotePadSafetyTests {
             defaults: defaults
         )
         let first = pad.refreshEngines()
-        let started = await withDeadline(seconds: 5) { await discovery.waitForFirst() }
+        let started = await withDeadline(seconds: Self.assistantDeadline) {
+            await discovery.waitForFirst()
+        }
         try #require(started == true)
         await pad.refreshEngines().value
         pad.text = "Review the launch plan."
@@ -1194,7 +1211,9 @@ struct QuickNotePadSafetyTests {
         let termination = Task { @MainActor in
             await pad.prepareAssistantForTermination()
         }
-        let cancellation = await withDeadline(seconds: 5) { await assistant.waitForCancellation() }
+        let cancellation = await withDeadline(seconds: Self.assistantDeadline) {
+            await assistant.waitForCancellation()
+        }
         if cancellation != true { await assistant.finish() }
         try #require(cancellation == true)
         #expect(pad.isPreparingForTermination && pad.isStoppingAssistant)
