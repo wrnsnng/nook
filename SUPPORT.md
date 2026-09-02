@@ -27,3 +27,5 @@ privacy vulnerabilities through [SECURITY.md](SECURITY.md).
 Community support is best-effort. Maintainers cannot provide legal advice about
 recording consent, guarantee recognition quality for every language or audio
 environment, or support modified binaries as if they were official releases.
+
+<!-- CI control run: verifying QuickNotePadSafetyTests timing flakiness on unmodified main. Delete this branch. -->
