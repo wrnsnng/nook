@@ -71,7 +71,7 @@ jobs:
 
       - name: Test contributor configuration
         run: |
-          xcodebuild test -quiet \
+          xcodebuild test \
             -project Nook.xcodeproj \
             -scheme Nook \
             -destination 'platform=macOS' \
