@@ -411,10 +411,12 @@ folder inside the selected notes folder while Nook processes a meeting.
   the local file to check duration, source markers and track timing, and checks
   that the file did not change during validation. Cancellation or cleanup
   while that read is pending cannot recreate the package or completion receipt.
-  These checks do not invoke Speech or a model. Recovery with a valid companion
-  re-exports playback even when an earlier M4A remains, so retained audio matches
-  the recovered source timeline. Failed re-export retains both that old audio
-  and the source packages. Failed/cancelled auxiliary writing leaves
+  These checks do not invoke Speech or a model. Recovery with remaining capture
+  parts re-exports playback even when an earlier M4A remains, including when
+  source packages are absent or unfinished, so retained audio includes resumed
+  primary-only parts too. Audio-only recovery reuses the surviving M4A. Failed
+  re-export retains that old audio, primary captures and source packages.
+  Failed/cancelled auxiliary writing leaves
   the original recording intact. Partial packages stay discoverable for
   Reveal/Delete, and a valid complete package can be recovered even if its MP4
   was removed. Copying or replacing files invalidates the local receipt.

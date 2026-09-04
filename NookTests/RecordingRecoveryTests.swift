@@ -767,22 +767,28 @@ struct RecordingRecoveryTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: otherLibrary.path).isEmpty)
     }
 
-    @Test
-    func reassigningTheSameLibraryStillRecoversTypedNotesAndCleansTheirSidecar() async throws {
+    @Test(arguments: [false, true])
+    func reassigningTheSameLibraryStillRecoversTypedNotesAndCleansTheirSidecar(hasCapture: Bool) async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = store(in: directory)
         let recordings = store.recordingsDirectory()
         let id = UUID()
-        let capture = try writeRecording(id, extensionName: "mp4", in: recordings)
+        let capture = hasCapture ? try writeRecording(id, extensionName: "mp4", in: recordings) : nil
         let audio = try writeRecording(id, extensionName: "m4a", in: recordings)
         let sidecar = MeetingCoordinator.liveNotesURL(for: id, in: recordings)
         let exactNotes = "Cafe\u{301} discussion.\n\n  Keep my indentation."
         MeetingCoordinator.writeLiveNotes(exactNotes, to: sidecar)
         let gate = RecordingRecoveryGate()
+        var extractions = 0
         let recovery = RecordingRecovery(
             store: store,
-            extractAudio: { _, _ in Issue.record("Existing extracted audio must be reused.") },
+            extractAudio: { sources, destination in
+                extractions += 1
+                #expect(sources == [try #require(capture)])
+                #expect(destination == audio)
+                try Data("Refreshed synthetic audio".utf8).write(to: destination)
+            },
             transcribeAudio: { url, _ in
                 #expect(url.standardizedFileURL == audio.standardizedFileURL)
                 return [TranscriptSegment(startTime: 0, duration: 3, text: "Synthetic review content.")]
@@ -814,7 +820,8 @@ struct RecordingRecoveryTests {
         let persisted = try #require(MarkdownCodec.decode(markdown, fileURL: noteURL))
         #expect(persisted.personalNotes.utf8.elementsEqual(exactNotes.utf8))
         #expect(!FileManager.default.fileExists(atPath: sidecar.path))
-        #expect(!FileManager.default.fileExists(atPath: capture.path))
+        #expect(extractions == (hasCapture ? 1 : 0))
+        if let capture { #expect(!FileManager.default.fileExists(atPath: capture.path)) }
         #expect(recovery.orphans.isEmpty)
     }
 

@@ -25,7 +25,7 @@ struct OrphanedRecording: Identifiable, Hashable, Sendable {
     }
 
     /// Audio already extracted from the capture, if a previous attempt got
-    /// that far. Source companions require a fresh matching playback export.
+    /// that far. Any remaining captures require a fresh matching playback export.
     var extractedAudio: URL? {
         urls.first { $0.pathExtension.lowercased() == "m4a" }
     }
@@ -332,15 +332,16 @@ final class RecordingRecovery: ObservableObject {
                 try self.requireRecoverable(orphan.id, at: location)
                 let audioURL: URL
                 let captures = orphan.captures
-                let hasSourceCompanion = captures.contains { SourceAudioFiles.completedAudio(for: $0) != nil }
-                if let existing = orphan.extractedAudio, !hasSourceCompanion {
+                if let existing = orphan.extractedAudio, captures.isEmpty {
                     audioURL = existing
                 } else {
                     guard !captures.isEmpty else {
                         throw RecoveryError.nothingToRecover
                     }
                     // A cached mix can predate a completed source companion or
-                    // a resumed part. Do not transcribe the new source timeline
+                    // a resumed part, including primary-only fallback captures.
+                    // Without a receipt tying that mix to every current part,
+                    // do not transcribe the new source timeline
                     // while retaining old playback and deleting its originals.
                     // Staged extraction preserves that cached file on failure.
                     // Named for the note rather than for whichever capture
@@ -356,7 +357,7 @@ final class RecordingRecovery: ObservableObject {
                 }
 
                 let transcript = TranscriptAssembler.coalesce(
-                    try await self.transcribeAudio(audioURL, orphan.captures, localeIdentifier)
+                    try await self.transcribeAudio(audioURL, captures, localeIdentifier)
                 )
                 try self.requireRecoverable(orphan.id, at: location)
                 guard !transcript.isEmpty else {

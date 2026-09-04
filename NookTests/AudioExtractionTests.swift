@@ -6,6 +6,80 @@ import Testing
 /// Synthetic frequencies prove what survived the exported file. No microphone,
 /// speech model, real meeting or hardware playback participates in these tests.
 struct AudioExtractionTests {
+    @MainActor @Test(arguments: [false, true], [false, true])
+    func recoveryIncludesResumedPrimaryAudioEvenWithoutACompletedCompanion(
+        unfinishedCompanion: Bool, exportFails: Bool
+    ) async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MarkdownStore(noteLoader: { _, _ in .success((notes: [], issues: [])) })
+        store.storageURL = root
+        let recordings = store.recordingsDirectory()
+        let id = UUID()
+        let first = recordings.appendingPathComponent("\(id.uuidString).mp4")
+        let second = recordings.appendingPathComponent("\(id.uuidString).part-2.mp4")
+        let firstFixture = try await capture(in: root, tones: [Tone(440)])
+        let secondFixture = try await capture(in: root, tones: [Tone(880)])
+        try FileManager.default.moveItem(at: firstFixture, to: first)
+        try FileManager.default.moveItem(at: secondFixture, to: second)
+        let expectedDuration = try await duration(of: first) + duration(of: second)
+        let originalBytes = try [first, second].map { try Data(contentsOf: $0) }
+        let cached = recordings.appendingPathComponent("\(id.uuidString).m4a")
+        try await AudioExtractor.extractAudio(from: first, to: cached)
+        let cachedBytes = try Data(contentsOf: cached)
+        let package = SourceAudioFiles.directory(for: second)
+        if unfinishedCompanion {
+            try FileManager.default.createDirectory(at: package, withIntermediateDirectories: false)
+            try Data("Unfinished synthetic source audio".utf8).write(to: SourceAudioFiles.audio(in: package))
+        }
+        #expect(SourceAudioFiles.completedAudio(for: first) == nil)
+        #expect(SourceAudioFiles.completedAudio(for: second) == nil)
+        var extractions = 0
+        var transcriptions = 0
+        let recovery = RecordingRecovery(store: store, extractAudio: { sources, destination in
+            extractions += 1
+            #expect(sources == [first, second])
+            if exportFails {
+                try await AudioExtractor.extractAudio(from: sources, to: destination, export: { _, _, _ in
+                    throw AudioExtractionError.invalidExport
+                })
+            } else {
+                try await AudioExtractor.extractAudio(from: sources, to: destination)
+            }
+        }, transcribeAudio: { url, _ in
+            transcriptions += 1
+            let audio = try decoded(url)
+            #expect(abs(audio.duration - expectedDuration) < 0.05)
+            #expect(audio.amplitude(440, from: 0.15, to: 0.85) > 0.2)
+            let hasResumedAudio = audio.amplitude(880, from: 1.15, to: 1.85) > 0.2
+            #expect(hasResumedAudio)
+            return [TranscriptSegment(startTime: 0.1, duration: 0.1, text: "First sitting.")]
+                + (hasResumedAudio ? [TranscriptSegment(startTime: 1.1, duration: 0.1, text: "Resumed sitting.")] : [])
+        }, summarizeTranscript: { transcript, title in
+            SummaryService.fallbackInsights(transcript: transcript, fallbackTitle: title)
+        })
+        recovery.scan()
+        recovery.recover(try #require(recovery.orphans.first { $0.id == id }), localeIdentifier: "en_US")
+        await recovery.recoveryTaskForTesting?.value
+        #expect(extractions == 1)
+        if exportFails {
+            #expect(transcriptions == 0)
+            #expect(store.uniqueNote(id: id) == nil)
+            #expect(try Data(contentsOf: cached) == cachedBytes)
+            #expect(try [first, second].map { try Data(contentsOf: $0) } == originalBytes)
+            #expect(!unfinishedCompanion || FileManager.default.fileExists(atPath: package.path))
+        } else {
+            #expect(transcriptions == 1)
+            let note = try #require(store.uniqueNote(id: id))
+            await store.summarySessions.session(for: note).waitForCompletion()
+            #expect(note.transcript.map(\.text).joined(separator: " ") == "First sitting. Resumed sitting.")
+            #expect(note.transcript.allSatisfy { $0.source == .mixed })
+            #expect(!FileManager.default.fileExists(atPath: first.path))
+            #expect(!FileManager.default.fileExists(atPath: second.path))
+            #expect(!FileManager.default.fileExists(atPath: package.path))
+        }
+    }
+
     @Test(arguments: [false, true])
     func everyTrackSurvivesEveryResumedPart(decreasingTrackCount: Bool) async throws {
         let root = try temporaryDirectory()

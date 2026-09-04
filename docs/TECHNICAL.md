@@ -66,10 +66,11 @@ external writer.
 part when its receipt and file identities remain valid, otherwise the original
 ScreenCaptureKit file. Playback extraction and transcription use this same
 selection and revalidate it across asynchronous work.
-Recovery rebuilds playback when any valid source companion is available, even
-if an extracted M4A already exists. That cached mix may predate the companion or
-a resumed part. Failed staged re-export preserves the cached audio and original
-captures instead of saving a new source transcript beside obsolete playback and
+Recovery rebuilds playback whenever capture parts remain, even if no completed
+source companion exists and an extracted M4A already exists. That cached mix
+may predate a companion or a resumed primary-only part; it has no receipt tying
+it to every current capture. Failed staged re-export preserves the cached audio
+and original captures instead of saving a new source transcript beside obsolete playback and
 then deleting its only complete sources. Legacy audio-only recovery still reuses
 the surviving M4A.
 
