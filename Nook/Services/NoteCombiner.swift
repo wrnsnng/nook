@@ -461,6 +461,11 @@ enum NoteCombiner {
         private let identity: Identity?
         var exists: Bool { identity != nil }
 
+        func refersToSameFile(as other: Self) -> Bool {
+            guard let identity, let otherIdentity = other.identity else { return false }
+            return identity.device == otherIdentity.device && identity.inode == otherIdentity.inode
+        }
+
         init(url: URL) throws {
             self.url = url
             identity = try Self.readIdentity(at: url)
