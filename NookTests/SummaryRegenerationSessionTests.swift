@@ -319,14 +319,18 @@ struct SummaryRegenerationSessionTests {
         #expect(session.completion == nil)
     }
 
-    @Test(arguments: ["text", "timing", "duration", "source", "guidance", "flag"])
-    func changedGenerationInputKeepsTheCurrentNoteAndExplainsWhy(change: String) async throws {
-        let original = note()
+    @Test(arguments: ["text", "timing", "duration", "source", "guidance", "flag"],
+          [SummaryRegenerationSession.Purpose.regeneration, .initial, .appended])
+    func changedGenerationInputKeepsTheCurrentNoteAndExplainsWhy(
+        change: String, purpose: SummaryRegenerationSession.Purpose
+    ) async throws {
+        var original = note()
+        original.summaryPending = purpose == .initial ? .initial : (purpose == .appended ? .appended : nil)
         let library = RegenerationTestLibrary(folder: folder, notes: [original])
         let runner = ControlledRegenerationRunner()
         defer { runner.finishAll() }
         let session = SummaryRegenerationSession(runner: runner.run)
-        let task = try #require(session.start(note: original, library: library.read, commit: library.commit))
+        let task = try #require(session.start(note: original, purpose: purpose, library: library.read, commit: library.commit))
         await runner.waitForRequests(1)
         let segment = original.transcript[0]
         switch change {
@@ -355,16 +359,19 @@ struct SummaryRegenerationSessionTests {
         #expect(!session.isRunning)
     }
 
-    @Test
-    func safeConcurrentEditsKeepTheirExactBytesAndLatestConflictRevision() async throws {
+    @Test(arguments: [SummaryRegenerationSession.Purpose.regeneration, .initial, .appended])
+    func safeConcurrentEditsKeepTheirExactBytesAndLatestConflictRevision(
+        purpose: SummaryRegenerationSession.Purpose
+    ) async throws {
         var original = note()
+        original.summaryPending = purpose == .initial ? .initial : (purpose == .appended ? .appended : nil)
         let guidance = String(repeating: "a", count: SummaryAttention.maximumMyNotesCharacters)
         original.personalNotes = guidance + " old tail"
         let library = RegenerationTestLibrary(folder: folder, notes: [original])
         let runner = ControlledRegenerationRunner()
         defer { runner.finishAll() }
         let session = SummaryRegenerationSession(runner: runner.run)
-        let task = try #require(session.start(note: original, library: library.read, commit: library.commit))
+        let task = try #require(session.start(note: original, purpose: purpose, library: library.read, commit: library.commit))
         await runner.waitForRequests(1)
         #expect(runner.requests[0].note.fileRevision == original.fileRevision)
         library.notes[0].title = "Cafe\u{0301} review"
@@ -387,6 +394,7 @@ struct SummaryRegenerationSessionTests {
         #expect(Data(committed.personalNotes.utf8) == Data(latest.personalNotes.utf8))
         #expect(committed.transcript == latest.transcript)
         #expect(committed.summary != original.summary)
+        #expect(committed.summaryPending == nil)
     }
 
     @Test(arguments: [false, true])
