@@ -82,7 +82,7 @@ final class AppModel: ObservableObject {
             store: store,
             detector: detector,
             prepareForAudioCapture: {
-                await audioInputCheck.stop()
+                try await audioInputCheck.prepareForOtherCapture()
             }
         )
         let notifications = MeetingNotificationService(meeting: meeting)
@@ -99,7 +99,7 @@ final class AppModel: ObservableObject {
         let dictation = DictationCoordinator(
             localeIdentifier: meeting.localeIdentifier,
             prepareForAudioCapture: {
-                await audioInputCheck.stop()
+                try await audioInputCheck.prepareForOtherCapture()
             }
         )
         let quickNote = QuickNoteController(store: store, recovery: draftJournal)
