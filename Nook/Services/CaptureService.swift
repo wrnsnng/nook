@@ -43,6 +43,7 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
     private var liveIngestPump: Task<Void, Never>?
     private let liveIngestPipe = Mutex<AsyncStream<LiveIngest>.Continuation?>(nil)
     private let latestLevels = Mutex<[TranscriptSegment.Source: Double]>([:])
+    private let sourceRecording = Mutex<(stream: ObjectIdentifier, writer: SourceAudioRecording)?>(nil)
 
     /// The freshest measured level for a source, for the coordinator's meter
     /// tick to poll.
@@ -213,6 +214,7 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         self.liveTranscription = nil
         closeLiveIngestPump()
         latestLevels.withLock { $0 = [:] }
+        beginSourceRecording(for: url, stream: stream)
 
         do {
             try await stream.startCapture()
@@ -231,22 +233,25 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
 
         preparesLiveInput.withLock { $0 = false }
         isPaused = true
+        var source: SourceAudioRecording?
+        var boundary = CMTime.invalid
+        var removalLanded = false
         do {
             try await finalizationWaiter.wait(
                 timeout: finalizationTimeout
             ) {
                 try stream.removeRecordingOutput(recordingOutput)
+                removalLanded = true
+                boundary = CMClockGetTime(CMClockGetHostTimeClock())
+                source = self.detachSourceRecording()
             }
         } catch {
-            // The removal closure runs before the waiter can suspend, so a
-            // timeout or cancellation here means the output was already
-            // detached and no further audio reaches disk. Treating that as a
-            // failed pause resurrected a meeting that looked live while
-            // writing nothing for the rest of the recording, so the pause
-            // stands and only the file-close receipt goes missing. Any other
-            // error is the removal itself failing, which genuinely leaves
-            // capture active.
-            if Self.waitErrorMeansRemovalLanded(error) {
+            // Error type cannot establish whether removal happened: an already
+            // cancelled task never enters the closure, and a successful removal
+            // can be followed by a failed file-close callback. Keep the actual
+            // removal receipt so neither path resurrects a phantom recording
+            // or leaves a supposedly paused output still writing to disk.
+            if removalLanded {
                 NookEventLog.write(.capturePauseFinalizationUnconfirmed)
             } else {
                 isPaused = false
@@ -254,23 +259,11 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
                 throw error
             }
         }
+        await finishSourceRecording(source, at: boundary)
         self.recordingOutput = nil
         recordingOutputID = nil
         recordingURL = nil
         releaseSleepAssertion()
-    }
-
-    /// Whether a `finalizationWaiter.wait` failure around a completed removal
-    /// means the removal itself landed. The closure executes synchronously
-    /// before suspension, so only its own error reports a failed removal; a
-    /// deadline or task cancellation reports a missing callback instead.
-    static func waitErrorMeansRemovalLanded(_ error: Error) -> Bool {
-        switch error {
-        case CaptureError.finalizationTimedOut, is CancellationError:
-            true
-        default:
-            false
-        }
     }
 
     func resume() throws {
@@ -284,7 +277,9 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
             .deletingPathExtension()
             .appendingPathExtension("part-\(nextSegmentNumber).mp4")
         nextSegmentNumber += 1
-        try? FileManager.default.removeItem(at: segmentURL)
+        guard !FileManager.default.fileExists(atPath: segmentURL.path) else {
+            throw CocoaError(.fileWriteFileExists)
+        }
 
         let configuration = SCRecordingOutputConfiguration()
         configuration.outputURL = segmentURL
@@ -295,6 +290,7 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
             delegate: self
         )
         try stream.addRecordingOutput(output)
+        beginSourceRecording(for: segmentURL, stream: stream)
 
         recordingURL = segmentURL
         recordingURLs.append(segmentURL)
@@ -317,6 +313,7 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         }
         isStopping = true
         preparesLiveInput.withLock { $0 = false }
+        let sourceBoundary = CMClockGetTime(CMClockGetHostTimeClock())
 
         let completedURLs = recordingURLs
         if streamEndedUnexpectedly {
@@ -341,9 +338,8 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
                     }
                 }
             }
-            let existingURLs = completedURLs.filter {
-                FileManager.default.fileExists(atPath: $0.path)
-            }
+            await finishSourceRecording(detachSourceRecording(), at: .invalid)
+            let existingURLs = completedURLs.filter(Self.hasRecoverableRecording)
             let terminalError = lastError
             clear()
             guard !existingURLs.isEmpty else {
@@ -385,11 +381,10 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
                 throw error
             }
         }
+        await finishSourceRecording(detachSourceRecording(), at: sourceBoundary)
         clear()
 
-        let existingURLs = completedURLs.filter {
-            FileManager.default.fileExists(atPath: $0.path)
-        }
+        let existingURLs = completedURLs.filter(Self.hasRecoverableRecording)
         guard !existingURLs.isEmpty else {
             throw CaptureError.recordingMissing
         }
@@ -423,6 +418,11 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
         of outputType: SCStreamOutputType
     ) {
+        sourceRecording.withLock { recording in
+            guard recording?.stream == ObjectIdentifier(stream) else { return }
+            if outputType == .audio { recording?.writer.append(sampleBuffer, source: .system) }
+            if outputType == .microphone { recording?.writer.append(sampleBuffer, source: .microphone) }
+        }
         guard sampleBuffer.isValid, sampleBuffer.dataReadiness == .ready else { return }
         let source: TranscriptSegment.Source
         switch outputType {
@@ -594,6 +594,7 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
     }
 
     private func clear() {
+        detachSourceRecording()?.cancel()
         releaseSleepAssertion()
         isStopping = false
         streamStopTask = nil
@@ -615,6 +616,35 @@ final class CaptureService: NSObject, SCStreamDelegate, SCRecordingOutputDelegat
         liveTranscription = nil
         preparesLiveInput.withLock { $0 = false }
         lastError = nil
+    }
+
+    private func beginSourceRecording(for url: URL, stream: SCStream) {
+        detachSourceRecording()?.cancel()
+        // Failure here must not interrupt the primary ScreenCaptureKit file.
+        // An unlabelled fallback is preferable to losing the only recording.
+        guard let writer = try? SourceAudioRecording(
+            captureURL: url, notBefore: CMClockGetTime(CMClockGetHostTimeClock())
+        ) else { return }
+        sourceRecording.withLock { $0 = (ObjectIdentifier(stream), writer) }
+    }
+
+    private func detachSourceRecording() -> SourceAudioRecording? {
+        sourceRecording.withLock { recording in
+            let writer = recording?.writer
+            writer?.seal()
+            recording = nil
+            return writer
+        }
+    }
+
+    private func finishSourceRecording(_ writer: SourceAudioRecording?, at boundary: CMTime) async {
+        guard let writer else { return }
+        let completed = await withDeadline(seconds: 20) { await writer.finish(at: boundary) }
+        if completed != true { writer.cancel() }
+    }
+
+    private static func hasRecoverableRecording(_ url: URL) -> Bool {
+        FileManager.default.fileExists(atPath: url.path) || SourceAudioFiles.completedAudio(for: url) != nil
     }
 
     nonisolated private static func normalizedAudioLevel(

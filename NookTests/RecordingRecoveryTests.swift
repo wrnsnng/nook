@@ -1002,15 +1002,22 @@ struct RecordingRecoveryTests {
         #expect(recovery.orphans.first?.urls.count == sources.count)
     }
 
-    @Test
-    func anUnfinishedSittingProtectsAudioEvenWhenItsNoteWasAlreadySaved() throws {
+    @Test(arguments: [false, true])
+    func anUnfinishedSittingProtectsAudioEvenWhenItsNoteWasAlreadySaved(sourcePackageOnly: Bool) throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = store(in: directory)
         let saved = try completedNote(in: store)
         let recordings = store.recordingsDirectory()
         let audio = try writeRecording(saved.id, extensionName: "m4a", in: recordings)
-        let capture = try writeRecording(saved.id, extensionName: "part-12.mp4", in: recordings)
+        let capture: URL
+        if sourcePackageOnly {
+            capture = recordings.appendingPathComponent("\(saved.id.uuidString).part-12.sources")
+            try FileManager.default.createDirectory(at: capture, withIntermediateDirectories: false)
+            try Data("Unfinished source audio".utf8).write(to: SourceAudioFiles.audio(in: capture))
+        } else {
+            capture = try writeRecording(saved.id, extensionName: "part-12.mp4", in: recordings)
+        }
         let partialAudio = try writeRecording(saved.id, extensionName: "part-12.m4a", in: recordings)
         try expire([audio, capture, partialAudio])
         var attempts: [URL] = []

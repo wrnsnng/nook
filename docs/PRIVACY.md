@@ -134,7 +134,10 @@ stored artifact. It stops when the user presses Stop, leaves Settings, starts a
 meeting, or starts dictation.
 
 Pausing removes the recording output and stops forwarding audio to live
-transcription until the user resumes.
+transcription until the user resumes. It also seals the auxiliary source-audio
+writer; resume starts a separate part and excludes queued pre-resume PCM frames.
+File session boundaries are not a guarantee that encoded containers contain no
+out-of-range packet bytes. Physical capture-boundary acceptance remains required.
 
 ## Dictation and Accessibility access
 
@@ -393,15 +396,69 @@ Temporary capture and extracted-audio files live in a hidden `.recordings`
 folder inside the selected notes folder while Nook processes a meeting.
 
 - Temporary MP4 containers are deleted after successful processing.
+- Local source-preserving capture also writes a second audio copy, with separate
+  microphone/system tracks, under `<capture-stem>.sources/audio.mov` for each
+  unpaused part. These packages are inside `.recordings`, created exclusively
+  with `0700` permissions; completed audio and its `complete.json` receipt use
+  `0600`. The receipt contains capture filename and filesystem identities,
+  sizes and timestamps, not transcript text or credentials. It is an ownership
+  guard, not encryption or authenticated provenance. The auxiliary encoding
+  adds CPU, memory and disk work; capture callbacks enqueue at most 8 MiB of
+  retained audio, and timestamp gaps use bounded generated-silence chunks.
+  Long-capture resource use still needs physical-Mac acceptance.
+- Only a successfully finalized, unchanged source package can be selected in
+  place of its MP4 for processing. Before publishing its receipt, Nook reopens
+  the local file to check duration, source markers and track timing, and checks
+  that the file did not change during validation. Cancellation or cleanup
+  while that read is pending cannot recreate the package or completion receipt.
+  These checks do not invoke Speech or a model. Recovery with a valid companion
+  re-exports playback even when an earlier M4A remains, so retained audio matches
+  the recovered source timeline. Failed re-export retains both that old audio
+  and the source packages. Failed/cancelled auxiliary writing leaves
+  the original recording intact. Partial packages stay discoverable for
+  Reveal/Delete, and a valid complete package can be recovered even if its MP4
+  was removed. Copying or replacing files invalidates the local receipt.
+  Packages follow recording cleanup and recovery, not the keep-extracted-audio
+  preference: successful processing removes them, failure retains them for
+  recovery, and cleanup failures remain visible. They count toward storage
+  usage and protect unfinished recordings from age-based audio cleanup.
 - A recording is kept when processing fails, because at that point it is the
   only copy of the conversation. The Library lists anything kept this way with its
   date and size, so it can be turned into a note or deleted rather than sitting
   on disk unnoticed.
 - Extracted M4A audio is deleted unless **Keep extracted meeting audio** is on.
+- Audio export first writes into a private macOS item-replacement directory
+  on the destination volume. The directory has owner-only POSIX permissions
+  (`0700`); the completed file receives `0600` permissions before publication.
+  Only a completed, duration-checked export may replace existing extracted
+  audio, after checking the source and destination identities again. The same
+  staging directory can contain a short generated silent PCM file to preserve
+  a recording's trailing silence; it contains no captured sound. Staging
+  files are removed on normal completion, failure and cancellation. A cleanup
+  failure reports the directory path so it can be reviewed; an abrupt process
+  termination can leave temporary items for later system cleanup, whose timing
+  Nook does not guarantee. These are local plaintext copies, not encrypted
+  storage or protection against other software running as the same user.
 - Merging two notes that both kept audio combines them into one continuous
   file. That work happens in a transient `merged-<UUID>.m4a` file inside the
   recordings folder, which replaces the kept audio it was built from once the
   merge succeeds and never survives past that step.
+- The source-aware file-transcription path recognizes minimal versioned track
+  markers identifying microphone or system input. It does not infer a person
+  from a voice, filename, track position or stereo channel. The auxiliary
+  source writer creates these markers; legacy/unlabelled recordings continue
+  through mixed/Unattributed transcription. When a labelled file is processed,
+  each track is temporarily exported to M4A inside an owner-only (`0700`)
+  macOS item-replacement directory, given `0600` permissions, and read by local
+  Speech. No network call or additional permission is introduced. Tracks are
+  processed serially and each temporary audio file is removed after use. The
+  enclosing directory is removed on normal return or a reported error, with a
+  cleanup failure identifying the retained location. An unresponsive framework
+  can delay cleanup after cancellation until its operation unwinds; abrupt
+  termination can leave temporary items for later system cleanup. These files
+  are plaintext copies subject to the same backup/same-user access limits as
+  other local audio. Original captures remain owned by the existing recovery
+  and retention controls; they are not deleted by transcription itself.
 - Cancelling processing discards the meeting's temporary files.
 - Nook attempts to clean up partial files after processing failures. Cleanup
   failures are surfaced rather than treated as success.

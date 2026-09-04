@@ -1288,6 +1288,7 @@ final class MeetingCoordinator: ObservableObject {
                 phase = .processing(.transcribing)
                 rawTranscript = try await transcriber.transcribe(
                     audioURL: audioURL,
+                    recordingURLs: recordingURLs,
                     localeIdentifier: localeIdentifier
                 )
             }
@@ -1846,7 +1847,8 @@ final class MeetingCoordinator: ObservableObject {
     static func sessionArtifactsAfterAudioFailure(
         draft: MeetingDraft, recordingURLs: [URL], sessionAudioURL: URL
     ) -> Set<URL> {
-        Set(recordingURLs + [draft.recordingURL, sessionAudioURL])
+        let captures = Set(recordingURLs + [draft.recordingURL])
+        return captures.union(captures.map { SourceAudioFiles.directory(for: $0) }).union([sessionAudioURL])
     }
 
     private func placeKeptAudio(
@@ -2609,7 +2611,9 @@ enum RecordingArtifactCleanup {
         return filename == "\(stem).mp4"
             || filename == "\(stem).m4a"
             || filename == "\(stem).notes.txt"
+            || filename == "\(stem).sources"
             || (filename.hasPrefix("\(stem).part-") && url.pathExtension == "mp4")
+            || (filename.hasPrefix("\(stem).part-") && url.pathExtension == "sources")
     }
 }
 

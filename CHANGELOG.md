@@ -6,8 +6,14 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
-## Unreleased
-
+- New captures preserve microphone/system input labels in a separate local
+  audio copy for file transcription and recovery. The original recording
+  remains the fallback if the source copy cannot be completed or validated.
+  Recovery refreshes older playback mixes to match completed source copies.
+  Legacy recordings without source metadata remain Unattributed.
+- Extracted recordings include every audio track across paused/resumed parts,
+  preserving track offsets and gaps. Failed or cancelled exports no longer
+  delete previously extracted audio before a replacement is ready.
 - Recordings, recovered recordings and live-caption rescue notes save their
   words before summary enrichment. Saved notes show background progress,
   non-destructive cancellation and Retry without hiding the transcript or

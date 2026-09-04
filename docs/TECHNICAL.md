@@ -48,6 +48,83 @@ and detached notes.
 The central state machine for detection, recording, live transcript, pause,
 processing, title generation, summary generation, notes, and recovery.
 
+`AudioExtractor` assembles all audio tracks from each ordered capture part into
+reusable composition lanes. It retains source assets while using their weakly
+owned tracks, preserves offsets and silence, and applies equal per-part mixing
+headroom. If video outlasts audio, a short silent PCM endpoint in the private
+staging directory makes the M4A exporter retain the final gap; an empty edit and
+explicit export time range alone do not. Lane order and stereo channels are not
+speaker identity. Export uses
+a private, same-volume staging directory; only a verified complete file can
+replace the destination after file-identity checks. Failed or cancelled exports
+leave source audio and the previous destination intact; cleanup failure is
+reported even if a complete replacement has already succeeded. Metadata checks
+narrow replacement races, but do not form a transaction against an uncooperative
+external writer.
+
+`SourceAudioFiles` selects a completed source companion for each ordered capture
+part when its receipt and file identities remain valid, otherwise the original
+ScreenCaptureKit file. Playback extraction and transcription use this same
+selection and revalidate it across asynchronous work.
+Recovery rebuilds playback when any valid source companion is available, even
+if an extracted M4A already exists. That cached mix may predate the companion or
+a resumed part. Failed staged re-export preserves the cached audio and original
+captures instead of saving a new source transcript beside obsolete playback and
+then deleting its only complete sources. Legacy audio-only recovery still reuses
+the surviving M4A.
+
+`RecordedSourceTranscription` inspects the selected ordered capture files
+before the mixed playback export is transcribed. A track can identify its input
+only with one exact QuickTime information marker,
+`nook:audio-source:v1:microphone` or `nook:audio-source:v1:system`. Track titles,
+order, stereo channels, duplicate/conflicting markers and unknown versions are
+not source evidence. If no track has a recognized marker, transcription uses
+the existing mixed file. If any track is labelled, every audio track from every
+part is isolated and transcribed serially, including unlabelled tracks as
+Unattributed. Result timestamps include the track offset and preceding parts'
+full durations. Identical words on two tracks are not deduplicated. Failed
+transcription, invalid result timing, cancellation or changed input files reject
+the result instead of returning a shortened transcript. The existing abandoning
+deadline encloses this operation, including track export and Speech.
+
+`SourceAudioRecording` is an auxiliary AAC writer fed by typed `.audio` and
+`.microphone` ScreenCaptureKit callbacks. It keeps the original
+`SCRecordingOutput` MP4 as fallback and writes explicitly marked tracks into
+`<capture-stem>.sources/audio.mov`. AVFoundation state is confined to one serial
+queue, with an 8 MiB retained-buffer budget and bounded encoder backpressure.
+Initial packets share one timestamp epoch regardless of callback arrival order.
+PCM packets straddling resume are copied from the first eligible frame in each
+channel buffer; non-interleaved PCM cannot use CoreMedia's range-copy helper.
+Intra-source gaps and final tails are filled with bounded native-format silent
+PCM chunks because the AAC writer otherwise closes those timestamp gaps.
+
+Pause records whether output removal actually succeeded, rather than inferring
+it from a later waiter error. Successful removal seals the source queue; stop
+also detaches it before finalization. Repeated finish calls share one boundary.
+Cancellation, invalid packets, overflow or failed finalization leave the
+companion ineligible and the original intact. After encoder completion, the
+file is reopened to check the complete duration, exact source set, valid track
+ranges and each source's expected final timestamp (with AAC-frame tolerance).
+One full-length source cannot conceal a shortened second track. Only then is
+`complete.json` published under the cancellation gate, after rechecking the
+audio identity captured before the asynchronous validation. Cancellation or
+cleanup during a delayed validation cannot recreate a receipt or package.
+These container checks are not proof of audibility or SDK callback completeness.
+Selection checks file identity,
+size and modification/change times, not just playability. This receipt is a
+local ownership check, not authenticated provenance or a portable format:
+copying/replacing its files invalidates it. A valid companion remains
+recoverable if only its original MP4 was removed. Partial packages remain
+discoverable for Reveal/Delete. Recovery, artifact cleanup, retention and
+storage accounting include these directories.
+
+Synthetic buffer/file tests for the auxiliary writer
+do not establish real callback completeness, physical pause/stop boundaries,
+audio quality or sustained capture resource use; those acceptance checks remain.
+The marker records an input route, not a person's identity and not authenticated
+proof against someone deliberately editing recording metadata. Existing files
+without that evidence remain Unattributed.
+
 Published state drives every UI surface. Commands must be idempotent or guarded
 against invalid phases because the same meeting can be controlled from several
 surfaces.
