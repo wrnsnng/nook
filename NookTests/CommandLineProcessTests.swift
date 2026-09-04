@@ -92,8 +92,7 @@ struct CommandLineProcessTests {
         let request = Task {
             try await run(fixture.executable, input: Data(repeating: 120, count: 1_024 * 1_024), limits: limits)
         }
-        try await fixture.waitForMarker("pid")
-        let pid = try fixture.pid()
+        let pid = try await fixture.waitForPID()
         #expect(kill(pid, 0) == 0)
         await #expect(throws: CommandLineProcessError.timedOut) { try await request.value }
         #expect(start.duration(to: clock.now) < .seconds(5))
@@ -109,13 +108,28 @@ struct CommandLineProcessTests {
             """)
         defer { fixture.remove() }
         let request = Task { try await run(fixture.executable) }
-        try await fixture.waitForMarker("pid")
+        let pid = try await fixture.waitForPID()
         let start = ContinuousClock.now
         request.cancel()
         await #expect(throws: CancellationError.self) { try await request.value }
         #expect(start.duration(to: .now) < .seconds(2))
-        let pid = try fixture.pid()
         #expect(kill(pid, 0) == -1 && errno == ESRCH)
+    }
+
+    @Test(arguments: ["", "0", "-1", "not a pid"])
+    func anUnfinishedPidMarkerDoesNotDeclareTheChildReady(initial: String) async throws {
+        let fixture = try ProcessFixture(script: "exit 0")
+        defer { fixture.remove() }
+        let marker = URL(fileURLWithPath: fixture.executable.path + ".pid")
+        try Data(initial.utf8).write(to: marker)
+        let expected = getpid()
+        let writer = Task {
+            try await Task.sleep(for: .milliseconds(50))
+            try Data(String(expected).utf8).write(to: marker)
+        }
+        defer { writer.cancel() }
+        #expect(try await fixture.waitForPID() == expected)
+        try await writer.value
     }
 
     @Test
@@ -454,6 +468,19 @@ private struct ProcessFixture: Sendable {
     func waitForMarker(_ suffix: String) async throws {
         for _ in 0..<200 {
             if markerExists(suffix) { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw FixtureError.markerMissing
+    }
+
+    func waitForPID() async throws -> pid_t {
+        // Shell redirection creates the file before printf writes its bytes.
+        // Existence alone races that write, especially on a busy CI host.
+        for _ in 0..<200 {
+            if let bytes = try? data("pid"),
+               let pid = pid_t(String(decoding: bytes, as: UTF8.self)), pid > 0 {
+                return pid
+            }
             try await Task.sleep(for: .milliseconds(10))
         }
         throw FixtureError.markerMissing
