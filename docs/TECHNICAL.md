@@ -88,7 +88,11 @@ late startup success cannot publish a stopped stream, and a redundant cleanup
 failure cannot restore its ownership. An explicit Stop still waits for that
 barrier after an early failure. Direct cancellation of the returned startup task
 also leaves no permanent Starting state. Callbacks from older identities do not
-stop a newer session. These are synthetic ordering guarantees, not a claim about
+stop a newer session. A terminal callback during an explicit Stop is retained
+until that stop returns: it prevents a later stop error from restoring the dead
+stream, without releasing the competing-capture barrier early. That receipt is
+cleared before another stop and cannot authorize a later failed teardown.
+These are synthetic ordering guarantees, not a claim about
 physical permission prompts or audio-device behavior.
 Tests exercise cancellation before scheduling, delayed permission resolution,
 cancelled/failed startup, failed cleanup and overlapping stop requests without

@@ -261,6 +261,46 @@ struct AudioInputCheckTests {
     }
 
     @Test(arguments: [false, true]) @MainActor
+    func aTerminalCallbackDuringStopDoesNotRestoreAnAlreadyStoppedStream(failStop: Bool) async throws {
+        let gate = AudioCheckTestGate()
+        let session = AudioCheckTestSession()
+        session.stopGate = gate
+        session.failsStop = failStop
+        let service = AudioInputCheckService { _ in session }
+        await service.start()?.value
+        let stopping = Task { await service.stop() }
+        try await waitUntil { gate.isWaiting }
+        service.handleUnexpectedStop(streamID: ObjectIdentifier(session))
+        #expect(service.phase == .stopping)
+        #expect(service.start() == nil)
+        var requestedCapture = false
+        let competingCapture = Task {
+            requestedCapture = true
+            try await service.prepareForOtherCapture()
+        }
+        try await waitUntil { requestedCapture }
+        #expect(service.phase == .stopping)
+        gate.release()
+        await stopping.value
+        try await competingCapture.value
+        #expect(service.phase == .idle)
+        #expect(!service.isStopAvailable)
+        #expect(session.stopCalls == 1)
+        #expect(service.errorMessage == nil)
+        // A receipt belongs to one stop, even if the same session object is
+        // reused by this fixture. It cannot confirm a later failed teardown.
+        session.stopGate = nil
+        await service.start()?.value
+        session.failsStop = true
+        await service.stop()
+        #expect(service.phase == .failed)
+        #expect(service.isStopAvailable)
+        session.failsStop = false
+        await service.stop()
+        #expect(service.phase == .idle)
+    }
+
+    @Test(arguments: [false, true]) @MainActor
     func aStopCallbackBeforeStartupReturnsCannotPublishARunningMeter(failStart: Bool) async throws {
         let gate = AudioCheckTestGate()
         let session = AudioCheckTestSession()

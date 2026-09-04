@@ -168,6 +168,7 @@ final class AudioInputCheckService: NSObject, ObservableObject, SCStreamDelegate
     // it would publish a dead stream or retain it after a redundant stop fails.
     private var startingStreamID: ObjectIdentifier?
     private var startingStreamDidStop = false
+    private var stoppingStreamDidStop = false
     private var startTask: Task<Void, Never>?
     private var stopTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
@@ -341,6 +342,7 @@ final class AudioInputCheckService: NSObject, ObservableObject, SCStreamDelegate
         }
 
         phase = .stopping
+        stoppingStreamDidStop = false
         let stoppedStreamID = ObjectIdentifier(stream)
         let task = Task { @MainActor [weak self, stream] in
             do {
@@ -588,7 +590,7 @@ final class AudioInputCheckService: NSObject, ObservableObject, SCStreamDelegate
         clearCaptureState()
         levels = .zero
 
-        if error == nil {
+        if error == nil || stoppingStreamDidStop {
             stream = nil
             self.streamID = nil
             phase = .idle
@@ -599,6 +601,7 @@ final class AudioInputCheckService: NSObject, ObservableObject, SCStreamDelegate
             phase = .failed
             errorMessage = AudioInputCheckError.stopFailed.errorDescription
         }
+        stoppingStreamDidStop = false
         stopTask = nil
     }
 
@@ -619,7 +622,13 @@ final class AudioInputCheckService: NSObject, ObservableObject, SCStreamDelegate
             return
         }
         guard self.streamID == streamID else { return }
-        guard phase != .stopping else { return }
+        if phase == .stopping {
+            // This receipt proves the stream ended, but the stop operation
+            // still owns the teardown barrier until its await returns. Keep
+            // both facts: a later stop error must not restore a dead stream.
+            stoppingStreamDidStop = true
+            return
+        }
         pollingTask?.cancel()
         pollingTask = nil
         clearCaptureState()
