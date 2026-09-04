@@ -70,12 +70,25 @@ jobs:
         run: python3 -m unittest discover -s Scripts/Tests
 
       - name: Test contributor configuration
+        shell: bash
         run: |
+          # Keep the original failure while exposing Swift Testing assertions
+          # that xcodebuild -quiet otherwise reduces to a test method name.
+          test_result="$RUNNER_TEMP/NookContributorTests.xcresult"
+          report_test_failure() {
+            local test_status=$?
+            if [ "$test_status" -ne 0 ] && [ -d "$test_result" ]; then
+              xcrun xcresulttool get test-results summary --path "$test_result" --compact || true
+            fi
+            exit "$test_status"
+          }
+          trap report_test_failure EXIT
           xcodebuild test -quiet \
             -project Nook.xcodeproj \
             -scheme Nook \
             -destination 'platform=macOS' \
             -derivedDataPath .build/ContributorDerivedData \
+            -resultBundlePath "$test_result" \
             CODE_SIGNING_ALLOWED=NO
 
       - name: Build contributor configuration
