@@ -6,6 +6,19 @@ import Combine
 /// summarizer ignores it and later reports progress or a result.
 @MainActor
 final class SummaryRegenerationSession: ObservableObject {
+    enum Purpose {
+        case regeneration
+        case initial
+        case appended
+
+        static func forRetry(of note: MeetingNote) -> Self {
+            switch note.summaryPending {
+            case .initial: .initial
+            case .appended: .appended
+            case nil: .regeneration
+            }
+        }
+    }
     struct LibrarySnapshot {
         let directoryURL: URL
         let generation: Int
@@ -39,11 +52,15 @@ final class SummaryRegenerationSession: ObservableObject {
 
     @Published private(set) var stage: SummaryStage?
     @Published private(set) var completion: Completion?
+    @Published private(set) var wasCancelled = false
     private let runner: Runner
+    private let timeout: TimeInterval?
+    private var purpose: Purpose = .regeneration
     private var requestID: UUID?
     private var task: Task<Void, Never>?
 
-    init(runner: Runner? = nil) {
+    init(runner: Runner? = nil, timeout: TimeInterval? = nil) {
+        self.timeout = timeout
         self.runner = runner ?? { note, onStage in
             await SummaryRegenerator.regenerate(note, using: SummaryService(), onStage: onStage)
         }
@@ -53,9 +70,29 @@ final class SummaryRegenerationSession: ObservableObject {
 
     var isRunning: Bool { requestID != nil }
 
+    func waitForCompletion() async { await task?.value }
+
+    func statusMessage(summaryPending: Bool) -> String? {
+        if wasCancelled {
+            return "Summary cancelled. Your saved transcript and notes are unchanged."
+        }
+        if let completion {
+            switch completion.result {
+            case .failed(let message): return message
+            case .retained(let reason):
+                if let reason { return RegenerationCopy.retainedMessage(for: reason) }
+            case .saved: break
+            }
+        }
+        return summaryPending
+            ? "Summary not finished. Your transcript is saved. Open Transcript to read it, or Retry when you’re ready."
+            : nil
+    }
+
     @discardableResult
     func start(
-        note: MeetingNote, library: @escaping LibraryReader, commit: @escaping Commit
+        note: MeetingNote, purpose: Purpose = .regeneration,
+        library: @escaping LibraryReader, commit: @escaping Commit
     ) -> Task<Void, Never>? {
         guard !isRunning else { return nil }
         let snapshot = library()
@@ -69,10 +106,21 @@ final class SummaryRegenerationSession: ObservableObject {
         let generation = snapshot.generation
         let id = UUID()
         requestID = id
+        self.purpose = purpose
         completion = nil
+        wasCancelled = false
         stage = .condensing(pass: 1, part: 0, total: 0)
         let runner = runner
+        let seconds = timeout ?? MeetingCoordinator.summaryDeadline(
+            forTranscriptCharacters: starting.transcript.reduce(0) { $0 + $1.text.count },
+            isTerminating: false
+        )
         let work = Task { [weak self] in
+            // Callers may cancel the returned task rather than the session.
+            // Retire that request too, but never clear a newer retry's state.
+            defer {
+                if Task.isCancelled, self?.requestID == id { self?.cancel() }
+            }
             guard !Task.isCancelled, self?.requestID == id else { return }
             let onStage: SummaryStageHandler = { [weak self] stage in
                 await self?.receive(
@@ -80,7 +128,9 @@ final class SummaryRegenerationSession: ObservableObject {
                     generation: generation, library: library
                 )
             }
-            let outcome = await runner(starting, onStage)
+            let outcome = await withDeadline(seconds: seconds) {
+                await runner(starting, onStage)
+            } ?? .retained(reason: .timedOut)
             guard !Task.isCancelled else { return }
             self?.finish(
                 outcome, id: id, starting: starting, folder: folder,
@@ -92,6 +142,7 @@ final class SummaryRegenerationSession: ObservableObject {
     }
 
     func cancel() {
+        if isRunning { wasCancelled = true }
         requestID = nil
         task?.cancel()
         task = nil
@@ -148,9 +199,23 @@ final class SummaryRegenerationSession: ObservableObject {
                 complete(.failed("The generated result did not belong to this note. Your note was kept."))
                 return
             }
-            let merged = SummaryRegenerator.mergingGeneratedFields(
-                from: generated, startingFrom: starting, into: latest
-            )
+            var merged: MeetingNote
+            switch purpose {
+            case .regeneration:
+                merged = SummaryRegenerator.mergingGeneratedFields(
+                    from: generated, startingFrom: starting, into: latest
+                )
+            case .initial, .appended:
+                let result = SummaryResult(insights: MeetingInsights(
+                    title: generated.title, summary: generated.summary,
+                    keyPoints: generated.keyPoints, decisions: generated.decisions,
+                    actionItems: generated.actionItems, openQuestions: generated.openQuestions
+                ), failure: nil)
+                merged = purpose == .initial
+                    ? MeetingCoordinator.mergingTranscriptFirstSummary(result, scaffold: starting, current: latest) ?? latest
+                    : MeetingCoordinator.mergingAppendedSessionSummary(result, scaffold: starting, current: latest) ?? latest
+            }
+            merged.summaryPending = nil
             do {
                 // Preserve the latest revision for the store's final on-disk
                 // conflict check. Newer user fields are not a stale-write grant.

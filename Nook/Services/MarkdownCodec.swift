@@ -2,6 +2,11 @@ import CryptoKit
 import Foundation
 
 enum MarkdownCodec {
+    // A plain "Open questions" heading already belongs to users in older
+    // notes, including inside Summary/My notes. This invisible Markdown marker
+    // gives the generated section ownership without reinterpreting their prose.
+    static let openQuestionsHeading = "Open questions <!-- nook:summary -->"
+
     static func encode(_ note: MeetingNote) -> String {
         let keyPoints = bulletList(note.keyPoints)
         let decisions = bulletList(note.decisions)
@@ -32,6 +37,15 @@ enum MarkdownCodec {
                 .map { String(format: "%.1f", $0.offset) }
                 .joined(separator: ",")
             frontmatterLines.append("moments: \(offsets)")
+        }
+        if let pending = note.summaryPending, note.kind == .meeting {
+            frontmatterLines.append("summary_status: \(pending.rawValue)")
+        }
+        if let provenance = note.summaryProvenance, note.kind == .meeting {
+            frontmatterLines.append("summary_origin: \(provenance.rawValue)")
+        }
+        if note.kind == .meeting, note.summaryRecipe != .general {
+            frontmatterLines.append("summary_recipe: \(note.summaryRecipe.rawValue)")
         }
         // A single-sitting note is the ordinary case, so its sessions stay
         // out of the file entirely.
@@ -106,6 +120,10 @@ enum MarkdownCodec {
         appendSection("Key points", keyPoints)
         appendSection("Decisions", decisions)
         appendSection("Action items", actions)
+        if !note.openQuestions.isEmpty
+            || note.extraSections.contains(where: { $0.anchor == "## \(openQuestionsHeading.lowercased())" }) {
+            appendSection(openQuestionsHeading, note.openQuestions.isEmpty ? "" : bulletList(note.openQuestions))
+        }
 
         // A digest has no recorded transcript. Its empty personal section is
         // omitted, but any annotations somebody added must survive saving.
@@ -210,7 +228,7 @@ enum MarkdownCodec {
             ? 0
             : TimeInterval(metadata["audioStart"] ?? "") ?? 0
 
-        return MeetingNote(
+        var note = MeetingNote(
             id: id,
             kind: kind,
             title: title,
@@ -218,9 +236,18 @@ enum MarkdownCodec {
             endedAt: endedAt,
             sourceApp: source,
             summary: summary,
+            summaryPending: kind == .meeting
+                ? PendingSummaryKind(rawValue: metadata["summary_status"] ?? "") : nil,
+            summaryProvenance: kind == .meeting
+                ? SummaryProvenance(rawValue: unquote(metadata["summary_origin"] ?? "")) : nil,
+            summaryRecipe: kind == .meeting
+                ? SummaryRecipe(rawValue: unquote(metadata["summary_recipe"] ?? "")) ?? .general : .general,
             keyPoints: keyPoints,
             decisions: decisions,
             actionItems: actionItems,
+            openQuestions: NoteContentSanitizer.meaningfulItems(
+                listItems(in: body(of: openQuestionsHeading, in: blocks))
+            ),
             completedActionItems: completedActionItems,
             personalNotes: personalNotes,
             transcript: transcript,
@@ -233,6 +260,10 @@ enum MarkdownCodec {
                 MeetingNote.contentRevision(Data(markdown.utf8))
             }
         )
+        if note.summaryProvenance == nil, kind == .meeting {
+            note.summaryProvenance = SummaryFallback.legacyProvenance(for: note)
+        }
+        return note
     }
 
     /// Flagged offsets from the frontmatter line, in the order written.
@@ -320,6 +351,7 @@ enum MarkdownCodec {
         "## key points",
         "## decisions",
         "## action items",
+        "## \(openQuestionsHeading.lowercased())",
         "## my notes",
         "## transcript"
     ]
@@ -811,7 +843,8 @@ extension MarkdownCodec {
     private static let listSectionHeadings: Set<String> = [
         "## key points",
         "## decisions",
-        "## action items"
+        "## action items",
+        "## \(openQuestionsHeading.lowercased())"
     ]
 
     /// Everything in the body that no field models, in file order.

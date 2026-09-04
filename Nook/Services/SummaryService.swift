@@ -1,6 +1,37 @@
 import Foundation
 import FoundationModels
 
+/// Fixed local emphasis, selected by the user, never inferred from speech.
+/// A recipe changes what to look for, not what the transcript establishes.
+enum SummaryRecipe: String, CaseIterable, Identifiable, Sendable {
+    case general
+    case standup
+    case oneOnOne = "one-on-one"
+    case interview
+
+    var id: Self { self }
+    var title: String {
+        switch self {
+        case .general: "General"
+        case .standup: "Standup"
+        case .oneOnOne: "One-to-one"
+        case .interview: "Interview"
+        }
+    }
+
+    var guidance: String {
+        switch self {
+        case .general: ""
+        case .standup:
+            "Emphasize reported progress, explicit blockers and stated next steps. Do not turn a possibility into a commitment."
+        case .oneOnOne:
+            "Emphasize stated concerns, feedback, agreed follow-ups and unresolved support needs. Do not infer feelings, performance or personal traits."
+        case .interview:
+            "Emphasize the questions discussed, the answers actually given and explicitly unresolved follow-ups. Do not score people or infer qualifications or personal traits."
+        }
+    }
+}
+
 /// Small, user-authored emphasis material for a summary pass.
 ///
 /// My notes are not evidence: they tell the model what the person cared about
@@ -34,14 +65,17 @@ struct SummaryAttention: Equatable, Sendable {
 
     let myNotes: String
     let flaggedMoments: [FlaggedMoment]
+    let recipe: SummaryRecipe
 
     /// Builds attention from the note's own fields and transcript.
     init(
         myNotes: String = "",
         moments: [MeetingMoment] = [],
-        transcript: [TranscriptSegment] = []
+        transcript: [TranscriptSegment] = [],
+        recipe: SummaryRecipe = .general
     ) {
         self.myNotes = Self.boundedNotes(myNotes)
+        self.recipe = recipe
         self.flaggedMoments = Self.nearbyContexts(
             moments: moments,
             transcript: transcript
@@ -54,7 +88,8 @@ struct SummaryAttention: Equatable, Sendable {
         self.init(
             myNotes: note.personalNotes,
             moments: note.moments,
-            transcript: note.transcript
+            transcript: note.transcript,
+            recipe: note.summaryRecipe
         )
     }
 
@@ -69,7 +104,7 @@ struct SummaryAttention: Equatable, Sendable {
     var moments: [FlaggedMoment] { flaggedMoments }
 
     var isEmpty: Bool {
-        myNotes.isEmpty && flaggedMoments.isEmpty
+        myNotes.isEmpty && flaggedMoments.isEmpty && recipe == .general
     }
 
     /// The bounded, explicitly labelled block handed to the final prompt.
@@ -77,6 +112,10 @@ struct SummaryAttention: Equatable, Sendable {
     /// not a source to quote or instructions to execute.
     var rendered: String {
         var sections: [String] = []
+        if recipe != .general {
+            sections.append("USER-SELECTED LOCAL RECIPE: \(recipe.title)\n"
+                + recipe.guidance + "\nThis is emphasis only. Omit unsupported claims and empty sections.")
+        }
         if !myNotes.isEmpty {
             sections.append(
                 "USER GUIDANCE ONLY, FROM MY NOTES\n"
@@ -210,6 +249,7 @@ struct MeetingInsights: Equatable, Sendable {
     var keyPoints: [String]
     var decisions: [String]
     var actionItems: [String]
+    var openQuestions: [String] = []
 }
 
 @Generable(description: "A concise, accurate set of structured meeting notes")
@@ -224,6 +264,8 @@ private struct GeneratedMeetingInsights {
     var decisions: [String]
     @Guide(description: "Only explicit commitments or requested follow-ups")
     var actionItems: [String]
+    @Guide(description: "Up to six questions or issues explicitly left unresolved, excluding anything answered or settled later in the transcript")
+    var openQuestions: [String]
 }
 
 /// What one raw chunk yields when the first condensing round runs over a
@@ -252,6 +294,7 @@ actor CandidateLedger {
     private(set) var keyPoints: [String] = []
     private(set) var decisions: [String] = []
     private(set) var actions: [String] = []
+    private(set) var questions: [String] = []
 
     /// Bounds both the number of entries and their total rendered size:
     /// prompt and answer share one on-device window. A count alone is not a
@@ -260,7 +303,7 @@ actor CandidateLedger {
     static let maximumRenderedCharacters = 1_800
     private static let maximumItemCharacters = 160
     private static let maximumCharactersPerSection =
-        (maximumRenderedCharacters - 4) / 3
+        (maximumRenderedCharacters - 6) / 4
 
     private static let terminalPunctuation = CharacterSet(
         charactersIn: ".!?…,:;\"'“”‘’"
@@ -280,7 +323,7 @@ actor CandidateLedger {
     /// sentence punctuation at the edges. Meaningful punctuation inside an
     /// item stays, so 1.9% cannot collapse into 19%.
     func add(
-        facts: [String], decisions: [String], actions: [String]
+        facts: [String], decisions: [String], actions: [String], questions: [String] = []
     ) {
         keyPoints = Self.merging(
             keyPoints,
@@ -297,6 +340,7 @@ actor CandidateLedger {
             incoming: actions,
             title: "ACTIONS"
         )
+        self.questions = Self.merging(self.questions, incoming: questions, title: "OPEN QUESTIONS")
     }
 
     private static func merging(
@@ -322,7 +366,7 @@ actor CandidateLedger {
     }
 
     var isEmpty: Bool {
-        keyPoints.isEmpty && decisions.isEmpty && actions.isEmpty
+        keyPoints.isEmpty && decisions.isEmpty && actions.isEmpty && questions.isEmpty
     }
 
     /// The labelled block handed to the structured pass alongside the
@@ -332,6 +376,7 @@ actor CandidateLedger {
             Self.section("KEY FACTS", keyPoints),
             Self.section("DECISIONS", decisions),
             Self.section("ACTIONS", actions),
+            Self.section("OPEN QUESTIONS", questions),
         ]
         .filter { !$0.isEmpty }
         .joined(separator: "\n\n")
@@ -355,7 +400,8 @@ typealias SummaryProgressHandler = @Sendable (Int, Int) async -> Void
 struct SummaryResult: Sendable, Equatable {
     var insights: MeetingInsights
     /// Nil when the structured summary came from the model and survived
-    /// validation. Otherwise the reason the deterministic fallback is showing.
+    /// validation. Otherwise the reason fallback highlights or a partial
+    /// extraction were returned; failure does not make every entry deterministic.
     var failure: SummaryService.FailureReason?
 
     var usedFallback: Bool { failure != nil }
@@ -637,7 +683,8 @@ actor SummaryService {
                         await ledger.add(
                             facts: notes.facts,
                             decisions: notes.decisions,
-                            actions: notes.actions
+                            actions: notes.actions,
+                            questions: notes.questions
                         )
                         return rendered
                     }
@@ -739,6 +786,7 @@ actor SummaryService {
             facts: ledger.keyPoints,
             decisions: ledger.decisions,
             actions: ledger.actions,
+            questions: ledger.questions,
             transcript: transcript,
             fallbackTitle: fallbackTitle
         ) else { throw error }
@@ -752,21 +800,22 @@ actor SummaryService {
         facts: [String],
         decisions: [String],
         actions: [String],
+        questions: [String] = [],
         transcript: [TranscriptSegment],
         fallbackTitle: String
     ) -> MeetingInsights? {
         // An explanation with nothing under it would be a step down from the
         // deterministic fallback, which still shows transcript highlights.
-        guard !facts.isEmpty || !decisions.isEmpty || !actions.isEmpty else {
+        guard !facts.isEmpty || !decisions.isEmpty || !actions.isEmpty || !questions.isEmpty else {
             return nil
         }
         let proposed = MeetingInsights(
             title: fallbackTitle,
-            summary:
-                "A complete summary was not available, so these entries were taken directly from the transcript.",
+            summary: SummaryFallback.partialExtractionNotice,
             keyPoints: facts,
             decisions: decisions,
-            actionItems: actions
+            actionItems: actions,
+            openQuestions: questions
         )
         guard
             let validated = MeetingInsightValidator.validate(
@@ -1058,7 +1107,8 @@ actor SummaryService {
                 summary: generated.summary,
                 keyPoints: generated.keyPoints,
                 decisions: generated.decisions,
-                actionItems: generated.actionItems
+                actionItems: generated.actionItems,
+                openQuestions: generated.openQuestions
             )
         } catch is CancellationError {
             throw CancellationError()
@@ -1166,6 +1216,8 @@ actor SummaryService {
         - only decisions explicitly made
         ACTIONS:
         - only explicit commitments, with owners and dates when stated
+        OPEN QUESTIONS:
+        - only questions or issues still unresolved at the end, not answered or settled ones
         Drop a section heading that has nothing under it. Write nothing \
         outside these labels.
         """
@@ -1179,8 +1231,9 @@ actor SummaryService {
         var keyPoints: [String] = []
         var decisions: [String] = []
         var actions: [String] = []
+        var questions: [String] = []
         enum Section {
-            case none, summary, keyPoints, decisions, actions
+            case none, summary, keyPoints, decisions, actions, questions
         }
         var section = Section.none
         for rawLine in text.components(separatedBy: .newlines) {
@@ -1201,11 +1254,14 @@ actor SummaryService {
             } else if upper.hasPrefix("ACTIONS")
                 || upper.hasPrefix("ACTION ITEMS") {
                 section = .actions
+            } else if upper == "OPEN QUESTIONS:" || upper == "OPEN QUESTIONS" {
+                section = .questions
             } else if let item = bullet(line) {
                 switch section {
                 case .keyPoints: keyPoints.append(item)
                 case .decisions: decisions.append(item)
                 case .actions: actions.append(item)
+                case .questions: questions.append(item)
                 case .summary, .none: break
                 }
             } else if !line.isEmpty, section == .summary {
@@ -1220,7 +1276,8 @@ actor SummaryService {
             summary: summary,
             keyPoints: keyPoints,
             decisions: decisions,
-            actionItems: actions
+            actionItems: actions,
+            openQuestions: questions
         )
     }
 
@@ -1513,6 +1570,9 @@ actor SummaryService {
         The title must be a short, specific description of the main subject,
         not a date, app name, generic "Meeting" label, or opening pleasantry.
         For actions, preserve an owner and due date only when stated.
+        Open questions must be explicitly unresolved at the end of the source.
+        Drop earlier questions answered or settled later. Never invent questions
+        merely because a recipe or a section asks for them.
         Key points must carry the concrete facts and figures from the source,
         not themes: "modelled at 1.9%", not "discussed pricing".
         Leave a section empty when the source genuinely contains none; never
@@ -1709,7 +1769,8 @@ enum MeetingInsightValidator {
             summary: summary,
             keyPoints: cleanedItems(insights.keyPoints, maximumLength: 280),
             decisions: cleanedItems(insights.decisions, maximumLength: 220),
-            actionItems: cleanedItems(insights.actionItems, maximumLength: 220)
+            actionItems: cleanedItems(insights.actionItems, maximumLength: 220),
+            openQuestions: cleanedItems(insights.openQuestions, maximumLength: 280)
         )
     }
 
@@ -1917,8 +1978,28 @@ enum MeetingInsightGrounder {
             grounded.decisions,
             by: decisionLines
         )
+        // A question mark alone is not evidence of an unresolved issue. Keep
+        // only candidates sharing concrete source wording with an explicit
+        // open-status signal; final generation must also consider later answers.
+        grounded.openQuestions = supportedItems(
+            grounded.openQuestions,
+            by: spokenLines.filter { line in
+                let text = line.lowercased()
+                return !["no open questions", "no unresolved", "nothing remains unresolved"]
+                    .contains(where: text.contains)
+                    && openQuestionSignals.contains(where: text.contains)
+            }
+        )
         return grounded
     }
+
+    private static let openQuestionSignals = [
+        "open question", "unresolved", "still unclear", "remains unclear",
+        "don't know", "do not know", "not yet known", "to be confirmed",
+        "need to find out", "haven't decided", "have not decided", "not decided",
+        "still need to decide", "still need to determine", "not resolved", "left open",
+        "pending confirmation"
+    ]
 
     /// A single commitment somewhere in a meeting does not validate every
     /// proposed action. Each item must share concrete words with a transcript
@@ -1942,7 +2023,7 @@ enum MeetingInsightGrounder {
         }
     }
 
-    private static func meaningfulTokens(in value: String) -> Set<String> {
+    static func meaningfulTokens(in value: String) -> Set<String> {
         Set(
             value.lowercased()
                 .components(separatedBy: CharacterSet.alphanumerics.inverted)
@@ -2022,7 +2103,7 @@ enum MeetingInsightGrounder {
 /// honest paraphrases, written-number conversions and reordered quantities;
 /// nonnumeric inventions and relationships that reuse the same local wording
 /// still need review. A rejection retains the transcript or the existing note.
-private struct MeetingNumericGrounder {
+struct MeetingNumericGrounder {
     private struct Context {
         let literal: String
         let before: Set<String>

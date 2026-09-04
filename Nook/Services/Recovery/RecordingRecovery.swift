@@ -121,7 +121,7 @@ final class RecordingRecovery: ObservableObject {
     private var recoveryTask: Task<Void, Never>?
     private let extractAudio: AudioExtraction
     private let transcribeAudio: AudioTranscription
-    private let summarizeTranscript: TranscriptSummary
+    private let summaryRunner: SummaryRegenerationSession.Runner?
 
     init(
         store: MarkdownStore,
@@ -145,13 +145,22 @@ final class RecordingRecovery: ObservableObject {
                 try await transcriber.transcribe(audioURL: url, localeIdentifier: locale)
             }
         }
-        let summarizer = SummaryService()
         if let summarizeTranscript {
-            self.summarizeTranscript = summarizeTranscript
-        } else {
-            self.summarizeTranscript = { transcript, title in
-                await summarizer.summarize(transcript: transcript, fallbackTitle: title)
+            // Synthetic recovery callers can still control the model boundary.
+            // Production uses the shared failure-reporting, bounded session.
+            self.summaryRunner = { note, _ in
+                let insights = await summarizeTranscript(note.transcript, note.title)
+                var updated = note
+                updated.title = insights.title
+                updated.summary = insights.summary
+                updated.keyPoints = insights.keyPoints
+                updated.decisions = insights.decisions
+                updated.actionItems = insights.actionItems
+                updated.openQuestions = insights.openQuestions
+                return .regenerated(updated)
             }
+        } else {
+            self.summaryRunner = nil
         }
         // MarkdownStore publishes notes before it clears isLoading. Scanning
         // from that transition is the one place that cannot observe the old
@@ -348,8 +357,9 @@ final class RecordingRecovery: ObservableObject {
                 }
 
                 let fallbackTitle = "Recovered meeting \(orphan.dateLabel)"
-                let insights = await self.summarizeTranscript(transcript, fallbackTitle)
-                try self.requireRecoverable(orphan.id, at: location)
+                let insights = SummaryService.fallbackInsights(
+                    transcript: transcript, fallbackTitle: fallbackTitle
+                )
                 let recordingsDirectory = location.recordingsDirectory
                 // Anything typed into the meeting's notes while it was running
                 // was written beside the recording. It is the only part of a
@@ -367,13 +377,16 @@ final class RecordingRecovery: ObservableObject {
                     endedAt: orphan.recordedAt,
                     sourceApp: "Recovered",
                     summary: insights.summary,
+                    summaryPending: .initial,
+                    summaryProvenance: .transcriptHighlights,
                     keyPoints: insights.keyPoints,
                     decisions: insights.decisions,
                     actionItems: insights.actionItems,
+                    openQuestions: insights.openQuestions,
                     personalNotes: liveNotes,
                     transcript: transcript
                 )
-                _ = try self.store.save(note, validatingBeforeCommit: {
+                let saved = try self.store.save(note, validatingBeforeCommit: {
                     try self.requireRecoverable(orphan.id, at: location)
                 })
                 try self.requireCurrentLocation(location)
@@ -409,6 +422,9 @@ final class RecordingRecovery: ObservableObject {
                     )
                 }
                 self.scan()
+                self.store.summarySessions.enrich(
+                    saved, purpose: .initial, store: self.store, runner: self.summaryRunner
+                )
             } catch {
                 self.message = error.localizedDescription
             }

@@ -11,10 +11,10 @@ local meeting metadata (optional detection)
   → user chooses Record
   → ScreenCaptureKit system audio + microphone audio
   → on-device Speech transcription
-  → on-device Foundation Models summary, or deterministic fallback
-  → plaintext Markdown in the selected notes folder
+  → plaintext transcript-first Markdown in the selected notes folder
   → temporary recording deleted; extracted audio deleted unless kept, and
     kept audio later swept by age if audio retention is enabled
+  → cancellable on-device Foundation Models summary enrichment
 ```
 
 Dictation is a separate path with the same property:
@@ -299,7 +299,45 @@ to another app, is outside Nook.
 The default notes folder is `~/Documents/Nook`. A user can select another folder
 in Settings. Each completed note is a plaintext Markdown file containing
 timestamps, source application, title, summary, key points, decisions, action
-items, personal notes, and transcript.
+items, open questions, personal notes, and transcript.
+
+An explicitly selected non-general summary recipe is stored as
+`summary_recipe: standup`, `one-on-one` or `interview` in the same file. Choosing
+one saves emphasis only; the user must separately request regeneration. Recipes
+contain fixed local guidance, never inferred personal attributes, and do not add
+a model, provider or network path. Nook-owned question sections use
+`## Open questions <!-- nook:summary -->`; the invisible Markdown comment keeps
+older user-written headings from being reinterpreted as generated content.
+
+Fallback write-ups store a small `summary_origin` value in that same Markdown
+file: `transcript-highlights`, `partial-extraction` or `edited-fallback`. This
+describes the origin of the retained write-up, not whether a model is currently
+running. It contains no transcript copy or failure log. Exact recognized legacy
+fallback output receives this classification when read; opening does not write
+the file, and a later explicit save can persist the field. Reviewed item changes
+retain an edited-fallback classification; only an accepted replacement of the
+summary clears it. No model runs merely because a fallback note is opened.
+
+Summary item review derives exact passage references from the saved transcript,
+using local word matching and, when available, the on-device sentence embedding.
+Opening review does not invoke a language model or save feedback. An explicit
+Correct This request sends only the selected passage, current item and bounded
+feedback to Apple's on-device Foundation Models. Nothing is sent to a CLI
+provider or server. References, feedback, proposals and the temporary Undo
+snapshot stay in memory for the review; no evidence cache or feedback log is
+created. Applying a correction or removal rewrites the existing Markdown note
+through its conflict checks. Feedback is not a durable instruction for future
+whole-summary generation. Similarity and lexical validation are not proof that
+a claim follows from the transcript; the reviewed quote remains visible.
+
+An unfinished meeting summary adds `summary_status: pending` (or
+`pending-append` for an added sitting) to that same Markdown file. The latter
+keeps earlier action items when retrying after relaunch. This is local status
+only, not a transcript copy, recording or
+new log. A successful summary removes the field. On relaunch, an unfinished
+note offers Retry without automatically invoking a model. Cancel Summary keeps
+the saved transcript and current notes; it does not mean Discard Recording and
+does not change the user's audio-retention choice.
 
 **Review Storage on This Mac** in Settings counts file metadata in the current
 notes folder, its `.recordings` folder, the active installation's draft-recovery
