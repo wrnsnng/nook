@@ -408,7 +408,9 @@ struct SnapshotRenderer {
             }
             let hasSaveConflict = mode.contains("conflict")
             if mode.contains("summary-questions") || mode.contains("fallback") {
-                canvasSize = CGSize(width: mode.contains("minimum") ? 560 : 820, height: 1_050)
+                canvasSize = mode.contains("minimum")
+                    ? CGSize(width: 560, height: 580)
+                    : CGSize(width: 820, height: 1_050)
             } else {
                 canvasSize = hasSaveConflict
                     ? CGSize(width: 900, height: 580)

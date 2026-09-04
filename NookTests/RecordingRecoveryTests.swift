@@ -490,7 +490,15 @@ struct RecordingRecoveryTests {
     func externalReplacementDuringRecoverySummaryWinsWithoutAnotherNoteOrCleanupPass() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let store = store(in: directory)
+        // Conflict handling reloads from disk. An always-empty mock loader
+        // would erase this fixture's saved note when that reload finishes.
+        let store = MarkdownStore(noteLoader: { url, cache in
+            guard url.standardizedFileURL == directory.standardizedFileURL else {
+                return .success((notes: [], issues: []))
+            }
+            return MarkdownStore.loadNotes(in: url, cache: cache)
+        })
+        store.storageURL = directory
         let id = UUID()
         _ = try writeRecording(id, extensionName: "m4a", in: store.recordingsDirectory())
         let gate = RecordingRecoveryGate()
@@ -514,8 +522,14 @@ struct RecordingRecoveryTests {
         try bytes.write(to: file)
         gate.release()
         await session.waitForCompletion()
+        // A conflict starts an asynchronous reload. Verify the settled
+        // library, not whichever snapshot wins this test task's resumption.
+        await reloadAndWait(store)
         #expect(try Data(contentsOf: file) == bytes)
         #expect(store.notes.filter { $0.id == id }.count == 1)
+        let reloaded = try #require(store.uniqueNote(id: id))
+        #expect(reloaded.summary.utf8.elementsEqual(external.summary.utf8))
+        #expect(reloaded.personalNotes.utf8.elementsEqual(external.personalNotes.utf8))
         #expect(session.statusMessage(summaryPending: true) != nil)
         #expect(recovery.cleanupFailures.isEmpty)
     }
