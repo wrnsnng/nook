@@ -31,6 +31,20 @@ struct QuickNotePadLayoutTests {
     }
 
     @Test
+    func voiceDecisionsPrecedeLiveGuessesWithoutDisplacingPrivacyOrFailures() {
+        let normal = QuickNotePadLayout.rows(
+            outboundProvider: "OpenAI", notice: nil, noticeIsFailure: false,
+            hearing: "another thought", hasSuggestion: true, hasAssistant: true, hasVoiceStatus: true
+        )
+        #expect(normal == [.outbound(provider: "OpenAI"), .voice])
+        let failed = QuickNotePadLayout.rows(
+            outboundProvider: "OpenAI", notice: "Save failed", noticeIsFailure: true,
+            hearing: "another thought", hasSuggestion: true, hasAssistant: true, hasVoiceStatus: true
+        )
+        #expect(failed == [.outbound(provider: "OpenAI"), .notice(text: "Save failed", isFailure: true)])
+    }
+
+    @Test
     func neverMoreThanTwoRows() {
         let crowded = rows(
             outbound: "Anthropic",

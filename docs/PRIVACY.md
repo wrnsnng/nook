@@ -179,6 +179,25 @@ microphone open across pauses in speech, appending each recognized chunk to
 the note, until the user turns hands-free off; the same on-device recognition
 and rewrite guarantees apply to every chunk.
 
+Natural correction commands are deterministic proposals only when dictation
+starts in Quick Note. The recognized command is first inserted as ordinary
+note text, covered by the same autosave and draft-recovery policy. Review pauses
+capture and shows the affected words; Keep Words or Escape leaves the literal
+speech in place. Only Apply Correction changes the earlier phrase or list item,
+and Undo restores the words. Uncertain targets remain literal text. No model is
+called to interpret these proposals, and a run containing a correction command
+skips optional dictation refinement. Commands spoken into other applications
+remain words, not permission for Nook to delete external text. There is no new
+storage location, permission, provider or network path; optional note-assistant
+consent and persistent outbound disclosure are unchanged.
+
+Quick Note filing defaults to a separate spoken note. An explicitly chosen
+existing note receives the words through the same local conflict checks. Only
+after verifying that write does Nook move the pad's earlier autosaved copy to
+Trash. Failed cleanup leaves that copy available and shows a retained-copy
+notice. Cancelling the destination sheet keeps the draft without restarting
+dictation. No new storage location or network operation is introduced.
+
 ## Transcription and summaries
 
 Apple's Speech framework performs transcription on-device. macOS may contact

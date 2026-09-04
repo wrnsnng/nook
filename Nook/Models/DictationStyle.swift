@@ -24,9 +24,9 @@ enum DictationStyle: String, CaseIterable, Codable, Identifiable, Sendable {
     /// for a code editor, and nothing about this leaves the Mac.
     static let overridesKey = "dictationStyleOverrides"
 
-    static func override(forBundleID bundleID: String?) -> DictationStyle? {
+    static func override(forBundleID bundleID: String?, defaults: UserDefaults = .standard) -> DictationStyle? {
         guard let bundleID,
-              let overrides = UserDefaults.standard
+              let overrides = defaults
                   .dictionary(forKey: overridesKey) as? [String: String],
               let raw = overrides[bundleID]
         else { return nil }
