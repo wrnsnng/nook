@@ -382,24 +382,29 @@ enum CommandPaletteNoteOrder {
     nonisolated static func ordered(
         _ notes: [MeetingNote],
         matching query: String,
-        documents: [LibraryNoteIdentity: String]? = nil
+        documents: [LibraryNoteIdentity: String]? = nil,
+        isCancelled: @Sendable () -> Bool = { Task.isCancelled }
     ) -> [MeetingNote] {
+        guard !isCancelled() else { return [] }
         let matcher = PaletteFuzzyQuery(query)
         var hits: [(note: MeetingNote, rank: Int)] = []
         for note in notes {
-            guard !Task.isCancelled else { return [] }
+            guard !isCancelled() else { return [] }
             let rank: Int?
             if matcher.text.isEmpty {
                 rank = 0
-            } else if let titleRank = matcher.rank(in: note.title, isTitle: true) {
+            } else if let titleRank = matcher.rank(in: note.title, isTitle: true, isCancelled: isCancelled) {
                 rank = titleRank
             } else {
                 let document = documents?[note.libraryIdentity]
                     ?? LibrarySearchController.document(for: note)
-                rank = matcher.rank(in: document, isTitle: false).map { $0 + 3 }
+                rank = matcher.rank(in: document, isTitle: false, isCancelled: isCancelled).map { $0 + 3 }
             }
+            // A cancelled last note must not return the earlier partial hits.
+            guard !isCancelled() else { return [] }
             if let rank { hits.append((note, rank)) }
         }
+        guard !isCancelled() else { return [] }
         let ordered = hits.sorted {
             if $0.rank != $1.rank { return $0.rank < $1.rank }
             let left = $0.note
@@ -410,6 +415,7 @@ enum CommandPaletteNoteOrder {
             if leftPath != rightPath { return leftPath < rightPath }
             return left.id.uuidString < right.id.uuidString
         }.map(\.note)
+        guard !isCancelled() else { return [] }
         return matcher.text.isEmpty ? Array(ordered.prefix(5)) : ordered
     }
 }
@@ -423,10 +429,13 @@ private struct PaletteFuzzyQuery {
         terms = text.split(whereSeparator: \.isWhitespace).map(String.init)
     }
 
-    func rank(in source: String, isTitle: Bool) -> Int? {
+    func rank(in source: String, isTitle: Bool, isCancelled: () -> Bool) -> Int? {
+        guard !isCancelled() else { return nil }
         let value = Self.normalized(source)
+        guard !isCancelled() else { return nil }
         if value.hasPrefix(text) { return 0 }
         if value.contains(text) { return 1 }
+        guard !isCancelled() else { return nil }
         let words = value.split { !$0.isLetter && !$0.isNumber }.map(String.init)
         if isTitle {
             // Initials let "rr" find "Research review"; do not let a pair of
@@ -434,12 +443,23 @@ private struct PaletteFuzzyQuery {
             let initials = String(words.compactMap(\.first))
             if text.count >= 2, !text.contains(" "), initials.hasPrefix(text) { return 2 }
         }
-        let matched = terms.allSatisfy { term in
-            guard !Task.isCancelled else { return false }
-            if value.contains(term) { return true }
-            return words.contains { word in Self.fuzzyWord(term, matches: word) }
+        for term in terms {
+            guard !isCancelled() else { return nil }
+            if value.contains(term) { continue }
+            var matched = false
+            for word in words {
+                // One long transcript can contain most of the library's work.
+                // Checking only between notes/terms leaves obsolete fuzzy
+                // comparisons running after the next query has already begun.
+                guard !isCancelled() else { return nil }
+                if Self.fuzzyWord(term, matches: word) {
+                    matched = true
+                    break
+                }
+            }
+            guard matched else { return nil }
         }
-        return matched ? 2 : nil
+        return 2
     }
 
     private static func normalized(_ text: String) -> String {

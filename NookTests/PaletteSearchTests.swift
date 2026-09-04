@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 @testable import Nook
 
@@ -66,6 +67,31 @@ struct PaletteSearchTests {
         let longWord = String(repeating: "synthetic", count: 12)
         let target = note("Meeting", summary: String(repeating: "plain words ", count: 20_000) + longWord)
         #expect(CommandPaletteNoteOrder.ordered([target], matching: longWord).map(\.id) == [target.id])
+    }
+
+    @Test(arguments: [false, true])
+    func cancellationDuringTranscriptComparisonRejectsAlreadyRankedNotes(useCache: Bool) {
+        let earlier = note("Telesocpe")
+        let target = note("Meeting", summary: String(repeating: "orchid ", count: 256) + "telescope")
+        let documents = useCache ? [
+            earlier.libraryIdentity: LibrarySearchController.document(for: earlier),
+            target.libraryIdentity: LibrarySearchController.document(for: target),
+        ] : nil
+        let checks = Mutex(0)
+        // Cancel at a deterministic checkpoint within the long word scan,
+        // without relying on how quickly a loaded CI host schedules a Task.
+        let result = CommandPaletteNoteOrder.ordered(
+            [earlier, target], matching: "telesocpe", documents: documents,
+            isCancelled: {
+                checks.withLock { count in
+                    count += 1
+                    return count >= 32
+                }
+            }
+        )
+        #expect(checks.withLock { $0 } >= 32)
+        #expect(checks.withLock { $0 } < 40)
+        #expect(result.isEmpty)
     }
 
     @Test

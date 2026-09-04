@@ -23,6 +23,10 @@ hits. Matching includes complete transcripts and structured fields without
 rewriting them. Initials are title-only, short queries do not fuzzily match
 scattered content letters, and edit-distance work is bounded without truncating
 exact long-word queries. Empty queries retain the five most recent notes.
+Cancellation is checked between individual fuzzy word comparisons, not only
+between notes or query terms, and discards any already-ranked partial result.
+The synchronous normalizing/tokenizing/sorting passes are not interruptible
+mid-call; this is cooperative cancellation, not a hard execution deadline.
 
 Library ranges are All, Today and Yesterday. Calendar-day filtering and group
 headings account for 23/25-hour days; ranges and
