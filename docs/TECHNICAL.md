@@ -77,6 +77,16 @@ barrier, so a new check cannot start while ScreenCaptureKit is still winding
 down. Input permission failures are shown in Settings and no sample leaves
 the process.
 
+The lifecycle accepts an injectable start/stop session for synthetic testing;
+the native implementation still uses the same ScreenCaptureKit configuration.
+Failed cleanup retains the candidate stream for Stop/retry instead of losing
+its only handle. `prepareForOtherCapture` refuses meeting/dictation startup
+until every input-check start/stop operation has relinquished ownership.
+Tests exercise cancellation before scheduling, delayed permission resolution,
+cancelled/failed startup, failed cleanup and overlapping stop requests without
+microphone, system audio, Speech or model access. These tests are not physical
+permission, real-meter, artifact-absence or keyboard/VoiceOver acceptance.
+
 ### `LiveTranscriptionService`
 
 Runs Apple's Speech recognizers on-device while capture is active. System audio

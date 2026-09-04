@@ -228,7 +228,7 @@ final class MeetingCoordinator: ObservableObject {
     /// The input check shares the microphone and ScreenCaptureKit. Waiting for
     /// its teardown before requesting meeting capture prevents two starts from
     /// opening those resources during the same turn of the main actor.
-    private let prepareForAudioCapture: (@MainActor () async -> Void)?
+    private let prepareForAudioCapture: (@MainActor () async throws -> Void)?
     private let capture = CaptureService()
     /// Global flag hotkey, registered only while a recording is running.
     private let momentHotKeys = MomentHotKeyController(
@@ -306,7 +306,7 @@ final class MeetingCoordinator: ObservableObject {
     init(
         store: MarkdownStore,
         detector: MeetingDetector,
-        prepareForAudioCapture: (@MainActor () async -> Void)? = nil
+        prepareForAudioCapture: (@MainActor () async throws -> Void)? = nil
     ) {
         self.store = store
         self.detector = detector
@@ -955,7 +955,7 @@ final class MeetingCoordinator: ObservableObject {
             guard let self else { return }
 
             do {
-                await self.prepareForAudioCapture?()
+                try await self.prepareForAudioCapture?()
                 try Task.checkCancellation()
                 guard self.activeDraft?.id == draft.id else { return }
                 try await capture.requestPermissions()

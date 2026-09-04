@@ -15,7 +15,7 @@ enum AudioInputCheckTrack: String, CaseIterable, Sendable {
         case .microphone:
             "You"
         case .meeting:
-            "Meeting"
+            "Meeting audio"
         }
     }
 }
@@ -117,6 +117,16 @@ struct AudioInputCheckLevelSample: Equatable, Sendable {
     let receivedAt: TimeInterval
 }
 
+/// Only start/stop are exposed to the lifecycle controller. Synthetic tests
+/// exercise the real ownership transitions without permission or audio access.
+@MainActor
+protocol AudioInputCheckSession: AnyObject {
+    func startCapture() async throws
+    func stopCapture() async throws
+}
+
+extension SCStream: AudioInputCheckSession {}
+
 /// A short-lived, audio-only ScreenCaptureKit stream for checking the two
 /// inputs in Settings. It intentionally has no recording output, file URL,
 /// speech recognizer, model, recovery hook, event log, or sleep assertion.
@@ -132,6 +142,7 @@ final class AudioInputCheckService: NSObject, ObservableObject, SCStreamDelegate
     @Published private(set) var phase: AudioInputCheckPhase = .idle
     @Published private(set) var levels = AudioInputCheckLevels.zero
     @Published private(set) var errorMessage: String?
+    @Published private(set) var requiredPermission: NookPermission?
 
     /// A failed stop still owns its stream until ScreenCaptureKit confirms the
     /// teardown. Exposing this lets Settings offer Stop again without ever
@@ -143,7 +154,13 @@ final class AudioInputCheckService: NSObject, ObservableObject, SCStreamDelegate
             || stream != nil
     }
 
-    private var stream: SCStream?
+    private var stream: (any AudioInputCheckSession)?
+    private let makeSession: (@MainActor (AudioInputCheckService) async throws -> any AudioInputCheckSession)?
+
+    init(makeSession: (@MainActor (AudioInputCheckService) async throws -> any AudioInputCheckSession)? = nil) {
+        self.makeSession = makeSession
+        super.init()
+    }
     private var streamID: ObjectIdentifier?
     private var startTask: Task<Void, Never>?
     private var stopTask: Task<Void, Never>?
@@ -229,25 +246,27 @@ final class AudioInputCheckService: NSObject, ObservableObject, SCStreamDelegate
 
     /// Starts asynchronously so Settings remains responsive while macOS
     /// presents or resolves capture permissions.
-    func start(conflict: AudioInputCheckConflict? = nil) {
+    @discardableResult
+    func start(conflict: AudioInputCheckConflict? = nil) -> Task<Void, Never>? {
         guard phase == .idle || phase == .failed else {
             errorMessage = AudioInputCheckError.alreadyActive.errorDescription
-            return
+            return nil
         }
         guard startTask == nil, stopTask == nil, stream == nil else {
             errorMessage = AudioInputCheckError.alreadyActive.errorDescription
-            return
+            return nil
         }
 
         if let conflict {
             phase = .failed
             errorMessage = AudioInputCheckError.conflict(conflict).errorDescription
-            return
+            return nil
         }
 
         operationID &+= 1
         let operation = operationID
         errorMessage = nil
+        requiredPermission = nil
         levels = .zero
         captureState.withLock { state in
             state.activeStreamID = nil
@@ -257,6 +276,16 @@ final class AudioInputCheckService: NSObject, ObservableObject, SCStreamDelegate
 
         startTask = Task { @MainActor [weak self] in
             await self?.performStart(operation: operation)
+        }
+        return startTask
+    }
+
+    /// A competing capture may proceed only after teardown is confirmed.
+    /// Keeping a failed stream is not sufficient if the next caller ignores it.
+    func prepareForOtherCapture() async throws {
+        await stop()
+        guard stream == nil, startTask == nil, stopTask == nil else {
+            throw AudioInputCheckError.stopFailed
         }
     }
 
@@ -289,10 +318,13 @@ final class AudioInputCheckService: NSObject, ObservableObject, SCStreamDelegate
                 await startTask.value
             }
             self.startTask = nil
-            stream = nil
-            streamID = nil
-            phase = .idle
-            errorMessage = nil
+            // performStart owns cleanup, including a failed stop. Never
+            // drop the only handle to audio that may still be running.
+            if stream == nil {
+                streamID = nil
+                phase = .idle
+                errorMessage = nil
+            }
             return
         }
 
@@ -323,57 +355,24 @@ final class AudioInputCheckService: NSObject, ObservableObject, SCStreamDelegate
     }
 
     private func performStart(operation: UInt64) async {
-        var candidate: SCStream?
+        var candidate: (any AudioInputCheckSession)?
+        var didAttemptStart = false
+        defer { startTask = nil }
         do {
-            try await requestPermissions()
             try Task.checkCancellation()
-
-            let availableContent = try await SCShareableContent.excludingDesktopWindows(
-                false,
-                onScreenWindowsOnly: false
-            )
-            guard let display = availableContent.displays.first else {
-                throw AudioInputCheckError.noDisplay
+            let stream: any AudioInputCheckSession
+            if let makeSession {
+                stream = try await makeSession(self)
+            } else {
+                stream = try await makeNativeSession()
             }
-
-            let filter = SCContentFilter(
-                display: display,
-                excludingApplications: [],
-                exceptingWindows: []
-            )
-            let configuration = SCStreamConfiguration()
-            configuration.width = 2
-            configuration.height = 2
-            configuration.minimumFrameInterval = CMTime(value: 1, timescale: 1)
-            configuration.queueDepth = 3
-            configuration.showsCursor = false
-            configuration.capturesAudio = true
-            configuration.captureMicrophone = true
-            configuration.excludesCurrentProcessAudio = true
-            configuration.sampleRate = 48_000
-            configuration.channelCount = 2
-
-            let stream = SCStream(
-                filter: filter,
-                configuration: configuration,
-                delegate: self
-            )
             candidate = stream
-            try stream.addStreamOutput(
-                self,
-                type: .audio,
-                sampleHandlerQueue: systemAudioQueue
-            )
-            try stream.addStreamOutput(
-                self,
-                type: .microphone,
-                sampleHandlerQueue: microphoneQueue
-            )
+            try Task.checkCancellation()
+            didAttemptStart = true
             try await stream.startCapture()
 
             guard isCurrentStart(operation) else {
-                await stopCandidate(stream)
-                finishCanceledStart(operation: operation)
+                if await stopCandidate(stream) { finishCanceledStart() }
                 return
             }
 
@@ -385,27 +384,64 @@ final class AudioInputCheckService: NSObject, ObservableObject, SCStreamDelegate
             }
             phase = .running
             beginPolling()
-        } catch is CancellationError {
-            if let candidate {
-                await stopCandidate(candidate)
-            }
-            finishCanceledStart(operation: operation)
-        } catch let error as AudioInputCheckError {
-            if let candidate {
-                await stopCandidate(candidate)
-            }
-            finishStartFailure(error, operation: operation)
         } catch {
-            if let candidate {
-                await stopCandidate(candidate)
+            if didAttemptStart, let candidate, !(await stopCandidate(candidate)) { return }
+            if Task.isCancelled || phase == .stopping {
+                finishCanceledStart()
+            } else {
+                finishStartFailure(
+                    error as? AudioInputCheckError ?? .captureUnavailable,
+                    operation: operation
+                )
             }
-            finishStartFailure(
-                .captureUnavailable,
-                operation: operation
-            )
+        }
+    }
+
+    private func makeNativeSession() async throws -> any AudioInputCheckSession {
+        try await requestPermissions()
+        try Task.checkCancellation()
+        let availableContent = try await SCShareableContent.excludingDesktopWindows(
+            false,
+            onScreenWindowsOnly: false
+        )
+        guard let display = availableContent.displays.first else {
+            throw AudioInputCheckError.noDisplay
         }
 
-        startTask = nil
+        let filter = SCContentFilter(
+            display: display,
+            excludingApplications: [],
+            exceptingWindows: []
+        )
+        let configuration = SCStreamConfiguration()
+        configuration.width = 2
+        configuration.height = 2
+        configuration.minimumFrameInterval = CMTime(value: 1, timescale: 1)
+        configuration.queueDepth = 3
+        configuration.showsCursor = false
+        configuration.capturesAudio = true
+        configuration.captureMicrophone = true
+        configuration.excludesCurrentProcessAudio = true
+        configuration.sampleRate = 48_000
+        configuration.channelCount = 2
+
+        let stream = SCStream(
+            filter: filter,
+            configuration: configuration,
+            delegate: self
+        )
+        try stream.addStreamOutput(
+            self,
+            type: .audio,
+            sampleHandlerQueue: systemAudioQueue
+        )
+        try stream.addStreamOutput(
+            self,
+            type: .microphone,
+            sampleHandlerQueue: microphoneQueue
+        )
+
+        return stream
     }
 
     private func requestPermissions() async throws {
@@ -466,13 +502,16 @@ final class AudioInputCheckService: NSObject, ObservableObject, SCStreamDelegate
         operation == operationID && phase == .starting && !Task.isCancelled
     }
 
-    private func finishCanceledStart(operation: UInt64) {
-        guard operation == operationID, phase == .stopping else { return }
+    private func finishCanceledStart() {
+        // Stop advances operationID to reject a late successful start. A new
+        // start is barred until startTask releases this cancellation boundary.
+        guard phase == .stopping else { return }
         stream = nil
         streamID = nil
         clearCaptureState()
         levels = .zero
-        phase = .idle
+        // The stop caller still owns the barrier until its await returns.
+        // Publishing idle here could let a new start be erased by that caller.
         errorMessage = nil
     }
 
@@ -483,16 +522,31 @@ final class AudioInputCheckService: NSObject, ObservableObject, SCStreamDelegate
         guard operation == operationID, phase == .starting else { return }
         phase = .failed
         errorMessage = error.errorDescription
+        switch error {
+        case .microphonePermissionDenied: requiredPermission = .microphone
+        case .screenRecordingPermissionDenied: requiredPermission = .screenRecording
+        default: requiredPermission = nil
+        }
         levels = .zero
     }
 
-    private func stopCandidate(_ stream: SCStream) async {
-        // A child task gives cleanup its own cancellation state when the
-        // caller stopped while startCapture was still returning.
-        let cleanup = Task {
-            try? await stream.stopCapture()
+    private func stopCandidate(_ candidate: any AudioInputCheckSession) async -> Bool {
+        // Cleanup needs its own cancellation state after a stopped startup.
+        let cleanup = Task { @MainActor in
+            try await candidate.stopCapture()
         }
-        await cleanup.value
+        do {
+            try await cleanup.value
+            return true
+        } catch {
+            stream = candidate
+            streamID = ObjectIdentifier(candidate)
+            phase = .failed
+            errorMessage = AudioInputCheckError.stopFailed.errorDescription
+            clearCaptureState()
+            levels = .zero
+            return false
+        }
     }
 
     private func clearCaptureState() {
