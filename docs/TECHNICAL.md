@@ -137,6 +137,8 @@ background writer share one cancellable request. Navigation does not cancel it.
 Folder-generation changes, deletion and duplicate IDs invalidate it. A bounded
 `SummaryRegenerationSession` rejects late callbacks, stale inputs and on-disk
 revision conflicts; appended summaries retain existing tracked actions.
+Cancelling its returned task also clears the running state and permits Retry.
+Cleanup checks the request identity so an old task cannot clear a newer run.
 
 `summary_status: pending` (or `pending-append`) is minimal durable state in the
 ordinary Markdown file. The appended value selects the action-preserving merge

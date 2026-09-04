@@ -193,6 +193,40 @@ struct SummaryRegenerationSessionTests {
         #expect(session.completion == nil)
     }
 
+    @Test(arguments: [false, true])
+    func cancellingTheReturnedWorkReleasesTheRunningStateAndAllowsRetry(afterStart: Bool) async throws {
+        let original = note()
+        let library = RegenerationTestLibrary(folder: folder, notes: [original])
+        let runner = ControlledRegenerationRunner()
+        defer { runner.finishAll() }
+        let session = SummaryRegenerationSession(runner: runner.run)
+        let first = try #require(session.start(note: original, library: library.read, commit: library.commit))
+        if afterStart { await runner.waitForRequests(1) }
+        first.cancel()
+        await first.value
+        #expect(!session.isRunning)
+        #expect(session.wasCancelled)
+        #expect(session.stage == nil)
+        #expect(session.completion == nil)
+        #expect(library.commits.isEmpty)
+        if !afterStart { #expect(runner.requests.isEmpty) }
+
+        let second = try #require(session.start(note: original, library: library.read, commit: library.commit))
+        let requestCount = afterStart ? 2 : 1
+        await runner.waitForRequests(requestCount)
+        if afterStart {
+            await runner.report(.writingUp, request: 0)
+            runner.finish(0, with: generated(from: original))
+            #expect(session.stage == .condensing(pass: 1, part: 0, total: 0))
+            #expect(library.commits.isEmpty)
+        }
+        runner.finish(requestCount - 1, with: generated(from: original))
+        await second.value
+        #expect(!session.isRunning)
+        #expect(!session.wasCancelled)
+        #expect(library.commits.count == 1)
+    }
+
     @Test
     func anOldModelCannotStartAgainstARetainedLibraryFromAnotherFolder() {
         let original = note()

@@ -116,6 +116,11 @@ final class SummaryRegenerationSession: ObservableObject {
             isTerminating: false
         )
         let work = Task { [weak self] in
+            // Callers may cancel the returned task rather than the session.
+            // Retire that request too, but never clear a newer retry's state.
+            defer {
+                if Task.isCancelled, self?.requestID == id { self?.cancel() }
+            }
             guard !Task.isCancelled, self?.requestID == id else { return }
             let onStage: SummaryStageHandler = { [weak self] stage in
                 await self?.receive(
