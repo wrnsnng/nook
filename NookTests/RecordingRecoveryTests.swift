@@ -426,7 +426,101 @@ struct RecordingRecoveryTests {
 
     // MARK: What a recovery leaves behind
 
-    @Test(arguments: RecordingRecoveryPausePoint.allCases, [false, true])
+    @Test(arguments: [false, true])
+    func recoveredWordsAreReadableBeforeSummaryAndCancellationNeverDiscardsThem(
+        switchLibrary: Bool
+    ) async throws {
+        let directory = try temporaryDirectory()
+        let other = try temporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+            try? FileManager.default.removeItem(at: other)
+        }
+        let store = store(in: directory)
+        let id = UUID()
+        let audio = try writeRecording(id, extensionName: "m4a", in: store.recordingsDirectory())
+        let gate = RecordingRecoveryGate()
+        defer { gate.release() }
+        let source: [TranscriptSegment] = [
+            .init(startTime: 0, duration: 3, text: "My synthetic words.", source: .microphone),
+            .init(startTime: 4, duration: 3, text: "Their synthetic response.", source: .system),
+            .init(startTime: 8, duration: 3, text: "Unattributed synthetic audio.", source: .mixed),
+        ]
+        let recovery = RecordingRecovery(store: store, transcribeAudio: { _, _ in source }, summarizeTranscript: { _, title in
+            await gate.hold()
+            return MeetingInsights(title: title, summary: "A late model result", keyPoints: [], decisions: [], actionItems: [])
+        })
+        recovery.scan()
+        let orphan = try #require(recovery.orphans.first)
+        recovery.recover(orphan, localeIdentifier: "en-AU")
+        let recoveryWork = try #require(recovery.recoveryTaskForTesting)
+        await gate.waitUntilHeld()
+        await recoveryWork.value
+        #expect(!recovery.isWorking)
+        #expect(recovery.orphans.isEmpty)
+        let saved = try #require(store.uniqueNote(id: id))
+        let file = try #require(saved.fileURL)
+        let bytes = try Data(contentsOf: file)
+        let decoded = try #require(MarkdownCodec.decode(String(decoding: bytes, as: UTF8.self), fileURL: file))
+        #expect(decoded.summaryPending == .initial)
+        #expect(decoded.transcript.map(\.source) == [.microphone, .system, .mixed])
+        #expect(decoded.transcript.map(\.text) == source.map(\.text))
+        #expect(FileManager.default.fileExists(atPath: audio.path) == MeetingCoordinator.keepAudioPreference)
+        let session = store.summarySessions.session(for: saved)
+        #expect(session.isRunning)
+        // Repeated recovery cannot duplicate the scaffold while its model is
+        // still working. It is already a regular note, not an orphan.
+        recovery.recover(orphan, localeIdentifier: "en-AU")
+        #expect(recovery.recoveryTaskForTesting == nil)
+        #expect(store.notes.filter { $0.id == id }.count == 1)
+        if switchLibrary {
+            store.storageURL = other
+            store.storageURL = directory
+        } else {
+            session.cancel()
+        }
+        #expect(!session.isRunning)
+        gate.release()
+        await session.waitForCompletion()
+        #expect(try Data(contentsOf: file) == bytes)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: other.path).isEmpty)
+    }
+
+    @Test
+    func externalReplacementDuringRecoverySummaryWinsWithoutAnotherNoteOrCleanupPass() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        let id = UUID()
+        _ = try writeRecording(id, extensionName: "m4a", in: store.recordingsDirectory())
+        let gate = RecordingRecoveryGate()
+        defer { gate.release() }
+        let recovery = RecordingRecovery(store: store, transcribeAudio: { _, _ in
+            [.init(startTime: 0, duration: 3, text: "Original synthetic recovery words.")]
+        }, summarizeTranscript: { _, title in
+            await gate.hold()
+            return MeetingInsights(title: title, summary: "Stale generated words", keyPoints: [], decisions: [], actionItems: [])
+        })
+        recovery.scan()
+        recovery.recover(try #require(recovery.orphans.first), localeIdentifier: "en-AU")
+        await gate.waitUntilHeld()
+        let saved = try #require(store.uniqueNote(id: id))
+        let session = store.summarySessions.session(for: saved)
+        let file = try #require(saved.fileURL)
+        var external = saved
+        external.summary = "The user's externally restored summary."
+        external.personalNotes = "Keep this exact Cafe\u{301} writing."
+        let bytes = Data(MarkdownCodec.encode(external).utf8)
+        try bytes.write(to: file)
+        gate.release()
+        await session.waitForCompletion()
+        #expect(try Data(contentsOf: file) == bytes)
+        #expect(store.notes.filter { $0.id == id }.count == 1)
+        #expect(session.statusMessage(summaryPending: true) != nil)
+        #expect(recovery.cleanupFailures.isEmpty)
+    }
+
+    @Test(arguments: RecordingRecoveryPausePoint.beforeSave, [false, true])
     func changingLibrariesDuringRecoveryKeepsEverySourceInItsOriginalFolder(
         pausePoint: RecordingRecoveryPausePoint, switchBack: Bool
     ) async throws {
@@ -493,7 +587,7 @@ struct RecordingRecoveryTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: otherLibrary.path).isEmpty)
     }
 
-    @Test(arguments: RecordingRecoveryPausePoint.allCases)
+    @Test(arguments: RecordingRecoveryPausePoint.beforeSave)
     func restoringANoteDuringRecoveryKeepsItsExactWritingAndEveryRecordingSource(
         pausePoint: RecordingRecoveryPausePoint
     ) async throws {
@@ -694,6 +788,9 @@ struct RecordingRecoveryTests {
         store.storageURL = directory
         gate.release()
         await work.value
+        if let saved = store.uniqueNote(id: id) {
+            await store.summarySessions.session(for: saved).waitForCompletion()
+        }
 
         let saved = try #require(store.notes.first { $0.id == id })
         let noteURL = try #require(saved.fileURL)
@@ -1071,6 +1168,10 @@ struct RecordingRecoveryTests {
 
 enum RecordingRecoveryPausePoint: Int, CaseIterable, Sendable {
     case extraction, transcription, summary
+
+    // Summarization is now after the durable save and artifact handoff.
+    // Its cancellation and ownership tests exercise the saved note below.
+    static let beforeSave: [Self] = [.extraction, .transcription]
 }
 
 /// Gates synthetic recovery work without a provider, polling or a timing race.

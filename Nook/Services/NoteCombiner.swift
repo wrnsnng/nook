@@ -12,9 +12,34 @@ protocol NoteSummarizing: Sendable {
         transcript: [TranscriptSegment],
         fallbackTitle: String
     ) async -> MeetingInsights
+    func summarize(
+        transcript: [TranscriptSegment], fallbackTitle: String, attention: SummaryAttention?
+    ) async -> MeetingInsights
+    func summarizeForMerge(
+        transcript: [TranscriptSegment], fallbackTitle: String, attention: SummaryAttention?
+    ) async -> SummaryResult
 }
 
-extension SummaryService: NoteSummarizing {}
+extension NoteSummarizing {
+    func summarizeForMerge(
+        transcript: [TranscriptSegment], fallbackTitle: String, attention: SummaryAttention?
+    ) async -> SummaryResult {
+        SummaryResult(insights: await summarize(transcript: transcript, fallbackTitle: fallbackTitle, attention: attention))
+    }
+    func summarize(
+        transcript: [TranscriptSegment], fallbackTitle: String, attention: SummaryAttention?
+    ) async -> MeetingInsights {
+        await summarize(transcript: transcript, fallbackTitle: fallbackTitle)
+    }
+}
+
+extension SummaryService: NoteSummarizing {
+    func summarizeForMerge(
+        transcript: [TranscriptSegment], fallbackTitle: String, attention: SummaryAttention?
+    ) async -> SummaryResult {
+        await summarizeReportingFailure(transcript: transcript, fallbackTitle: fallbackTitle, attention: attention)
+    }
+}
 
 /// Folds one saved note into another so a meeting that happened in pieces
 /// reads as one note.
@@ -277,10 +302,12 @@ enum NoteCombiner {
             newSessions: NoteSessionAppend.normalizedSessions(of: incoming)
         )
         let fallbackTitle = base.title.isEmpty ? incoming.title : base.title
-        let insights = await summarizer.summarize(
+        let summaryResult = await summarizer.summarizeForMerge(
             transcript: appended.transcript,
-            fallbackTitle: fallbackTitle
+            fallbackTitle: fallbackTitle,
+            attention: SummaryAttention(note: appended)
         )
+        let insights = summaryResult.insights
         try Task.checkCancellation()
         try baseAudio.validate()
         try incomingAudio.validate()
@@ -305,14 +332,33 @@ enum NoteCombiner {
         )
         let existingSummary = appended.summary
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let summarizingFailed = isFallbackSummary(
+        let summarizingFailed = summaryResult.usedFallback || isFallbackSummary(
             insights.summary,
             transcript: appended.transcript,
             fallbackTitle: fallbackTitle
         )
+        // Failed enrichment is not evidence that an existing question was
+        // resolved. Only a successful whole-transcript pass replaces them.
+        merged.openQuestions = summarizingFailed
+            ? unionedActionItems(base.openQuestions, incoming.openQuestions, insights.openQuestions)
+            : insights.openQuestions
         merged.summary = summarizingFailed && !existingSummary.isEmpty
             ? appended.summary
             : insights.summary
+        if summarizingFailed {
+            // A failed merged write-up must remain visibly retryable after
+            // reopening, without dropping the earlier session's action items.
+            merged.summaryPending = merged.transcript.isEmpty ? nil : .appended
+            merged.keyPoints = unionedActionItems(base.keyPoints, incoming.keyPoints, insights.keyPoints)
+            merged.decisions = unionedActionItems(base.decisions, incoming.decisions, insights.decisions)
+            if existingSummary.isEmpty {
+                merged.summaryProvenance = merged.transcript.isEmpty
+                    ? nil : SummaryFallback.legacyProvenance(for: merged)
+            }
+        } else {
+            merged.summaryPending = nil
+            merged.summaryProvenance = nil
+        }
         merged.extraSections = unionedExtraSections(
             appended.extraSections,
             incoming.extraSections

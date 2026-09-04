@@ -643,6 +643,9 @@ struct CopyConfirmationBanner: View {
 
     let message: String
     var severity: Severity = .success
+    /// Persistent document status needs the same contrast as its controls,
+    /// even when it is informational rather than a failure.
+    var emphasizesMessage = false
     var onDismiss: (() -> Void)? = nil
     @State private var measuredMessageHeight: CGFloat = 0
 
@@ -694,7 +697,7 @@ struct CopyConfirmationBanner: View {
     private var messageLabel: some View {
         Label(message, systemImage: symbolName)
             .font(.callout.weight(.semibold))
-            .foregroundStyle(foregroundStyle)
+            .foregroundStyle(emphasizesMessage ? Color.primary : foregroundStyle)
             .fixedSize(horizontal: false, vertical: true)
             .onGeometryChange(for: CGFloat.self) { proxy in
                 proxy.size.height

@@ -38,10 +38,10 @@ struct SummaryRegenerationProgressCard: View {
             }
             .accessibilityElement(children: .combine)
             Spacer(minLength: 0)
-            Button("Cancel", action: onCancel)
+            Button("Cancel Summary", action: onCancel)
                 .buttonStyle(.bordered)
                 .accessibilityLabel("Cancel summary regeneration")
-                .help("Keep the current summary and stop accepting this result.")
+                .help("Keep the saved transcript and notes, and stop accepting this summary result.")
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -64,6 +64,7 @@ struct MeetingDetailView: View {
     @EnvironmentObject private var shortcuts: ShortcutStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let note: MeetingNote
+    private let keepsSummaryOnNavigation: Bool
 
     @State private var tab: DetailTab = .notes
     @State private var transcriptSearch = ""
@@ -108,13 +109,21 @@ struct MeetingDetailView: View {
     /// badge. Rows whose badge is hidden still name their source through the
     /// row's accessibility label below.
     @State private var transcriptSourceBadgeIDs: Set<UUID>
+    @State private var reviewingSummaryItem: SummaryItemReviewSession?
+    @State private var lastSummaryReview: SummaryItemReviewSession?
+    @State private var reviewSentences: [SummaryReviewItem] = []
+    @FocusState private var summaryReviewFocus: String?
+    @AccessibilityFocusState private var summaryReviewAccessibilityFocus: String?
 
     init(
         note: MeetingNote,
         initialTab: DetailTab = .notes,
-        initialTranscriptSearch: String = ""
+        initialTranscriptSearch: String = "",
+        summarySession: SummaryRegenerationSession? = nil
     ) {
         self.note = note
+        keepsSummaryOnNavigation = summarySession != nil
+        _regeneration = StateObject(wrappedValue: summarySession ?? SummaryRegenerationSession())
         let startingTab = note.kind == .spoken
             && note.transcript.isEmpty
             && initialTab == .transcript
@@ -139,6 +148,7 @@ struct MeetingDetailView: View {
             VStack(spacing: 0) {
                 documentHeader
                 SoftDivider()
+                savedSummaryStatus
 
                 ZStack {
                     switch tab {
@@ -161,6 +171,7 @@ struct MeetingDetailView: View {
             }
         }
         .onAppear {
+            reviewSentences = SummaryReviewItem.sentences(in: note.summary)
             markdownDraft.prepare(for: note, store: store)
             personalNotes.prepare(for: note, store: store)
             markdownCharacterCount = markdownDraft.rawMarkdown.count
@@ -175,6 +186,7 @@ struct MeetingDetailView: View {
             markdownCharacterCount = markdown.count
         }
         .onChange(of: note) { _, newValue in
+            reviewSentences = SummaryReviewItem.sentences(in: newValue.summary)
             contentWordCount = newValue.detailContentWordCount
             transcriptSourceBadgeIDs = TranscriptBadgeGroupingPolicy.visibleBadgeIDs(
                 in: Self.filteredTranscript(
@@ -204,9 +216,15 @@ struct MeetingDetailView: View {
         }
         .onChange(of: store.storageGeneration) { _, _ in
             regeneration.cancel()
+            reviewingSummaryItem?.cancel()
+            reviewingSummaryItem = nil
+            lastSummaryReview = nil
         }
         .onChange(of: note.libraryIdentity) { _, _ in
             regeneration.cancel()
+            reviewingSummaryItem?.cancel()
+            reviewingSummaryItem = nil
+            lastSummaryReview = nil
         }
         .onChange(of: regeneration.completion?.id) { _, _ in
             if let completion = regeneration.completion {
@@ -234,7 +252,8 @@ struct MeetingDetailView: View {
         // Backstop for navigation that races focus loss: the view keeps its
         // own note, so committing here always writes the right file.
         .onDisappear {
-            regeneration.cancel()
+            reviewingSummaryItem?.cancel()
+            if !keepsSummaryOnNavigation { regeneration.cancel() }
             saveTitle()
             savePersonalNotes()
         }
@@ -242,6 +261,9 @@ struct MeetingDetailView: View {
             reduceMotion ? nil : .easeOut(duration: 0.24),
             value: tab
         )
+        .sheet(item: $reviewingSummaryItem, onDismiss: returnFromSummaryReview) { session in
+            SummaryItemReviewView(session: session)
+        }
     }
 
     private var tabTransition: AnyTransition {
@@ -489,7 +511,7 @@ struct MeetingDetailView: View {
     private var notesView: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 38) {
-                if hasPrimaryContent {
+                if hasPrimaryContent || (note.kind == .meeting && !note.transcript.isEmpty) {
                     summarySection
                 }
 
@@ -515,9 +537,9 @@ struct MeetingDetailView: View {
                                         .font(NookType.transcript)
                                         .lineSpacing(4)
                                         .textSelection(.enabled)
+                                    summaryReviewButton(.list(.keyPoint, index: index, in: note))
                                 }
-                                .accessibilityElement(children: .combine)
-                                .accessibilityLabel("Key point \(index + 1): \(item)")
+                                .accessibilityElement(children: .contain)
                             }
                         }
                     }
@@ -530,7 +552,7 @@ struct MeetingDetailView: View {
                         tint: NookPalette.accent
                     ) {
                         VStack(alignment: .leading, spacing: 16) {
-                            ForEach(Array(note.decisions.enumerated()), id: \.offset) { _, decision in
+                            ForEach(Array(note.decisions.enumerated()), id: \.offset) { index, decision in
                                 HStack(alignment: .top, spacing: 13) {
                                     // Not a tick in a circle. That is exactly
                                     // the action-item control one section
@@ -546,10 +568,10 @@ struct MeetingDetailView: View {
                                         .lineSpacing(4)
                                         .textSelection(.enabled)
                                         .frame(maxWidth: .infinity, alignment: .leading)
+                                    summaryReviewButton(.list(.decision, index: index, in: note))
                                 }
                                 .padding(.vertical, 2)
-                                .accessibilityElement(children: .ignore)
-                                .accessibilityLabel("Decision: \(decision)")
+                                .accessibilityElement(children: .contain)
                             }
                         }
                     }
@@ -559,13 +581,31 @@ struct MeetingDetailView: View {
                     actionItemsSection
                 }
 
+                if note.kind == .meeting, !note.openQuestions.isEmpty {
+                    EditorialSection(title: "Open questions", symbol: "questionmark.bubble",
+                                     tint: NookPalette.accent) {
+                        VStack(alignment: .leading, spacing: 16) {
+                            ForEach(Array(note.openQuestions.enumerated()), id: \.offset) { index, question in
+                                HStack(alignment: .top) {
+                                    Text(question)
+                                        .font(NookType.transcript)
+                                        .textSelection(.enabled)
+                                        .accessibilityLabel("Open question \(index + 1): \(question)")
+                                    Spacer(minLength: 0)
+                                    summaryReviewButton(.list(.question, index: index, in: note))
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if note.kind != .spoken,
                    checklistLines.isEmpty,
                    note.keyPoints.isEmpty,
                    note.decisions.isEmpty,
                    note.actionItems.isEmpty {
                     Label(
-                        "This conversation didn’t produce any explicit decisions or action items.",
+                        SummaryFallback.emptyStructuredMessage(provenance: note.summaryProvenance, pending: note.summaryPending),
                         systemImage: "leaf"
                     )
                     .font(NookType.body)
@@ -643,6 +683,12 @@ struct MeetingDetailView: View {
                             Text("Due \(dueDate.formatted(.dateTime.month().day()))")
                                 .font(NookType.caption.weight(.medium))
                                 .foregroundStyle(.secondary)
+                        }
+                        // File line indices can differ from decoded list indices
+                        // for hand-edited Markdown. Never target a different item.
+                        if note.actionItems.indices.contains(line.index),
+                           note.actionItems[line.index].utf8.elementsEqual(line.text.utf8) {
+                            summaryReviewButton(.list(.action, index: line.index, in: note))
                         }
                     }
                     .padding(.vertical, 8)
@@ -887,23 +933,40 @@ struct MeetingDetailView: View {
     private var summarySection: some View {
         VStack(alignment: .leading, spacing: 16) {
             NookSectionLabel(
-                title: note.kind == .spoken ? "Spoken words" : "The gist",
+                title: note.kind == .spoken ? "Spoken words"
+                    : note.summaryProvenance != nil ? "Fallback write-up" : "The gist",
                 symbol: note.kind == .spoken
                     ? "waveform" : "text.alignleft",
                 tint: NookPalette.accent
             )
+            .focusable()
+            .focused($summaryReviewFocus, equals: "summary-section")
+            .accessibilityFocused($summaryReviewAccessibilityFocus, equals: "summary-section")
 
-            if isRegenerating {
-                regenerationStatusCard
-            } else {
-                summaryProse
+            if SummaryRegenerator.isAvailable(for: note) {
+                SummaryRecipeControl(
+                    recipe: Binding(get: { note.summaryRecipe }, set: { selectSummaryRecipe($0) }),
+                    isEnabled: !markdownDraft.hasChanges && !isRegenerating,
+                    regenerate: regenerateSummary
+                )
             }
+            summaryProse
         }
     }
 
     @ViewBuilder
     private var summaryProse: some View {
-        if summaryParagraphs.count < 2 {
+        if note.kind == .meeting, !reviewSentences.isEmpty {
+            VStack(alignment: .leading, spacing: 14) {
+                ForEach(reviewSentences) { item in
+                    HStack(alignment: .top, spacing: 12) {
+                        summaryParagraphText(item.text)
+                        summaryReviewButton(item)
+                    }
+                    .accessibilityElement(children: .contain)
+                }
+            }
+        } else if summaryParagraphs.count < 2 {
             summaryParagraphText(summaryParagraphs.first ?? displaySummary)
         } else {
             VStack(alignment: .leading, spacing: 14) {
@@ -925,11 +988,56 @@ struct MeetingDetailView: View {
         Text(paragraph)
             .font(
                 note.kind == .spoken
-                    ? NookType.spoken : NookType.editorialSummary
+                    ? NookType.spoken
+                    : note.summaryProvenance != nil ? NookType.transcript : NookType.editorialSummary
             )
             .lineSpacing(7)
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func summaryReviewButton(_ item: SummaryReviewItem?) -> some View {
+        if note.kind == .meeting, !note.transcript.isEmpty, let item, item.isCurrent(in: note) {
+            Button { beginSummaryReview(item) } label: {
+                Image(systemName: "text.quote").frame(width: 30, height: 30)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityLabel("Show supporting transcript for \(item.label): \(item.text)")
+            .help("Review transcript support or correct this item")
+            .disabled(markdownDraft.hasChanges || isRegenerating || isEditingTitle)
+            .focused($summaryReviewFocus, equals: item.id)
+            .accessibilityFocused($summaryReviewAccessibilityFocus, equals: item.id)
+        }
+    }
+
+    private func beginSummaryReview(_ item: SummaryReviewItem) {
+        guard !markdownDraft.hasChanges, !isRegenerating, !isEditingTitle else { return }
+        do {
+            if personalNotes.noteID == note.id, personalNotes.hasExactChanges {
+                _ = try personalNotes.save(note: note, store: store)
+            }
+            guard let current = store.uniqueNote(id: note.id),
+                  current.libraryIdentity == note.libraryIdentity, item.isCurrent(in: current) else {
+                throw SummaryReviewError.changed
+            }
+            let session = SummaryItemReviewSession(note: current, item: item, generation: store.storageGeneration)
+            lastSummaryReview = session
+            summaryReviewFocus = nil
+            summaryReviewAccessibilityFocus = nil
+            reviewingSummaryItem = session
+        } catch { showCopyNotice(error.localizedDescription, severity: .failure) }
+    }
+
+    private func returnFromSummaryReview() {
+        guard let session = lastSummaryReview else { return }
+        session.cancel()
+        // After removal the same index belongs to a different item. Return to
+        // the section, never pretend that different item was the origin.
+        let target = session.returnFocusID(in: note)
+        summaryReviewFocus = target
+        summaryReviewAccessibilityFocus = target
+        lastSummaryReview = nil
     }
 
     private var filteredTranscript: [TranscriptSegment] {
@@ -1318,6 +1426,29 @@ struct MeetingDetailView: View {
     /// For every meeting whose write-up lost the model lottery: Apple
     /// Intelligence was off, busy, or declined, and the note saved with only
     /// transcript highlights. The failure named a cause; this is the remedy.
+    private func selectSummaryRecipe(_ recipe: SummaryRecipe) {
+        guard !markdownDraft.hasChanges, !isRegenerating,
+              recipe != note.summaryRecipe else { return }
+        do {
+            if personalNotes.noteID == note.id, personalNotes.hasExactChanges {
+                _ = try personalNotes.save(note: note, store: store)
+            }
+            guard var current = store.uniqueNote(id: note.id),
+                  current.libraryIdentity == note.libraryIdentity else {
+                showCopyNotice("This note is no longer in the library.", severity: .failure)
+                return
+            }
+            current.summaryRecipe = recipe
+            let saved = try store.save(current)
+            if markdownDraft.libraryIdentity == saved.libraryIdentity {
+                markdownDraft.refresh(for: saved, store: store)
+            }
+            showCopyNotice("Recipe saved. Regenerate Summary to apply it.")
+        } catch {
+            showCopyNotice("The recipe could not be saved. Your summary was kept.", severity: .failure)
+        }
+    }
+
     private func regenerateSummary() {
         guard SummaryRegenerator.isAvailable(for: note),
               !markdownDraft.hasChanges,
@@ -1351,21 +1482,62 @@ struct MeetingDetailView: View {
         let store = store
         regeneration.start(
             note: current,
-            library: {
-                .init(directoryURL: store.storageURL, generation: store.storageGeneration, notes: store.notes)
+            purpose: .forRetry(of: current),
+            library: { [weak store] in
+                guard let store else {
+                    return .init(directoryURL: URL(fileURLWithPath: "/"), generation: -1, notes: [])
+                }
+                return .init(directoryURL: store.storageURL, generation: store.storageGeneration, notes: store.notes)
             },
-            commit: { try store.save($0) }
+            commit: { [weak store] updated in
+                guard let store else { throw CancellationError() }
+                return try store.save(updated)
+            }
         )
     }
 
     private var isRegenerating: Bool { regeneration.isRunning }
 
-    /// The gist prose steps aside while the write-up runs; the lists below
-    /// stay, so what the user had remains readable until the new one lands.
+    /// The status sits above every tab rather than replacing the saved words.
+    /// Reading, exporting, and editing remain available during enrichment.
     @ViewBuilder
-    private var regenerationStatusCard: some View {
+    private var savedSummaryStatus: some View {
+        if note.kind == .meeting, let provenance = note.summaryProvenance {
+            SummaryFallbackCard(
+                provenance: provenance, isRunning: isRegenerating,
+                canRetry: SummaryRegenerator.isAvailable(for: note) && !markdownDraft.hasChanges,
+                retry: regenerateSummary
+            )
+            .padding(.horizontal, 24)
+            .padding(.vertical, 12)
+        }
         if let stage = regeneration.stage {
             SummaryRegenerationProgressCard(stage: stage, onCancel: regeneration.cancel)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 12)
+        } else if SummaryRegenerator.isAvailable(for: note),
+                  let message = regeneration.statusMessage(
+                    summaryPending: note.summaryPending != nil && note.summaryProvenance == nil
+                  ) {
+            HStack(alignment: .top, spacing: 12) {
+                // The existing notice component bounds very long filesystem
+                // errors and makes their complete wording scrollable. A failed
+                // save must not push Retry or the document out of the window.
+                CopyConfirmationBanner(message: message, severity: .info, emphasizesMessage: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if note.summaryProvenance == nil {
+                    Button("Retry Summary", action: regenerateSummary)
+                        .buttonStyle(.bordered)
+                        .fixedSize()
+                        .disabled(markdownDraft.hasChanges)
+                        .help(markdownDraft.hasChanges
+                            ? "Save or revert Markdown edits before retrying"
+                            : "Summarize the saved transcript on this Mac")
+                }
+            }
+            .padding(16)
+            .background(NookPalette.accent.opacity(0.07))
+            .accessibilityElement(children: .contain)
         }
     }
 

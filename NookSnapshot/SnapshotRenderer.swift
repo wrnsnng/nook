@@ -9,7 +9,7 @@ struct SnapshotRenderer {
         guard (2...4).contains(arguments.count),
               arguments.count < 4 || arguments[3] == "--interactive" else {
             FileHandle.standardError.write(
-                Data("Usage: NookSnapshot <output.png> [library|library-light|library-compact|welcome-light|welcome-dark|welcome-permission-light|welcome-permission-dark|welcome-ready-light|welcome-ready-dark|welcome-microphone-light|welcome-microphone-dark|welcome-speech-light|welcome-speech-dark|welcome-calendar-light|welcome-calendar-dark|welcome-dictation-light|welcome-dictation-dark|detail-transcript-light|detail-transcript-dark|detail-transcript-partial-light|detail-transcript-partial-dark|detail-transcript-no-matches-light|detail-transcript-no-matches-dark|detail-markdown-light|detail-markdown-dark|detail-markdown-conflict-light|detail-markdown-conflict-dark|detail-notes-light|detail-notes-dark|copy-failure-long-light|copy-failure-long-dark|copy-failure-pathological-light|copy-failure-pathological-dark|settings-about-light|settings-about-dark|settings-general-light|settings-general-dark|settings-listening-light|settings-listening-dark|settings-dictation-light|settings-dictation-dark|settings-assistant-unavailable-light|settings-assistant-unavailable-dark|settings-keyboard-light|settings-keyboard-dark|settings-privacy-light|settings-privacy-dark|settings-updates-light|settings-updates-dark|storage-light|storage-dark|storage-long-light|storage-long-dark|quick-note-light|quick-note-dark|quick-note-filled-light|quick-note-filled-dark|quick-note-codex-light|quick-note-codex-dark|quick-note-conflict-light|quick-note-conflict-dark|quick-note-conflict-codex-light|quick-note-conflict-codex-dark|quick-note-assistant-unavailable-light|quick-note-assistant-unavailable-dark|quick-note-assistant-running-light|quick-note-assistant-running-dark|quick-note-assistant-stopping-light|quick-note-assistant-stopping-dark|quick-note-filing-copy-retained-light|quick-note-filing-copy-retained-dark|draft-recovery-light|draft-recovery-dark|draft-recovery-minimum-light|draft-recovery-long-light|draft-recovery-invalid-light|draft-recovery-stale-light|draft-recovery-unavailable-light|recovery-section-light|recovery-section-dark|recovery-section-minimum-light|recovery-section-failure-light|recovery-section-failure-dark|recovery-section-library-light|library-draft-recovery-light|library-draft-recovery-dark|prep-light|prep-dark|ask-light|ask-dark|ask-answer-light|ask-answer-dark|ask-refusal-light|ask-refusal-dark|ask-long-light|ask-long-dark|ask-long-question-light|ask-long-question-dark|palette-light|palette-dark|floating-notes-light|floating-notes-dark|library-recording-light|library-recording-dark|live-follow-light|live-follow-dark|live|notch|external-panel|panel-compact-idle|panel-compact-flagged|panel-hidden-recording|panel-hidden-paused|summary-light|summary-dark|summary-regeneration-light|summary-regeneration-dark|notes-light|notes-dark|detected-light|detected-dark|detected-compact-light|detected-compact-dark|processing-light|processing-dark|completed-light|completed-dark|failure-light|failure-dark] [--interactive]\n".utf8)
+                Data("Usage: NookSnapshot <output.png> [library|library-light|library-compact|welcome-light|welcome-dark|welcome-permission-light|welcome-permission-dark|welcome-ready-light|welcome-ready-dark|welcome-microphone-light|welcome-microphone-dark|welcome-speech-light|welcome-speech-dark|welcome-calendar-light|welcome-calendar-dark|welcome-dictation-light|welcome-dictation-dark|detail-transcript-light|detail-transcript-dark|detail-transcript-partial-light|detail-transcript-partial-dark|detail-transcript-no-matches-light|detail-transcript-no-matches-dark|detail-markdown-light|detail-markdown-dark|detail-markdown-conflict-light|detail-markdown-conflict-dark|detail-summary-pending-light|detail-summary-pending-dark|detail-summary-running-light|detail-summary-running-dark|detail-notes-light|detail-notes-dark|copy-failure-long-light|copy-failure-long-dark|copy-failure-pathological-light|copy-failure-pathological-dark|settings-about-light|settings-about-dark|settings-general-light|settings-general-dark|settings-listening-light|settings-listening-dark|settings-dictation-light|settings-dictation-dark|settings-assistant-unavailable-light|settings-assistant-unavailable-dark|settings-keyboard-light|settings-keyboard-dark|settings-privacy-light|settings-privacy-dark|settings-updates-light|settings-updates-dark|storage-light|storage-dark|storage-long-light|storage-long-dark|quick-note-light|quick-note-dark|quick-note-filled-light|quick-note-filled-dark|quick-note-codex-light|quick-note-codex-dark|quick-note-conflict-light|quick-note-conflict-dark|quick-note-conflict-codex-light|quick-note-conflict-codex-dark|quick-note-assistant-unavailable-light|quick-note-assistant-unavailable-dark|quick-note-assistant-running-light|quick-note-assistant-running-dark|quick-note-assistant-stopping-light|quick-note-assistant-stopping-dark|quick-note-filing-copy-retained-light|quick-note-filing-copy-retained-dark|draft-recovery-light|draft-recovery-dark|draft-recovery-minimum-light|draft-recovery-long-light|draft-recovery-invalid-light|draft-recovery-stale-light|draft-recovery-unavailable-light|recovery-section-light|recovery-section-dark|recovery-section-minimum-light|recovery-section-failure-light|recovery-section-failure-dark|recovery-section-library-light|library-draft-recovery-light|library-draft-recovery-dark|prep-light|prep-dark|ask-light|ask-dark|ask-answer-light|ask-answer-dark|ask-refusal-light|ask-refusal-dark|ask-long-light|ask-long-dark|ask-long-question-light|ask-long-question-dark|palette-light|palette-dark|floating-notes-light|floating-notes-dark|library-recording-light|library-recording-dark|live-follow-light|live-follow-dark|live|notch|external-panel|panel-compact-idle|panel-compact-flagged|panel-hidden-recording|panel-hidden-paused|summary-light|summary-dark|summary-regeneration-light|summary-regeneration-dark|notes-light|notes-dark|detected-light|detected-dark|detected-compact-light|detected-compact-dark|processing-light|processing-dark|completed-light|completed-dark|failure-light|failure-dark] [--interactive]\n".utf8)
             )
             Foundation.exit(64)
         }
@@ -313,6 +313,7 @@ struct SnapshotRenderer {
         let content: AnyView
         var validateConflictFixture: (@MainActor () throws -> Void)?
         var validateFilingFixture: (@MainActor () throws -> Void)?
+        var validateSummaryReviewFixture: (@MainActor () throws -> Void)?
         switch mode {
         case "copy-failure-long-light", "copy-failure-long-dark",
              "copy-failure-pathological-light", "copy-failure-pathological-dark":
@@ -354,6 +355,46 @@ struct SnapshotRenderer {
             )
         case _ where mode.hasPrefix("detail"):
             var detailNote = roundTripped
+            if mode.contains("fallback") {
+                detailNote.summary = SummaryService.fallbackInsights(
+                    transcript: detailNote.transcript, fallbackTitle: detailNote.title
+                ).summary
+                detailNote.summaryPending = .initial
+                detailNote.summaryProvenance = .transcriptHighlights
+                detailNote.keyPoints = []
+                detailNote.decisions = []
+                detailNote.actionItems = []
+                if mode.contains("extraction") {
+                    detailNote.summary = SummaryFallback.partialExtractionNotice
+                    detailNote.summaryProvenance = .partialExtraction
+                    detailNote.keyPoints = ["A synthetic retained point from the earlier pass."]
+                }
+                detailNote = try store.save(detailNote)
+            }
+            if mode.contains("summary-questions") {
+                detailNote.title = "Synthetic rollout review"
+                detailNote.summaryRecipe = .standup
+                detailNote.summary = "The release plan is ready for review. The team still needs to confirm its launch budget."
+                detailNote.keyPoints = []
+                detailNote.decisions = []
+                detailNote.actionItems = []
+                detailNote.openQuestions = ["The launch budget is still unclear.", "We still need to determine who will review the accessibility results."]
+                detailNote.personalNotes = "Keep the original meeting transcript as the source of truth."
+                detailNote = try store.save(detailNote)
+            }
+            var summarySession: SummaryRegenerationSession?
+            if mode.contains("summary-pending") || mode.contains("summary-running") || mode.contains("fallback-running") {
+                detailNote.summaryPending = .initial
+                detailNote = try store.save(detailNote)
+                if mode.contains("summary-running") || mode.contains("fallback-running") {
+                    store.summarySessions.enrich(detailNote, purpose: .initial, store: store, runner: { _, onStage in
+                        await onStage?(.condensing(pass: 2, part: 3, total: 12))
+                        try? await Task.sleep(for: .seconds(30))
+                        return .retained(reason: .modelBusy)
+                    })
+                }
+                summarySession = store.summarySessions.session(for: detailNote)
+            }
             let hasNoMatchingTranscript = mode.contains("no-matches")
             if mode.contains("partial") || hasNoMatchingTranscript {
                 detailNote.audioStart = 14
@@ -366,11 +407,15 @@ struct SnapshotRenderer {
                 ))
             }
             let hasSaveConflict = mode.contains("conflict")
-            canvasSize = hasSaveConflict
-                ? CGSize(width: 900, height: 580)
-                : (hasNoMatchingTranscript
-                    ? CGSize(width: 560, height: 580)
-                    : CGSize(width: 1_100, height: 700))
+            if mode.contains("summary-questions") || mode.contains("fallback") {
+                canvasSize = CGSize(width: mode.contains("minimum") ? 560 : 820, height: 1_050)
+            } else {
+                canvasSize = hasSaveConflict
+                    ? CGSize(width: 900, height: 580)
+                    : (hasNoMatchingTranscript
+                        ? CGSize(width: 560, height: 580)
+                        : CGSize(width: 1_100, height: 700))
+            }
             let initialTab: DetailTab = mode.contains("transcript")
                 ? .transcript
                 : (mode.contains("markdown") ? .markdown : .notes)
@@ -412,7 +457,8 @@ struct SnapshotRenderer {
                     MeetingDetailView(
                         note: detailNote,
                         initialTab: initialTab,
-                        initialTranscriptSearch: hasNoMatchingTranscript ? "This phrase is absent" : ""
+                        initialTranscriptSearch: hasNoMatchingTranscript ? "This phrase is absent" : "",
+                        summarySession: summarySession
                     )
                     .frame(width: hasSaveConflict ? 595 : canvasSize.width)
                 }
@@ -558,6 +604,75 @@ struct SnapshotRenderer {
                     .frame(width: canvasSize.width, height: canvasSize.height)
                     .environment(\.colorScheme, snapshotColorScheme)
                     .transaction { $0.disablesAnimations = true }
+            )
+        case "summary-item-review-light", "summary-item-review-dark",
+             "summary-item-removal-light", "summary-item-removal-dark",
+             "summary-item-stale-light", "summary-item-stale-dark",
+             "summary-item-empty-light", "summary-item-empty-dark":
+            canvasSize = CGSize(width: 600, height: 680)
+            let quote = "We agreed to launch the coastal pilot on Friday."
+            var original = roundTripped
+            original.keyPoints = ["The coastal pilot will launch Monday."]
+            original.transcript = [.init(startTime: 42, duration: 8, text: quote, source: .system)]
+            let saved = try store.save(original)
+            markdownDraft.prepare(for: saved, store: store)
+            personalNotesDraft.prepare(for: saved, store: store)
+            guard let item = SummaryReviewItem.list(.keyPoint, index: 0, in: saved),
+                  let file = saved.fileURL else { throw SnapshotError.fixtureValidationFailed }
+            let empty = mode.contains("empty")
+            let session = SummaryItemReviewSession(note: saved, item: item, generation: store.storageGeneration,
+                ranker: { _, transcript in empty ? [] : SummaryEvidence.passages(in: transcript) },
+                generator: { _ in .init(replacement: quote, quote: quote) })
+            session.load()
+            try waitForSnapshotCondition { !session.isLoading }
+            if mode.contains("removal") {
+                session.previewRemoval()
+            } else if !empty {
+                session.propose(passage: session.passages.first, feedback: "The launch day is wrong.")
+                try waitForSnapshotCondition { !session.isGenerating }
+                guard session.proposal != nil else { throw SnapshotError.fixtureValidationFailed }
+            }
+            if mode.contains("stale") {
+                var changed = saved
+                changed.personalNotes += " A newer synthetic edit."
+                _ = try store.save(changed)
+            }
+            let bytes = try Data(contentsOf: file)
+            validateSummaryReviewFixture = {
+                guard try Data(contentsOf: file) == bytes, session.saved == nil else {
+                    throw SnapshotError.fixtureValidationFailed
+                }
+            }
+            content = AnyView(
+                SummaryItemReviewView(session: session, initialPassageID: session.passages.first?.id,
+                                     initialFeedback: empty ? "" : "The launch day is wrong.")
+                    .environmentObject(store)
+                    .environmentObject(markdownDraft)
+                    .environmentObject(personalNotesDraft)
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .environment(\.colorScheme, snapshotColorScheme)
+                    .transaction { $0.disablesAnimations = true }
+            )
+        case "fallback-card-minimum-light", "fallback-card-minimum-dark":
+            canvasSize = CGSize(width: 300, height: 250)
+            content = AnyView(
+                SummaryFallbackCard(provenance: .transcriptHighlights, isRunning: false, canRetry: true, retry: {})
+                    .padding(12)
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .environment(\.colorScheme, snapshotColorScheme)
+            )
+        case "summary-recipe-minimum-light", "summary-recipe-minimum-dark":
+            canvasSize = CGSize(width: 300, height: 240)
+            content = AnyView(
+                ZStack {
+                    NookAmbientBackground()
+                    SummaryRecipeControl(recipe: .constant(.interview), isEnabled: true, regenerate: {})
+                        .padding(16)
+                }
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .environment(\.colorScheme, snapshotColorScheme)
             )
         case "summary-regeneration-light", "summary-regeneration-dark":
             canvasSize = CGSize(width: 380, height: 180)
@@ -933,6 +1048,7 @@ struct SnapshotRenderer {
         // the refused draft or clear its actual controller error before capture.
         try validateConflictFixture?()
         try validateFilingFixture?()
+        try validateSummaryReviewFixture?()
         if staticPanelModes.contains(mode) {
             let expectsFlag = mode == "panel-compact-flagged"
             guard meeting.phase.isRecording,

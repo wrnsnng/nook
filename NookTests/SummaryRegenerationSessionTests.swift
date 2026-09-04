@@ -29,6 +29,155 @@ struct SummaryRegenerationSessionTests {
     }
 
     @Test
+    func pendingSummarySurvivesMarkdownRelaunchWithoutStartingAModel() throws {
+        var original = note()
+        original.summaryPending = .initial
+        let markdown = MarkdownCodec.encode(original)
+        #expect(markdown.contains("summary_status: pending"))
+        let reopened = try #require(MarkdownCodec.decode(markdown, fileURL: original.fileURL))
+        #expect(reopened.summaryPending == .initial)
+        #expect(reopened.transcript.map(\.text) == original.transcript.map(\.text))
+        let session = SummaryRegenerationSession()
+        #expect(!session.isRunning)
+        #expect(session.statusMessage(summaryPending: reopened.summaryPending != nil)?.contains("Retry") == true)
+        original.summaryPending = nil
+        #expect(!MarkdownCodec.encode(original).contains("summary_status:"))
+        #expect(MarkdownCodec.decode(MarkdownCodec.encode(original))?.summaryPending == nil)
+    }
+
+    @Test
+    func aSuccessfulWriteUpCannotEraseThePartialRecordingWarning() {
+        var original = note()
+        original.summary = MeetingCoordinator.liveCaptionNoteMarker + "\n\nOld transcript highlights."
+        let updated = SummaryRegenerator.preservingRecoveryNotice("A new write-up.", from: original)
+        #expect(updated.hasPrefix(MeetingCoordinator.liveCaptionNoteMarker))
+        #expect(updated.hasSuffix("A new write-up."))
+        #expect(!updated.contains("Old transcript highlights."))
+        #expect(SummaryRegenerator.preservingRecoveryNotice("A new write-up.", from: note()) == "A new write-up.")
+    }
+
+    @Test(arguments: [SummaryRegenerationSession.Purpose.initial, .appended])
+    func backgroundEnrichmentKeepsConcurrentEditsAndMarksOnlySuccessFinished(
+        purpose: SummaryRegenerationSession.Purpose
+    ) async throws {
+        var original = note()
+        original.summaryPending = .initial
+        original.actionItems = ["Send the report"]
+        let library = RegenerationTestLibrary(folder: folder, notes: [original])
+        let runner = ControlledRegenerationRunner()
+        defer { runner.finishAll() }
+        let session = SummaryRegenerationSession(runner: runner.run)
+        let task = try #require(session.start(
+            note: original, purpose: purpose, library: library.read, commit: library.commit
+        ))
+        await runner.waitForRequests(1)
+        library.notes[0].title = "User title during processing"
+        library.notes[0].completedActionItems = ["Send the report"]
+        library.notes[0].extraSections = [.init(heading: "## Private context", body: "Synthetic words", anchor: nil)]
+        var output = original
+        output.title = "Model title"
+        output.summary = "A grounded write-up"
+        output.actionItems = ["Review the plan"]
+        runner.finish(0, with: .regenerated(output))
+        await task.value
+        let saved = try #require(library.commits.first)
+        #expect(saved.summaryPending == nil)
+        #expect(saved.title == "User title during processing")
+        #expect(saved.summary == "A grounded write-up")
+        #expect(saved.actionItems == ["Send the report"])
+        #expect(saved.completedActionItems == ["Send the report"])
+        #expect(saved.transcript == original.transcript)
+        #expect(saved.extraSections == library.notes[0].extraSections)
+    }
+
+    @Test
+    func appendedEnrichmentPreservesExistingActionsAlongsideNewOnes() async throws {
+        var original = note()
+        original.summaryPending = .appended
+        original.actionItems = ["Existing follow-up"]
+        // The retry happens after a file round-trip, with no remembered job.
+        original = try #require(MarkdownCodec.decode(MarkdownCodec.encode(original), fileURL: original.fileURL))
+        #expect(original.summaryPending == .appended)
+        let library = RegenerationTestLibrary(folder: folder, notes: [original])
+        var output = original
+        output.actionItems = ["New follow-up"]
+        let generated = output
+        let session = SummaryRegenerationSession(runner: { _, _ in .regenerated(generated) })
+        let task = try #require(session.start(
+            note: original, purpose: .forRetry(of: original), library: library.read, commit: library.commit
+        ))
+        await task.value
+        #expect(library.notes[0].actionItems == ["Existing follow-up", "New follow-up"])
+        #expect(library.notes[0].summaryPending == nil)
+    }
+
+    @Test(arguments: [SummaryService.FailureReason.modelBusy, .timedOut, .ungrounded])
+    func aFailedBackgroundSummaryRetainsTheExactSavedNoteAndOffersRetry(
+        reason: SummaryService.FailureReason
+    ) async throws {
+        var original = note()
+        original.summaryPending = .initial
+        let library = RegenerationTestLibrary(folder: folder, notes: [original])
+        let session = SummaryRegenerationSession(runner: { _, _ in .retained(reason: reason) })
+        let task = try #require(session.start(
+            note: original, purpose: .initial, library: library.read, commit: library.commit
+        ))
+        await task.value
+        #expect(library.commits.isEmpty)
+        #expect(library.notes == [original])
+        #expect(!session.isRunning)
+        #expect(session.statusMessage(summaryPending: true) == RegenerationCopy.retainedMessage(for: reason))
+    }
+
+    @Test
+    func aDeadlineReleasesTheSavedNoteEvenWhenTheModelNeverCooperates() async throws {
+        var original = note()
+        original.summaryPending = .initial
+        let library = RegenerationTestLibrary(folder: folder, notes: [original])
+        let runner = ControlledRegenerationRunner()
+        defer { runner.finishAll() }
+        let session = SummaryRegenerationSession(runner: runner.run, timeout: 0.05)
+        let task = try #require(session.start(
+            note: original, purpose: .initial, library: library.read, commit: library.commit
+        ))
+        await runner.waitForRequests(1)
+        await task.value
+        #expect(!session.isRunning)
+        guard case .retained(.timedOut) = session.completion?.result else {
+            Issue.record("A noncooperative model must time out without losing the note")
+            return
+        }
+        for index in runner.requests.indices {
+            await runner.report(.writingUp, request: index)
+            runner.finish(index, with: generated(from: original))
+        }
+        #expect(session.stage == nil)
+        #expect(library.commits.isEmpty)
+        #expect(library.notes == [original])
+    }
+
+    @Test
+    func theSameFileSharesItsSessionAndAmbiguousOrRemovedFilesCancelIt() async throws {
+        let original = note()
+        let library = RegenerationTestLibrary(folder: folder, notes: [original])
+        let runner = ControlledRegenerationRunner()
+        defer { runner.finishAll() }
+        let sessions = NoteSummarySessions(makeSession: { SummaryRegenerationSession(runner: runner.run) })
+        let session = sessions.session(for: original)
+        let task = try #require(session.start(note: original, library: library.read, commit: library.commit))
+        await runner.waitForRequests(1)
+        #expect(sessions.session(for: original) === session)
+        sessions.reconcile(notes: [original], duplicateIDs: [])
+        #expect(session.isRunning)
+        sessions.reconcile(notes: [original], duplicateIDs: [original.id])
+        #expect(!session.isRunning)
+        await task.value
+        runner.finish(0, with: generated(from: original))
+        #expect(library.commits.isEmpty)
+        #expect(sessions.session(for: original) !== session)
+    }
+
+    @Test
     func cancellationBeforeTheTaskStartsNeverInvokesTheRunner() async throws {
         let original = note()
         let library = RegenerationTestLibrary(folder: folder, notes: [original])

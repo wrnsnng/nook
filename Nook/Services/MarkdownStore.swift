@@ -11,6 +11,9 @@ struct MarkdownLoadIssue: Identifiable, Hashable, Sendable {
 
 @MainActor
 final class MarkdownStore: ObservableObject {
+    /// The store outlives every detail pane. Navigating away must not abandon
+    /// a write-up, and reopening the file must find the same cancellable job.
+    let summarySessions = NoteSummarySessions()
     typealias LoadPayload = (
         notes: [MeetingNote],
         issues: [MarkdownLoadIssue]
@@ -26,6 +29,7 @@ final class MarkdownStore: ObservableObject {
             // every sidebar row or meter-driven render.
             let counts = Dictionary(grouping: notes, by: \.id)
             duplicateNoteIDs = Set(counts.compactMap { $0.value.count > 1 ? $0.key : nil })
+            summarySessions.reconcile(notes: notes, duplicateIDs: duplicateNoteIDs)
         }
     }
     private(set) var duplicateNoteIDs: Set<UUID> = []
@@ -50,6 +54,7 @@ final class MarkdownStore: ObservableObject {
         willSet {
             if newValue.standardizedFileURL != storageURL.standardizedFileURL {
                 storageGeneration &+= 1
+                summarySessions.removeAll()
                 onStorageDirectoryWillChange?()
             }
         }
