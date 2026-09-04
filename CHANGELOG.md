@@ -6,8 +6,6 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
-## Unreleased
-
 - Recordings, recovered recordings and live-caption rescue notes save their
   words before summary enrichment. Saved notes show background progress,
   non-destructive cancellation and Retry without hiding the transcript or

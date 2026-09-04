@@ -62,6 +62,10 @@ Folder-generation changes, deletion and duplicate IDs invalidate it. A bounded
 revision conflicts; appended summaries retain existing tracked actions.
 Cancelling its returned task also clears the running state and permits Retry.
 Cleanup checks the request identity so an old task cannot clear a newer run.
+All summary merge paths share exact transcript-input comparison: count, wording,
+timing, duration and source must match; presentation-only segment UUIDs need not.
+This keeps a valid initial/appended write-up from being silently discarded after
+the session accepts the input and clears its pending marker.
 
 `summary_status: pending` (or `pending-append`) is minimal durable state in the
 ordinary Markdown file. The appended value selects the action-preserving merge

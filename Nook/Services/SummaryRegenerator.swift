@@ -238,14 +238,20 @@ enum SummaryRegenerator {
     /// Transcript wording/timing/source and the bounded guidance actually sent
     /// to the summarizer do. Never label old-input output as a fresh write-up.
     static func hasSameGenerationInput(_ starting: MeetingNote, _ latest: MeetingNote) -> Bool {
-        guard starting.transcript.count == latest.transcript.count,
-              zip(starting.transcript, latest.transcript).allSatisfy({ left, right in
-                  left.startTime == right.startTime && left.duration == right.duration
-                    && left.source == right.source && left.text.utf8.elementsEqual(right.text.utf8)
-              }) else { return false }
+        guard hasSameTranscriptInput(starting.transcript, latest.transcript) else { return false }
         return SummaryAttention(note: starting).rendered.utf8.elementsEqual(
             SummaryAttention(note: latest).rendered.utf8
         )
+    }
+
+    /// Initial, appended and explicit regeneration must agree on source
+    /// equivalence. Segment row IDs are presentation identity, not model input.
+    static func hasSameTranscriptInput(_ starting: [TranscriptSegment], _ latest: [TranscriptSegment]) -> Bool {
+        starting.count == latest.count
+            && zip(starting, latest).allSatisfy { left, right in
+                left.startTime == right.startTime && left.duration == right.duration
+                    && left.source == right.source && left.text.utf8.elementsEqual(right.text.utf8)
+            }
     }
 
     private static func exactStringsEqual(_ left: [String], _ right: [String]) -> Bool {

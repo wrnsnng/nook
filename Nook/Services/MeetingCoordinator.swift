@@ -1197,11 +1197,10 @@ final class MeetingCoordinator: ObservableObject {
     private static func exactTranscriptMatches(
         _ left: [TranscriptSegment], _ right: [TranscriptSegment]
     ) -> Bool {
-        // Preserve the existing identity/timing/source check as well as exact
-        // wording: a normalization edit is still a changed generation input.
-        left == right && zip(left, right).allSatisfy {
-            $0.text.utf8.elementsEqual($1.text.utf8)
-        }
+        // Use the same source comparison as the summary session. Rejecting
+        // only a changed row UUID here could silently drop a valid write-up
+        // after that session accepted its input and cleared the pending flag.
+        SummaryRegenerator.hasSameTranscriptInput(left, right)
     }
 
     /// Reads the durable Markdown itself rather than trusting an in-memory
