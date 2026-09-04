@@ -15,6 +15,10 @@ final class QuickNoteController: ObservableObject {
         didSet {
             guard !text.utf8.elementsEqual(oldValue.utf8) else { return }
             textRevision &+= 1
+            voiceCorrection = nil
+            voiceUndo = nil
+            lastDictatedEdit = nil
+            voiceStatus = nil
             if isShowingEmptyDraftValidation,
                text.unicodeScalars.contains(where: {
                    !CharacterSet.whitespacesAndNewlines.contains($0)
@@ -37,6 +41,15 @@ final class QuickNoteController: ObservableObject {
     /// count, suggestions are advisory and may catch up after the words save.
     @Published private(set) var taskSuggestion: QuickCaptureTaskParser.Suggestion?
     @Published private(set) var isPresenting = false
+    @Published var filingRequest: QuickNoteFilingRequest?
+    @Published private(set) var voiceCorrection: VoiceCorrectionProposal?
+    @Published private(set) var voiceStatus: String?
+    @Published private(set) var isReviewingVoiceCorrection = false
+    @Published private var voiceUndo: DictatedEdit?
+    private var lastDictatedEdit: DictatedEdit?
+    private var voicePresentationID: UUID?
+    private var voiceLibraryGeneration: Int?
+    private let announceVoiceStatus: (@MainActor (String) -> Void)?
     /// Only an explicit presentation requests the keyboard. Routine text,
     /// statistics, and toolbar updates must leave the user's chosen focus alone.
     @Published private(set) var editorFocusToken = 0
@@ -262,6 +275,10 @@ final class QuickNoteController: ObservableObject {
         panel?.isKeyWindow == true
     }
 
+    var isDictationSurfaceActive: Bool {
+        isFrontmost && !isReviewingVoiceCorrection && filingRequest == nil
+    }
+
     /// Empty visible text can still own an autosaved note after Undo. Discard
     /// removes that owned file, while a new pad with no text has nothing to do.
     var canDiscard: Bool {
@@ -334,9 +351,11 @@ final class QuickNoteController: ObservableObject {
         discardConfirmation: (@MainActor () -> Bool)? = nil,
         suggestTask: (@Sendable (String) async -> QuickCaptureTaskParser.Suggestion?)? = nil,
         defaults: UserDefaults = .standard,
-        openFilingLibrary: (@MainActor () -> Void)? = nil
+        openFilingLibrary: (@MainActor () -> Void)? = nil,
+        announceVoiceStatus: (@MainActor (String) -> Void)? = nil
     ) {
         self.store = store
+        self.announceVoiceStatus = announceVoiceStatus
         self.defaults = defaults
         self.recovery = recovery
         self.openFilingLibrary = openFilingLibrary ?? { AppModel.shared.openLibrary() }
@@ -531,6 +550,10 @@ final class QuickNoteController: ObservableObject {
 
     /// Appends a finalized chunk while the user is still speaking.
     func append(_ chunk: String) {
+        if chunk == "\n" || chunk == "\n\n" {
+            text += chunk
+            return
+        }
         let trimmed = chunk.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         if text.isEmpty {
@@ -542,11 +565,120 @@ final class QuickNoteController: ObservableObject {
         }
     }
 
+    /// Literal speech enters the normal autosave path before a correction is
+    /// offered. Dismissing a proposal therefore cannot throw away what was heard.
+    @discardableResult
+    func receiveDictation(_ originalWords: String, inserting spoken: String, allowsCorrections: Bool = true) -> Bool {
+        let intent = allowsCorrections ? VoiceCorrectionIntent.parse(originalWords) : nil
+        let previous = lastDictatedEdit
+        let before = text
+        append(intent == nil ? spoken : originalWords)
+        guard !text.utf8.elementsEqual(before.utf8) else { return intent != nil }
+        lastDictatedEdit = DictatedEdit(before: before, after: text)
+        voicePresentationID = presentationID
+        voiceLibraryGeneration = store.storageGeneration
+        if let intent {
+            voiceCorrection = VoiceCorrectionProposal.make(
+                intent: intent, utterance: originalWords, before: before,
+                literalText: text, previous: previous
+            )
+            reportVoiceStatus(voiceCorrection == nil
+                ? "Words kept. There is no unchanged dictated phrase or unambiguous previous list item to correct."
+                : "Correction proposed. Your words are kept until you review and apply it.")
+        } else if spoken == "\n" || spoken == "\n\n" {
+            voiceUndo = DictatedEdit(before: before, after: text)
+            reportVoiceStatus(spoken == "\n" ? "New line inserted. Undo is available." : "New paragraph inserted. Undo is available.")
+        } else {
+            // Announce insertion without filling the small pad with a standing
+            // success banner for every settled phrase.
+            announceVoice("Dictated words inserted.")
+        }
+        return intent != nil
+    }
+
+    func isCurrentVoiceCorrection(_ proposal: VoiceCorrectionProposal) -> Bool {
+        voiceCorrection?.id == proposal.id && voicePresentationID == presentationID
+            && voiceLibraryGeneration == store.storageGeneration
+            && text.utf8.elementsEqual(proposal.expectedText.utf8)
+    }
+
+    func beginVoiceCorrectionReview(_ proposal: VoiceCorrectionProposal) -> Bool {
+        guard filingRequest == nil, !isReviewingVoiceCorrection,
+              isCurrentVoiceCorrection(proposal) else { return false }
+        // Review is an explicit pause. A recognizer's late callback cannot
+        // change the text underneath a pending destructive decision.
+        isContinuous = false
+        onDismissRequested?()
+        isReviewingVoiceCorrection = true
+        return true
+    }
+
+    func endVoiceCorrectionReview() {
+        isReviewingVoiceCorrection = false
+        editorFocusToken &+= 1
+    }
+
+    func keepVoiceWords(_ proposal: VoiceCorrectionProposal) {
+        guard voiceCorrection?.id == proposal.id else { return }
+        voiceCorrection = nil
+        reportVoiceStatus("Correction cancelled. Your dictated words were kept.")
+    }
+
+    @discardableResult
+    func applyVoiceCorrection(_ proposal: VoiceCorrectionProposal, replacement: String) -> Bool {
+        guard isCurrentVoiceCorrection(proposal),
+              let corrected = proposal.correctedText(replacement: replacement) else {
+            reportVoiceStatus("The note changed or replacement words are missing. Your current words were kept.")
+            return false
+        }
+        let before = text
+        guard replaceVoiceText(expected: before, with: corrected, actionName: "Voice Correction") else { return false }
+        voiceUndo = DictatedEdit(before: before, after: corrected)
+        voicePresentationID = presentationID
+        voiceLibraryGeneration = store.storageGeneration
+        reportVoiceStatus("Voice correction applied. Undo is available.")
+        return true
+    }
+
+    var canUndoVoiceCorrection: Bool {
+        guard let voiceUndo else { return false }
+        return voicePresentationID == presentationID && voiceLibraryGeneration == store.storageGeneration
+            && text.utf8.elementsEqual(voiceUndo.after.utf8)
+    }
+
+    func undoVoiceCorrection() {
+        guard canUndoVoiceCorrection, let edit = voiceUndo else { return }
+        guard replaceVoiceText(expected: edit.after, with: edit.before, actionName: "Restore Dictated Words") else { return }
+        reportVoiceStatus("Voice correction undone. Your original words were restored.")
+    }
+
+    private func replaceVoiceText(expected: String, with replacement: String, actionName: String) -> Bool {
+        switch editorPort.replaceText(expected: expected, with: replacement, actionName: actionName) {
+        case .refused:
+            reportVoiceStatus("Finish editing or composing text before applying this correction. Your words were kept.")
+            return false
+        case .applied, .unavailable:
+            text = replacement
+            return true
+        }
+    }
+
+    private func reportVoiceStatus(_ status: String) {
+        voiceStatus = status
+        announceVoice(status)
+    }
+
+    private func announceVoice(_ status: String) {
+        if let announceVoiceStatus { announceVoiceStatus(status) }
+        else { editorPort.announce(status) }
+    }
+
     /// Swaps the words just dictated for their rewritten form.
     ///
     /// Matched by content rather than position, so anything the user typed
     /// themselves in the meantime is left exactly where it is.
-    func replaceLastDictation(with rewritten: String, spoken: String) {
+    func replaceLastDictation(with rewritten: String, spoken: String, expectedRevision: Int? = nil) {
+        guard expectedRevision == nil || expectedRevision == textRevision else { return }
         let spoken = spoken.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !spoken.isEmpty, let range = text.range(
             of: spoken,
@@ -567,6 +699,7 @@ final class QuickNoteController: ObservableObject {
             panel?.makeKeyAndOrderFront(nil)
             return
         }
+        filingRequest = nil
         prepareToDismiss()
         hasUnsavedEdits = false
         filingCompletionMessage = nil
@@ -619,7 +752,23 @@ final class QuickNoteController: ObservableObject {
 
     /// Saves and closes, from the pad's own button or its keyboard shortcut.
     func done() {
-        close()
+        requestFiling()
+    }
+
+    /// A close/save request makes filing deliberate without changing autosave.
+    /// Stop live work before presenting choices; Cancel never restarts capture.
+    func requestFiling() {
+        guard filingRequest == nil, !isReviewingVoiceCorrection else { return }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            close()
+            return
+        }
+        prepareToDismiss()
+        filingRequest = QuickNoteFilingRequest(
+            libraryPath: store.storageURL.path,
+            choices: filingChoices,
+            hasOmittedDuplicates: hasOmittedDuplicateNotes
+        )
     }
 
     /// Throws the note away, asking first when there is enough of it to miss.
@@ -642,6 +791,7 @@ final class QuickNoteController: ObservableObject {
     }
 
     func discard() {
+        filingRequest = nil
         if let saved = savedNote {
             guard recoveryLibraryPath == nil
                     || recoveryLibraryPath == Self.libraryPath(store.storageURL),
@@ -804,48 +954,44 @@ final class QuickNoteController: ObservableObject {
         AppModel.shared.openLibrary(noteID: note.id)
     }
 
-    /// Files the pad's words into a meeting note's personal notes instead of
-    /// saving them as their own spoken note.
+    /// Filing is a move, not a copy: autosave may already have written a
+    /// separate spoken note. Commit and verify the destination before moving
+    /// that source to Trash. A partial cleanup leaves a visible retained copy.
     ///
-    /// The buffer joins whatever personal notes exist with a blank line
-    /// between, so neither half is rewritten; the meeting's own transcript and
-    /// summary are untouched. Closing without saving-as-spoken keeps one
-    /// thought in one place rather than two copies.
-    ///
-    /// Filing is a move, not a copy. By the time anybody reaches this menu the
-    /// debounced autosave has usually already written these words as their own
-    /// spoken note, and leaving that file behind made every filed thought
-    /// appear twice in the library.
-    func fileIntoMeeting(_ target: MeetingNote) {
+    /// Meeting/digest text belongs in My notes; a spoken note's entire source
+    /// ends in its body, so appending exact source preserves unknown metadata.
+    @discardableResult
+    func fileIntoNote(_ target: MeetingNote) -> Bool {
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !body.isEmpty else { return }
+        guard !body.isEmpty else { return false }
         // A button may outlive a reload or a folder change. Refuse before
         // saving the pad or resolving its checkpoint, and retain the selected
         // target's original revision for the store's external-edit checks.
         guard recoveryLibraryPath == nil
                 || recoveryLibraryPath == Self.libraryPath(store.storageURL) else {
             message = "This draft belongs to another notes folder. Switch back before filing it. Your words are still here."
-            return
+            return false
         }
         guard !store.isLoading else {
-            message = "The library is refreshing. Wait for it to finish, then choose the meeting again. Your words are still here."
-            return
+            message = "The library is refreshing. Wait for it to finish, then choose the note again. Your words are still here."
+            return false
         }
         guard !store.duplicateNoteIDs.contains(target.id) else {
-            message = "That meeting now shares its note ID with another file. Review the copies in Library before filing. Your words are still here."
-            return
+            message = "That note now shares its note ID with another file. Review the copies in Library before filing. Your words are still here."
+            return false
         }
-        guard target.kind == .meeting,
+        guard target.id != recoveryNoteID,
+              target.libraryIdentity != savedNote?.libraryIdentity,
               let file = target.fileURL, file.isFileURL,
               Self.libraryPath(file.deletingLastPathComponent()) == Self.libraryPath(store.storageURL),
               let current = store.note(matching: target.libraryIdentity),
-              current.kind == .meeting else {
-            message = "That meeting is no longer available in this notes folder. Choose a meeting again. Your words are still here."
-            return
+              current.kind == target.kind else {
+            message = "That note is no longer available in this notes folder. Choose a note again. Your words are still here."
+            return false
         }
         guard let revision = target.fileRevision, current.fileRevision == revision else {
-            message = "That meeting changed after it was offered. Choose it again to review the current file before filing. Your words are still here."
-            return
+            message = "That note changed after it was offered. Choose it again to review the current file before filing. Your words are still here."
+            return false
         }
         // Cancelled before the write, not after: a debounce that fired in
         // between would put the standalone note straight back.
@@ -854,21 +1000,40 @@ final class QuickNoteController: ObservableObject {
         // A move must not trash newer content in the source file while filing
         // an older pad draft. First save through the pad's original revision;
         // a conflict leaves both files and the draft intact.
-        if savedNote != nil, saveIfNeeded() == nil { return }
+        if savedNote != nil, saveIfNeeded() == nil { return false }
         do {
-            let existing = target.personalNotes
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let joined = existing.isEmpty
-                ? body
-                : "\(existing)\n\n\(body)"
-            _ = try store.updatePersonalNotes(joined, for: target)
-            // The words are in the meeting now, so the autosaved copy goes to
+            if target.kind == .spoken {
+                let snapshot = try store.markdownSnapshot(for: target)
+                guard snapshot.revision == revision else {
+                    message = "That note changed after it was offered. Choose it again. Your words are still here."
+                    return false
+                }
+                let separator = snapshot.markdown.hasSuffix("\n\n") ? ""
+                    : (snapshot.markdown.hasSuffix("\n") ? "\n" : "\n\n")
+                let appended = snapshot.markdown + separator + body
+                try store.saveRawMarkdown(appended, for: target, expectedRevision: revision)
+                guard try store.rawMarkdown(for: target).utf8.elementsEqual(appended.utf8) else {
+                    throw MarkdownStoreError.writeVerificationFailed
+                }
+            } else {
+                let existing = target.personalNotes
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let joined = existing.isEmpty ? body : "\(existing)\n\n\(body)"
+                _ = try store.updatePersonalNotes(joined, for: target)
+            }
+            // The words are in the destination now, so the autosaved copy goes to
             // the Trash exactly as discarding it would send it there.
             var hasStrandedCopy = false
-            if let autosaved = savedNote,
-               !store.delete(autosaved) {
-                hasStrandedCopy = true
+            if let autosaved = savedNote {
+                let directory = store.storageURL
+                let generation = store.storageGeneration
+                hasStrandedCopy = !store.delete(autosaved) {
+                    try store.validateMergeSource(
+                        autosaved, directory: directory, generation: generation
+                    )
+                }
             }
+            filingRequest = nil
             recovery?.resolve(recoveryDraftID)
             // The completed filing must not be replayed, and a new thought
             // must never reuse the old copy's UUID or resolved checkpoint.
@@ -892,37 +1057,40 @@ final class QuickNoteController: ObservableObject {
                 // Done/Close remain available, but a partial success must not
                 // dismiss its own explanation before the user can read it.
                 panel?.makeKeyAndOrderFront(nil)
-                return
+                return true
             }
             filingCompletionMessage = nil
             isPresenting = false
             panel?.orderOut(nil)
             panel = nil
+            return true
         } catch {
-            message = "Couldn’t file into that meeting: \(error.localizedDescription)"
+            message = "Couldn’t file into that note: \(error.localizedDescription)"
+            return false
         }
     }
 
-    /// Meetings the filing menu can offer, newest first. Apply the exclusion
-    /// before the limit so copied IDs cannot crowd out usable destinations.
-    var recentMeetingTargets: [MeetingNote] {
+    /// Every unambiguous destination in this library, newest first. The pad's
+    /// own autosaved note is not an append target and can never trash itself.
+    var availableFilingTargets: [MeetingNote] {
         let directory = store.storageURL.standardizedFileURL
         return store.notes.filter {
-            $0.kind == .meeting && !store.duplicateNoteIDs.contains($0.id)
+            $0.id != recoveryNoteID && $0.libraryIdentity != savedNote?.libraryIdentity
+                && !store.duplicateNoteIDs.contains($0.id)
                 && $0.fileURL?.isFileURL == true
                 && $0.fileURL?.deletingLastPathComponent().standardizedFileURL == directory
         }.sorted {
             if $0.startedAt != $1.startedAt { return $0.startedAt > $1.startedAt }
             return ($0.libraryIdentity.filePath ?? "") < ($1.libraryIdentity.filePath ?? "")
-        }.prefix(5).map { $0 }
+        }
     }
 
-    var hasOmittedDuplicateMeetings: Bool {
-        store.notes.contains { $0.kind == .meeting && store.duplicateNoteIDs.contains($0.id) }
+    var hasOmittedDuplicateNotes: Bool {
+        store.notes.contains { store.duplicateNoteIDs.contains($0.id) }
     }
 
     var filingChoices: [QuickNoteFilingChoice] {
-        QuickNoteFilingChoice.choices(for: recentMeetingTargets)
+        QuickNoteFilingChoice.choices(for: availableFilingTargets)
     }
 
     /// Reviewing a shared ID must remain possible even if saving this pad is
@@ -1155,7 +1323,9 @@ final class QuickNoteController: ObservableObject {
             self?.close()
         }
         windowDelegate.onShouldClose = { [weak self] in
-            self?.canClose() ?? true
+            guard let self else { return true }
+            self.requestFiling()
+            return false
         }
         // The controller can be instantiated without the full app in tests,
         // so the production dictation dependency is attached only when a real
@@ -1179,6 +1349,10 @@ final class QuickNoteController: ObservableObject {
         // provider is allowed to ignore cancellation.
         requestAssistantStop()
         presentationID = UUID()
+        voiceCorrection = nil
+        voiceUndo = nil
+        lastDictatedEdit = nil
+        voiceStatus = nil
         textRevision &+= 1
         isContinuous = false
         onDismissRequested?()
@@ -1186,6 +1360,10 @@ final class QuickNoteController: ObservableObject {
 
     private func beginPresentation() {
         presentationID = UUID()
+        voiceCorrection = nil
+        voiceUndo = nil
+        lastDictatedEdit = nil
+        voiceStatus = nil
         textRevision &+= 1
     }
 
@@ -1226,6 +1404,10 @@ final class QuickNoteController: ObservableObject {
     }
 
     func libraryWillChange() {
+        voiceCorrection = nil
+        voiceUndo = nil
+        lastDictatedEdit = nil
+        voiceStatus = nil
         if !text.isEmpty || savedNote != nil {
             if recoveryLibraryPath == nil {
                 recoveryLibraryPath = Self.libraryPath(store.storageURL)
@@ -1282,6 +1464,13 @@ private struct QuickNoteAnalysisRequest: Sendable {
     let knownCount: Int?
 }
 
+struct QuickNoteFilingRequest: Identifiable {
+    let id = UUID()
+    let libraryPath: String
+    let choices: [QuickNoteFilingChoice]
+    let hasOmittedDuplicates: Bool
+}
+
 /// Match the caption people actually see, including the date's minute-level
 /// formatting. Distinct files with the same caption need their filename too.
 struct QuickNoteFilingChoice: Identifiable {
@@ -1290,7 +1479,7 @@ struct QuickNoteFilingChoice: Identifiable {
     let disambiguatingFilename: String?
 
     var id: LibraryNoteIdentity { note.libraryIdentity }
-    var title: String { note.title.isEmpty ? "Untitled meeting" : note.title }
+    var title: String { note.title.isEmpty ? "Untitled note" : note.title }
     var accessibilityLabel: String {
         let destination = "Add to \(title), \(dateLabel)"
         return disambiguatingFilename.map { "\(destination), file \($0)" } ?? destination

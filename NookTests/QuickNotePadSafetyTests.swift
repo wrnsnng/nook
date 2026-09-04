@@ -701,7 +701,7 @@ struct QuickNotePadSafetyTests {
         try markChangedElsewhere(sourceFile)
         let externalBytes = try Data(contentsOf: sourceFile)
         pad.text = "A quick thought with an unsaved addition."
-        pad.fileIntoMeeting(target)
+        pad.fileIntoNote(target)
         #expect(pad.hasUnsavedFailure)
         #expect(pad.hasUnsavedEdits)
         #expect(pad.text == "A quick thought with an unsaved addition.")
@@ -711,7 +711,7 @@ struct QuickNotePadSafetyTests {
     }
 
     @Test
-    func filingOffersFiveUniqueOwnedMeetingsAfterExcludingEverySharedID() async throws {
+    func filingOffersAllUniqueOwnedNotesAfterExcludingEverySharedID() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let library = directory.appendingPathComponent("Library", isDirectory: true)
@@ -729,7 +729,7 @@ struct QuickNotePadSafetyTests {
                 .write(to: library.appendingPathComponent("copy-\(index).md"))
         }
         // Equal dates intentionally arrive in the reverse of their stable
-        // filename order; the same five must remain available after reload.
+        // filename order; all six must remain available after reload.
         for index in (1...6).reversed() {
             let meeting = MeetingNote(
                 title: "Review", startedAt: date, endedAt: date,
@@ -744,14 +744,14 @@ struct QuickNotePadSafetyTests {
         try await reloadFilingStore(store)
 
         #expect(publications > 0, "An already-open filing popover must observe library changes.")
-        #expect(pad.hasOmittedDuplicateMeetings)
-        #expect(pad.recentMeetingTargets.count == 5)
-        #expect(!pad.recentMeetingTargets.contains { $0.id == copied.id })
+        #expect(pad.hasOmittedDuplicateNotes)
+        #expect(pad.availableFilingTargets.count == 6)
+        #expect(!pad.availableFilingTargets.contains { $0.id == copied.id })
         let choices = pad.filingChoices
-        #expect(choices.compactMap(\.disambiguatingFilename) == (1...5).map { "meeting-\($0).md" })
-        #expect(Set(choices.map(\.id)).count == 5)
-        #expect(Set(choices.map(\.accessibilityLabel)).count == 5)
-        #expect(choices.map(\.id) == pad.recentMeetingTargets.map(\.libraryIdentity))
+        #expect(choices.compactMap(\.disambiguatingFilename) == (1...6).map { "meeting-\($0).md" })
+        #expect(Set(choices.map(\.id)).count == 6)
+        #expect(Set(choices.map(\.accessibilityLabel)).count == 6)
+        #expect(choices.map(\.id) == pad.availableFilingTargets.map(\.libraryIdentity))
         try await reloadFilingStore(store)
         #expect(pad.filingChoices.map(\.id) == choices.map(\.id))
         #expect(files.trashedURLs.isEmpty)
@@ -814,15 +814,15 @@ struct QuickNotePadSafetyTests {
         let revision = pad.textRevision
         let lastSavedAt = pad.lastSavedAt
         let hasUnsavedEdits = pad.hasUnsavedEdits
-        #expect(pad.recentMeetingTargets.contains { $0.libraryIdentity == target.libraryIdentity })
+        #expect(pad.availableFilingTargets.contains { $0.libraryIdentity == target.libraryIdentity })
 
         let copy = library.appendingPathComponent("copied-meeting.md")
         try targetBytes.write(to: copy)
         try await reloadFilingStore(store)
-        pad.fileIntoMeeting(target)
+        pad.fileIntoNote(target)
 
-        #expect(pad.hasOmittedDuplicateMeetings)
-        #expect(pad.recentMeetingTargets.isEmpty)
+        #expect(pad.hasOmittedDuplicateNotes)
+        #expect(pad.availableFilingTargets.isEmpty)
         #expect(pad.message?.contains("shares its note ID") == true)
         #expect(Data(pad.text.utf8) == exactText)
         #expect(pad.textRevision == revision)
@@ -901,7 +901,7 @@ struct QuickNotePadSafetyTests {
         }
         try await reloadFilingStore(store)
         let targetBytes = try survivingTarget.map { try Data(contentsOf: $0) }
-        pad.fileIntoMeeting(target)
+        pad.fileIntoNote(target)
 
         #expect(pad.message != nil)
         #expect(Data(pad.text.utf8) == exactText)
@@ -1398,7 +1398,7 @@ struct QuickNotePadSafetyTests {
         let autosaved = try #require(store.notes.first { $0.kind == .spoken })
         let autosavedFile = try #require(autosaved.fileURL)
 
-        pad.fileIntoMeeting(meeting)
+        pad.fileIntoNote(meeting)
 
         // Filing is a move, not a copy: one thought, in one place.
         #expect(!store.notes.contains { $0.id == autosaved.id })
@@ -1408,6 +1408,123 @@ struct QuickNotePadSafetyTests {
             store.notes.first { $0.id == meeting.id }?.personalNotes
                 == "Ask Ana whether the beta list is final."
         )
+    }
+
+    @Test(arguments: [NoteKind.meeting, .spoken, .digest])
+    func filingCanAppendToEveryKindWithoutReplacingExistingWords(kind: NoteKind) throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let files = QuickNoteFilingFileManager(directory: directory)
+        let store = store(in: directory, fileManager: files)
+        var target = try store.save(MeetingNote(
+            kind: kind, title: "Older destination", startedAt: .distantPast, endedAt: .distantPast,
+            sourceApp: "Synthetic", summary: "Original Café body.",
+            personalNotes: kind == .spoken ? "" : "Original annotation."
+        ))
+        if kind == .spoken {
+            let raw = try store.rawMarkdown(for: target)
+            let custom = raw.replacingOccurrences(of: "kind: spoken", with: "kind: spoken\ncustom-field: untouched")
+                + "\n\n## Unknown user heading\n\nLeave this source as written.\r\n"
+            try store.saveRawMarkdown(custom, for: target)
+            target = try #require(store.note(matching: target.libraryIdentity))
+        }
+        let before = try store.rawMarkdown(for: target)
+        let pad = QuickNoteController(store: store)
+        let words = "A new Cafe\u{0301} thought.\r\nSecond line 👩🏽‍💻."
+        pad.text = words
+        let autosaved = try #require(pad.saveIfNeeded())
+        #expect(pad.availableFilingTargets.contains { $0.libraryIdentity == target.libraryIdentity })
+        #expect(!pad.availableFilingTargets.contains { $0.libraryIdentity == autosaved.libraryIdentity })
+        #expect(pad.fileIntoNote(target))
+        let persisted = try #require(store.note(matching: target.libraryIdentity))
+        if kind == .spoken {
+            let after = try store.rawMarkdown(for: persisted)
+            #expect(Array(after.utf8.prefix(before.utf8.count)) == Array(before.utf8))
+            #expect(after.utf8.suffix(words.utf8.count).elementsEqual(words.utf8))
+        } else {
+            #expect(persisted.summary == target.summary)
+            #expect(persisted.personalNotes.utf8.elementsEqual("Original annotation.\n\n\(words)".utf8))
+        }
+        #expect(persisted.id == target.id)
+        #expect(persisted.title == target.title)
+        #expect(files.trashedURLs == [autosaved.fileURL!])
+        #expect(!store.notes.contains { $0.id == autosaved.id })
+        #expect(pad.text.isEmpty)
+        #expect(!pad.fileIntoNote(persisted), "Repeated callbacks cannot append the same completed pad twice.")
+    }
+
+    @Test
+    func doneOffersFilingWithoutWritingAndCancelDoesNotRestartCapture() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = store(in: directory)
+        let target = try store.save(MeetingNote(
+            title: "Existing", startedAt: .now, endedAt: .now,
+            sourceApp: "Synthetic", summary: "Original body."
+        ))
+        let bytes = try Data(contentsOf: target.fileURL!)
+        let pad = QuickNoteController(store: store)
+        var captureStops = 0
+        pad.onDismissRequested = { captureStops += 1 }
+        pad.text = "An unfinished thought."
+        pad.isContinuous = true
+        pad.done()
+        let request = try #require(pad.filingRequest)
+        #expect(request.choices.map(\.id) == [target.libraryIdentity])
+        #expect(!pad.isContinuous)
+        #expect(captureStops == 1)
+        #expect(store.notes.count == 1)
+        pad.done()
+        #expect(pad.filingRequest?.id == request.id)
+        #expect(captureStops == 1)
+        pad.filingRequest = nil
+        #expect(!pad.isContinuous)
+        #expect(pad.text == "An unfinished thought.")
+        #expect(try Data(contentsOf: target.fileURL!) == bytes)
+        pad.close()
+        #expect(!pad.hasUnsavedFailure)
+        #expect(store.notes.count == 2)
+        #expect(try Data(contentsOf: target.fileURL!) == bytes)
+    }
+
+    @Test
+    func filingCannotAppendThePadToItsOwnAutosavedFile() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let files = QuickNoteFilingFileManager(directory: directory)
+        let store = store(in: directory, fileManager: files)
+        let pad = QuickNoteController(store: store)
+        pad.text = "Keep this thought."
+        let own = try #require(pad.saveIfNeeded())
+        let before = try Data(contentsOf: own.fileURL!)
+        #expect(!pad.fileIntoNote(own))
+        #expect(pad.text == "Keep this thought.")
+        #expect(try Data(contentsOf: own.fileURL!) == before)
+        #expect(files.trashedURLs.isEmpty)
+    }
+
+    @Test
+    func aSpokenDestinationChangedAfterThePickerOpenedRemainsUntouched() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let files = QuickNoteFilingFileManager(directory: directory)
+        let store = store(in: directory, fileManager: files)
+        let target = try store.save(MeetingNote(
+            kind: .spoken, title: "Destination", startedAt: .now, endedAt: .now,
+            sourceApp: "Synthetic", summary: "Original words."
+        ))
+        let pad = QuickNoteController(store: store)
+        pad.text = "A new thought."
+        pad.requestFiling()
+        let stale = try #require(pad.filingRequest?.choices.first?.note)
+        let file = try #require(target.fileURL)
+        let external = try store.rawMarkdown(for: target) + "\nExternal words."
+        try Data(external.utf8).write(to: file)
+        #expect(!pad.fileIntoNote(stale))
+        #expect(try Data(contentsOf: file) == Data(external.utf8))
+        #expect(pad.text == "A new thought.")
+        #expect(pad.filingRequest != nil)
+        #expect(files.trashedURLs.isEmpty)
     }
 
     @Test
@@ -1439,7 +1556,7 @@ struct QuickNotePadSafetyTests {
         pad.text = filedWords
         let priorDraft = try await recoveredFilingDraft(in: journal)
 
-        pad.fileIntoMeeting(target)
+        pad.fileIntoNote(target)
 
         let notice = try #require(pad.filingCompletionMessage)
         #expect(notice.contains("Filed successfully"))
@@ -1468,7 +1585,7 @@ struct QuickNotePadSafetyTests {
 
         // A repeated filing attempt or an empty autosave cannot duplicate the
         // append, dismiss the explanation, or recreate the removed checkpoint.
-        pad.fileIntoMeeting(target)
+        pad.fileIntoNote(target)
         #expect(pad.saveIfNeeded() == nil)
         #expect(pad.filingCompletionMessage == notice)
         #expect(try Data(contentsOf: targetFile) == targetBytes)

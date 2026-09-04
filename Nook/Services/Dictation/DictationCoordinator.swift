@@ -83,7 +83,7 @@ final class DictationCoordinator: ObservableObject {
 
     @Published var isEnabled: Bool {
         didSet {
-            UserDefaults.standard.set(isEnabled, forKey: Keys.enabled)
+            defaults.set(isEnabled, forKey: Keys.enabled)
             if !isEnabled {
                 cancel()
             }
@@ -92,18 +92,18 @@ final class DictationCoordinator: ObservableObject {
     }
 
     @Published var style: DictationStyle {
-        didSet { UserDefaults.standard.set(style.rawValue, forKey: Keys.style) }
+        didSet { defaults.set(style.rawValue, forKey: Keys.style) }
     }
 
     @Published var customPrompt: String {
         didSet {
-            UserDefaults.standard.set(customPrompt, forKey: Keys.customPrompt)
+            defaults.set(customPrompt, forKey: Keys.customPrompt)
         }
     }
 
     @Published var activation: DictationActivation {
         didSet {
-            UserDefaults.standard.set(activation.rawValue, forKey: Keys.activation)
+            defaults.set(activation.rawValue, forKey: Keys.activation)
         }
     }
 
@@ -114,11 +114,15 @@ final class DictationCoordinator: ObservableObject {
     private let audio: any DictationAudioCapturing
     private let recognizer: any DictationRecognizing
     private let insertion: any DictationTextInserting
-    private let refiner = DictationRefiner()
+    private let defaults: UserDefaults
+    private let refine: @Sendable (String, DictationStyle, String) async -> DictationRefiner.Outcome
+    private let quickNoteHasFocus: (@MainActor () -> Bool)?
 
     private var capability: TextInsertionService.Capability = .unavailable
     private var spokenChunks: [String] = []
     private var insertedAnything = false
+    private var beganInQuickNote = false
+    private var padContainsVoiceCommand = false
     private var streamingFailed = false
     private var streamedChunkCount = 0
     private var isFinishing = false
@@ -157,6 +161,12 @@ final class DictationCoordinator: ObservableObject {
     /// only the no-text-field path needs it.
     weak var quickNote: QuickNoteController?
 
+    private var isQuickNoteActive: Bool {
+        guard let quickNote else { return false }
+        return (quickNoteHasFocus?() ?? quickNote.isFrontmost)
+            && !quickNote.isReviewingVoiceCorrection && quickNote.filingRequest == nil
+    }
+
     /// A rewrite that has not landed in a couple of seconds is not worth the
     /// wait when the user is mid-sentence in someone else's app.
     private static let refinementTimeout: Double = 6
@@ -183,9 +193,17 @@ final class DictationCoordinator: ObservableObject {
         insertion: any DictationTextInserting = TextInsertionService(),
         registersShortcut: Bool = true,
         ceilings: DictationSessionCeilings = .standard,
-        prepareForAudioCapture: (@MainActor () async -> Void)? = nil
+        prepareForAudioCapture: (@MainActor () async -> Void)? = nil,
+        defaults: UserDefaults = .standard,
+        quickNoteHasFocus: (@MainActor () -> Bool)? = nil,
+        refine: (@Sendable (String, DictationStyle, String) async -> DictationRefiner.Outcome)? = nil
     ) {
-        let defaults = UserDefaults.standard
+        self.defaults = defaults
+        self.quickNoteHasFocus = quickNoteHasFocus
+        let refiner = DictationRefiner()
+        self.refine = refine ?? { spoken, style, prompt in
+            await refiner.refine(spoken: spoken, style: style, customPrompt: prompt)
+        }
         self.ceilings = ceilings
         self.registersShortcut = registersShortcut
         self.prepareForAudioCapture = prepareForAudioCapture
@@ -258,7 +276,7 @@ final class DictationCoordinator: ObservableObject {
     func setShortcut(_ shortcut: DictationShortcut) {
         self.shortcut = shortcut
         if let data = try? JSONEncoder().encode(shortcut) {
-            UserDefaults.standard.set(data, forKey: Keys.shortcut)
+            defaults.set(data, forKey: Keys.shortcut)
         }
         applyShortcutRegistration()
     }
@@ -366,7 +384,7 @@ final class DictationCoordinator: ObservableObject {
         // A per-app override, when one exists, wins for this session only.
         // The global choice stays untouched for everywhere else.
         let frontmostID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        if let override = DictationStyle.override(forBundleID: frontmostID) {
+        if let override = DictationStyle.override(forBundleID: frontmostID, defaults: defaults) {
             sessionStyle = override
         } else {
             sessionStyle = style
@@ -380,8 +398,9 @@ final class DictationCoordinator: ObservableObject {
         // aimed at a text field in another app entirely. The note floats and
         // stays open across app switches by design, so its presence says
         // nothing about where the words are meant to go. Focus does.
-        if quickNote?.isFrontmost == true {
+        if isQuickNoteActive {
             capability = .noTextField
+            beganInQuickNote = true
         }
         #if DEBUG
         NookDebugLog.write("[dictation] begin — capability: \(capability), frontmost: \(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "?"), \(insertion.lastInspection)")
@@ -668,10 +687,14 @@ final class DictationCoordinator: ObservableObject {
         // Already in the note: it is Nook's own surface, so the words go
         // straight in. Otherwise nothing is delivered mid-sentence, and the
         // destination is settled once the user stops talking.
+        if beganInQuickNote {
+            // A run belongs to the pad that had focus at its start. Switching
+            // apps mid-utterance must not replay its words into another field.
+            let proposed = quickNote?.receiveDictation(text, inserting: spoken) == true
+            padContainsVoiceCommand = padContainsVoiceCommand || proposed
+            return
+        }
         if capability == .noTextField {
-            if quickNote?.isFrontmost == true {
-                quickNote?.append(spoken)
-            }
             return
         }
 
@@ -707,6 +730,8 @@ final class DictationCoordinator: ObservableObject {
         peakLevel = 0
         spokenChunks = []
         insertedAnything = false
+        beganInQuickNote = false
+        padContainsVoiceCommand = false
         streamingFailed = false
         streamedChunkCount = 0
     }
@@ -726,6 +751,7 @@ final class DictationCoordinator: ObservableObject {
     private func deliver() async {
         let deliverySession = sessionID
         let spoken = spokenText
+        let padRevision = quickNote?.textRevision
         #if DEBUG
         NookDebugLog.write("[dictation] deliver — capability: \(capability), streamingFailed: \(streamingFailed), chunks: \(spokenChunks.count), peak: \(peakLevel), spoken: \"\(spoken)\"")
         #endif
@@ -745,16 +771,12 @@ final class DictationCoordinator: ObservableObject {
         }
 
         var finalText = spoken
-        if sessionStyle.usesLanguageModel {
+        if sessionStyle.usesLanguageModel && !padContainsVoiceCommand {
             phase = .refining
             let outcome = await withDeadline(
                 seconds: Self.refinementTimeout
-            ) { [refiner, style = sessionStyle, customPrompt] () -> DictationRefiner.Outcome in
-                await refiner.refine(
-                    spoken: spoken,
-                    style: style,
-                    customPrompt: customPrompt
-                )
+            ) { [refine, style = sessionStyle, customPrompt] () -> DictationRefiner.Outcome in
+                await refine(spoken, style, customPrompt)
             }
             if case .refined(let refined)? = outcome {
                 finalText = refined
@@ -837,7 +859,8 @@ final class DictationCoordinator: ObservableObject {
             switch await deliverWithoutAKnownField(
                 finalText,
                 spoken: spoken,
-                session: deliverySession
+                session: deliverySession,
+                expectedPadRevision: padRevision
             ) {
             case .delivered:
                 break
@@ -880,7 +903,7 @@ final class DictationCoordinator: ObservableObject {
     private func restartIfContinuous() {
         guard isContinuousSession else { return }
         isContinuousSession = false
-        guard quickNote?.isFrontmost == true,
+        guard isQuickNoteActive,
               quickNote?.isContinuous == true else { return }
         begin()
     }
@@ -918,16 +941,22 @@ final class DictationCoordinator: ObservableObject {
     private func deliverWithoutAKnownField(
         _ finalText: String,
         spoken: String,
-        session: Int
+        session: Int,
+        expectedPadRevision: Int?
     ) async -> UnknownFieldDelivery {
         guard !Task.isCancelled, sessionID == session else {
             return .abandoned
         }
-        if quickNote?.isFrontmost == true {
-            isContinuousSession = quickNote?.isContinuous == true
-            if finalText != spoken {
-                quickNote?.replaceLastDictation(with: finalText, spoken: spoken)
+        if beganInQuickNote {
+            isContinuousSession = isQuickNoteActive && quickNote?.isContinuous == true
+            if !padContainsVoiceCommand, finalText != spoken {
+                quickNote?.replaceLastDictation(with: finalText, spoken: spoken, expectedRevision: expectedPadRevision)
             }
+            quickNote?.saveIfNeeded()
+            return .delivered
+        }
+        if isQuickNoteActive {
+            quickNote?.receiveDictation(finalText, inserting: finalText, allowsCorrections: false)
             quickNote?.saveIfNeeded()
             return .delivered
         }
@@ -977,7 +1006,7 @@ final class DictationCoordinator: ObservableObject {
     private func routeToQuickNotePad(_ text: String, session: Int) {
         guard !Task.isCancelled, sessionID == session else { return }
         quickNote?.present()
-        quickNote?.append(text)
+        quickNote?.receiveDictation(text, inserting: text, allowsCorrections: false)
         quickNote?.saveIfNeeded()
     }
 

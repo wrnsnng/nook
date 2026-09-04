@@ -6,6 +6,16 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
+## Unreleased
+
+- Quick Note offers a filing destination on Done or close, with a separate
+  spoken note as the default. Existing spoken notes, older meetings and digests
+  are available; stale destinations and the pad's own saved copy are excluded.
+- Quick Note recognizes complete "scratch that" and "change the previous item"
+  utterances as correction proposals. Words stay in the note until an explicit
+  review applies the change; Undo restores them. Ambiguous targets, changed
+  notes and active text composition cannot authorize a correction.
+
 ## 1.20.1
 
 [Release notes](Releases/Nook-1.20.1.md)

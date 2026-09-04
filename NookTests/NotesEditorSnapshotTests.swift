@@ -591,6 +591,61 @@ struct NotesEditorSnapshotTests {
         #expect(editor.textLayoutManager == nil)
     }
 
+    @Test
+    func reviewedVoiceReplacementIsOneExactNativeUndoableEdit() async throws {
+        let original = "Baseline Cafe\u{0301} 👩🏽‍💻\r\nעברית scratch that"
+        let replacement = "Baseline Cafe\u{0301} 👩🏽‍💻"
+        let fixture = try await hostedFixture(containing: original)
+        defer { fixture.window.close() }
+        let undo = try #require(fixture.editor.undoManager)
+        undo.removeAllActions()
+        undo.groupsByEvent = false
+        #expect(fixture.model.insertionPort.replaceText(
+            expected: original, with: replacement, actionName: "Voice Correction"
+        ) == .applied)
+        try await settleLayout(in: fixture.host) { fixture.model.text.utf8.elementsEqual(replacement.utf8) }
+        #expect(undo.canUndo)
+        #expect(undo.undoActionName == "Voice Correction")
+        undo.undo()
+        try await settleLayout(in: fixture.host) { fixture.model.text.utf8.elementsEqual(original.utf8) }
+        #expect(fixture.editor.string.utf8.elementsEqual(original.utf8))
+        #expect(!undo.canUndo)
+        #expect(undo.canRedo)
+        undo.redo()
+        try await settleLayout(in: fixture.host) { fixture.model.text.utf8.elementsEqual(replacement.utf8) }
+        #expect(fixture.editor.string.utf8.elementsEqual(replacement.utf8))
+    }
+
+    @Test(arguments: ["stale", "unicode", "disabled", "composition"])
+    func voiceReplacementRefusesStaleDisabledOrComposingNativeText(reason: String) async throws {
+        let original = "Cafe\u{0301} review"
+        let fixture = try await hostedFixture(containing: original)
+        defer { fixture.window.close() }
+        var expected = original
+        switch reason {
+        case "stale": expected += " missing words"
+        case "unicode": expected = "Caf\u{00e9} review"
+        case "disabled":
+            fixture.model.isEnabled = false
+            try await settleLayout(in: fixture.host) { !fixture.editor.isEditable }
+        default:
+            fixture.editor.setMarkedText(
+                "日本", selectedRange: NSRange(location: 2, length: 0),
+                replacementRange: NSRange(location: 0, length: 0)
+            )
+            try #require(fixture.editor.hasMarkedText())
+            expected = fixture.editor.string
+        }
+        let before = fixture.editor.string
+        let selection = fixture.editor.selectedRange()
+        #expect(fixture.model.insertionPort.replaceText(
+            expected: expected, with: "Replacement", actionName: "Voice Correction"
+        ) == .refused)
+        #expect(fixture.editor.string.utf8.elementsEqual(before.utf8))
+        #expect(fixture.editor.selectedRange() == selection)
+        if reason == "composition" { #expect(fixture.editor.hasMarkedText()) }
+    }
+
     private struct HostedFixture {
         let model: NativeNotesEditorFixtureModel
         let host: NSView

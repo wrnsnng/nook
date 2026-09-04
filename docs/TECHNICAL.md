@@ -43,6 +43,43 @@ and detached notes.
 
 ## Important components
 
+### Quick Note filing and voice corrections
+
+`QuickNoteFilingRequest` captures the library and offered file identities and
+revisions when Done/close opens the native destination sheet. The default is a
+separate spoken note; all unambiguous existing notes are available, excluding
+the pad's autosaved copy. Filing rechecks ownership and revisions, appends to
+My notes for meetings/digests or exact source for spoken notes, then verifies
+the destination before trashing the owned source. Failed cleanup retains a
+visible copy without allowing the completed move to replay. Autosave and
+termination still use the existing conflict and recovery paths.
+
+Complete Quick Note utterances can propose `scratch that` or `change the
+previous item`, optionally with explicit replacement words. The former targets
+only the immediately preceding unchanged dictated append; the latter targets
+only the final nonempty line when it is an unambiguous Markdown list item.
+Fence, continuation, blockquote and code-like contexts are not guessed. The
+original list marker and checkbox state remain intact.
+
+`QuickNoteController.receiveDictation` inserts recognized correction words
+literally before offering a proposal. Applying requires the same proposal,
+exact text, presentation and library generation. `TextViewInsertionPort`
+refuses stale native text, disabled editing or marked-text composition, and
+groups a confirmed replacement into native Undo/Redo. File writes still pass
+through ordinary revision/conflict checks. A correction producing an empty
+saved pad retains the existing explicit-discard requirement.
+
+Review is an explicit capture pause, not an automatic recognition side effect.
+Filing and review cannot overlap. Commands retain visible Review/Keep Words or
+Undo controls even when privacy and save warnings occupy both status slots.
+`DictationCoordinator` captures Quick Note ownership at run start, keeps late
+results from cancelled runs out, and bypasses model refinement for runs with a
+correction intent. Externally targeted speech never becomes a correction.
+Injected focus, recognizer, audio, refinement and preferences enable synthetic
+delivery tests without microphone access or real assistant calls. Such tests
+and isolated sheet-content renders do not establish real Speech, physical IME,
+native-sheet keyboard behavior or VoiceOver acceptance.
+
 ### `MeetingCoordinator`
 
 The central state machine for detection, recording, live transcript, pause,
