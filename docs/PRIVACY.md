@@ -4,6 +4,12 @@ Nook is designed so meeting content stays on the Mac. This document describes
 what the app observes, stores, sends, and deletes. It is a product description,
 not legal advice.
 
+Command-palette fuzzy search runs deterministically on local note text,
+including transcripts and structured fields. Its searchable documents are
+cached in memory, not a new persistent index. It does not invoke a model, send
+queries anywhere, log search text or change stored note content. Date-range
+navigation changes only which local notes are shown.
+
 ## Data-flow summary
 
 ```text

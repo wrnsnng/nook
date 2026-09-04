@@ -352,7 +352,7 @@ struct LibraryInterfaceTests {
 
         let todayOnly = LibraryNoteGrouping.filter(
             notes,
-            todayOnly: true,
+            range: .today,
             matchingIDs: nil,
             calendar: calendar
         )
@@ -360,7 +360,7 @@ struct LibraryInterfaceTests {
 
         let searched = LibraryNoteGrouping.filter(
             notes,
-            todayOnly: false,
+            range: .all,
             matchingIDs: [yesterday.libraryIdentity]
         )
         #expect(searched.map(\.id) == [yesterday.id])
@@ -374,24 +374,24 @@ struct LibraryInterfaceTests {
         )
         let matches: Set<LibraryNoteIdentity> = [yesterday.libraryIdentity]
         let todayResults = LibraryNoteGrouping.filter(
-            [yesterday], todayOnly: true, matchingIDs: matches
+            [yesterday], range: .today, matchingIDs: matches
         )
         let allResults = LibraryNoteGrouping.filter(
-            [yesterday], todayOnly: false, matchingIDs: matches
+            [yesterday], range: .all, matchingIDs: matches
         )
 
         #expect(LibrarySidebarPolicy.emptySearchMessage(
-            query: "Research review 0001", todayOnly: true,
+            query: "Research review 0001", range: .today,
             isLoading: false, isSearching: false,
             hasVisibleNotes: !todayResults.isEmpty
         ) == "No matching notes today")
         #expect(LibrarySidebarPolicy.emptySearchMessage(
-            query: "Research review 0001", todayOnly: false,
+            query: "Research review 0001", range: .all,
             isLoading: false, isSearching: false,
             hasVisibleNotes: !allResults.isEmpty
         ) == nil)
         #expect(LibrarySidebarPolicy.emptySearchMessage(
-            query: "An absent note", todayOnly: false,
+            query: "An absent note", range: .all,
             isLoading: false, isSearching: false, hasVisibleNotes: false
         ) == "No matching notes")
     }
@@ -401,34 +401,34 @@ struct LibraryInterfaceTests {
         for state in [(isLoading: true, isSearching: false),
                       (isLoading: false, isSearching: true)] {
             #expect(LibrarySidebarPolicy.emptySearchMessage(
-                query: "Research", todayOnly: true,
+                query: "Research", range: .today,
                 isLoading: state.isLoading, isSearching: state.isSearching,
                 hasVisibleNotes: false
             ) == nil)
         }
         #expect(LibrarySidebarPolicy.emptySearchMessage(
-            query: " \n\t", todayOnly: true,
+            query: " \n\t", range: .today,
             isLoading: false, isSearching: false, hasVisibleNotes: false
         ) == nil)
     }
 
     @Test
     func cancellingADirtyScopeChangeKeepsTheOriginalRange() {
-        for initialTodayOnly in [false, true] {
+        for initialRange in LibraryDateRange.allCases {
             var scope = LibraryScopeState()
-            scope.request(initialTodayOnly, needsConfirmation: false)
+            scope.request(initialRange, needsConfirmation: false)
             let decision = LibraryLeaveGuard.decide(
                 hasMarkdownChanges: true, hasPersonalNotesChanges: false
             )
-            scope.request(!initialTodayOnly, needsConfirmation: decision == .askAboutMarkdown)
+            scope.request(initialRange == .today ? .yesterday : .today, needsConfirmation: decision == .askAboutMarkdown)
 
             // The range remains unchanged while Save, Discard, or Cancel is
             // being chosen, so the original editor's row stays visible.
-            #expect(scope.todayOnly == initialTodayOnly)
+            #expect(scope.range == initialRange)
             scope.settle(confirmed: false)
 
-            #expect(scope.todayOnly == initialTodayOnly)
-            #expect(scope.pendingTodayOnly == nil)
+            #expect(scope.range == initialRange)
+            #expect(scope.pendingRange == nil)
         }
     }
 
@@ -441,7 +441,7 @@ struct LibraryInterfaceTests {
         let today = timedNote("Today's note", startedAt: Date())
         let selected: LibrarySelection? = .note(original.libraryIdentity)
         var scope = LibraryScopeState()
-        scope.request(true, needsConfirmation: true)
+        scope.request(.today, needsConfirmation: true)
 
         // An empty reload used to clear the editor directly. A subsequent
         // reload or completed meeting could then replace it before Cancel.
@@ -456,14 +456,14 @@ struct LibraryInterfaceTests {
             // No decision means requestSelection returns before replacing
             // either the editor identity or its pending destination/range.
             #expect(decision == nil)
-            #expect(!scope.todayOnly)
-            #expect(scope.pendingTodayOnly == true)
+            #expect(scope.range == .all)
+            #expect(scope.pendingRange == .today)
         }
         scope.settle(confirmed: false)
 
         #expect(selected == .note(original.libraryIdentity))
-        #expect(!scope.todayOnly)
-        #expect(scope.pendingTodayOnly == nil)
+        #expect(scope.range == .all)
+        #expect(scope.pendingRange == nil)
     }
 
     @Test
@@ -500,10 +500,10 @@ struct LibraryInterfaceTests {
             startedAt: calendar.date(byAdding: .day, value: -1, to: now)!
         )
         var scope = LibraryScopeState()
-        scope.request(true, needsConfirmation: true)
+        scope.request(.today, needsConfirmation: true)
         scope.settle(confirmed: true)
         let visible = LibraryNoteGrouping.filter(
-            [yesterday, today], todayOnly: scope.todayOnly, matchingIDs: nil,
+            [yesterday, today], range: scope.range, matchingIDs: nil,
             calendar: calendar
         )
 
@@ -511,7 +511,7 @@ struct LibraryInterfaceTests {
             preserving: yesterday.libraryIdentity, in: visible
         )
 
-        #expect(scope.todayOnly)
+        #expect(scope.range == .today)
         #expect(selected == today.libraryIdentity)
         #expect(!visible.contains { $0.libraryIdentity == yesterday.libraryIdentity })
     }
@@ -531,30 +531,86 @@ struct LibraryInterfaceTests {
         ) == nil)
     }
 
+    @Test(arguments: ["2026-03-09T12:00:00Z", "2026-11-02T12:00:00Z"])
+    func yesterdayUsesTheWholeCalendarDayAcrossDaylightSavingChanges(stamp: String) throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "America/New_York"))
+        let now = try #require(ISO8601DateFormatter().date(from: stamp))
+        let previous = try #require(calendar.date(byAdding: .day, value: -1, to: now))
+        let day = try #require(calendar.dateInterval(of: .day, for: previous))
+        let first = timedNote("First yesterday", startedAt: day.start)
+        var last = timedNote("Last yesterday", startedAt: day.end.addingTimeInterval(-1))
+        last.kind = .spoken
+        let today = timedNote("Today", startedAt: day.end)
+        let older = timedNote("Earlier", startedAt: day.start.addingTimeInterval(-1))
+        let notes = [today, last, first, older]
+        let visible = LibraryNoteGrouping.filter(
+            notes, range: .yesterday, matchingIDs: nil,
+            calendar: calendar, referenceDate: now
+        )
+        #expect(visible.map(\.id) == [last.id, first.id])
+        #expect(LibraryNoteGrouping.filter(
+            notes, range: .yesterday, matchingIDs: [first.libraryIdentity],
+            calendar: calendar, referenceDate: now
+        ).map(\.id) == [first.id])
+        #expect(LibraryNoteGrouping.title(
+            for: first.startedAt, referenceDate: now, calendar: calendar
+        ) == "Yesterday")
+    }
+
+    @Test
+    func yesterdayHasItsOwnCacheIdentityAndHonestEmptyState() {
+        let notes = [timedNote("Synthetic note", startedAt: Date())]
+        #expect(LibraryGroupingCacheKey(notes: notes, matchingIDs: nil, range: .today)
+            != LibraryGroupingCacheKey(notes: notes, matchingIDs: nil, range: .yesterday))
+        #expect(LibraryPlaceholderState.choose(
+            isLoading: false, hasNotes: true, range: .yesterday,
+            hasVisibleNotes: false, hasSearch: false, hasLoadError: false
+        ) == .emptyDay(.yesterday))
+        #expect(LibraryDateRange.yesterday.emptyMessage(hasSearch: false) == "No notes yesterday")
+        #expect(LibrarySidebarPolicy.emptySearchMessage(
+            query: "orchid", range: .yesterday, isLoading: false,
+            isSearching: false, hasVisibleNotes: false
+        ) == "No matching notes yesterday")
+    }
+
+    @Test(arguments: LibraryDateRange.allCases, [false, true])
+    func everyDateRangeWaitsForSaveDiscardOrCancel(range: LibraryDateRange, confirmed: Bool) {
+        var scope = LibraryScopeState()
+        let previous: LibraryDateRange = range == .today ? .yesterday : .today
+        scope.request(previous, needsConfirmation: false)
+        scope.request(range, needsConfirmation: true)
+        #expect(scope.range == previous)
+        #expect(scope.pendingRange == range)
+        scope.settle(confirmed: confirmed)
+        #expect(scope.range == (confirmed ? range : previous))
+        #expect(scope.pendingRange == nil)
+    }
+
     @Test
     func anEmptyTodayRangeOffersAllNotesInsteadOfFirstRecording() {
         let state = LibraryPlaceholderState.choose(
-            isLoading: false, hasNotes: true, todayOnly: true,
+            isLoading: false, hasNotes: true, range: .today,
             hasVisibleNotes: false, hasSearch: false, hasLoadError: false
         )
         var scope = LibraryScopeState()
-        scope.request(true, needsConfirmation: false)
-        scope.request(false, needsConfirmation: false)
+        scope.request(.today, needsConfirmation: false)
+        scope.request(.all, needsConfirmation: false)
 
-        #expect(state == .emptyToday)
-        #expect(!scope.todayOnly)
+        #expect(state == .emptyDay(.today))
+        #expect(scope.range == .all)
     }
 
     @Test
     func loadingNeverClaimsAnEmptyLibraryBeforeTheFilesArrive() {
-        for todayOnly in [false, true] {
+        for range in LibraryDateRange.allCases {
             #expect(LibraryPlaceholderState.choose(
-                isLoading: true, hasNotes: false, todayOnly: todayOnly,
+                isLoading: true, hasNotes: false, range: range,
                 hasVisibleNotes: false, hasSearch: false, hasLoadError: false
             ) == .loading)
         }
         #expect(LibraryPlaceholderState.choose(
-            isLoading: false, hasNotes: false, todayOnly: false,
+            isLoading: false, hasNotes: false, range: .all,
             hasVisibleNotes: false, hasSearch: false, hasLoadError: false
         ) == .emptyLibrary)
     }
@@ -562,15 +618,15 @@ struct LibraryInterfaceTests {
     @Test
     func failedLoadingAndFilteredResultsDoNotOfferFirstRecording() {
         #expect(LibraryPlaceholderState.choose(
-            isLoading: false, hasNotes: false, todayOnly: false,
+            isLoading: false, hasNotes: false, range: .all,
             hasVisibleNotes: false, hasSearch: false, hasLoadError: true
         ) == .loadFailure)
         #expect(LibraryPlaceholderState.choose(
-            isLoading: false, hasNotes: true, todayOnly: false,
+            isLoading: false, hasNotes: true, range: .all,
             hasVisibleNotes: false, hasSearch: true, hasLoadError: false
         ) == .noSearchMatches)
         #expect(LibraryPlaceholderState.choose(
-            isLoading: false, hasNotes: true, todayOnly: false,
+            isLoading: false, hasNotes: true, range: .all,
             hasVisibleNotes: true, hasSearch: false, hasLoadError: false
         ) == .noSelection)
     }
@@ -630,13 +686,13 @@ struct LibraryInterfaceTests {
         let first = LibraryGroupingCacheKey(
             notes: notes,
             matchingIDs: nil,
-            todayOnly: false,
+            range: .all,
             now: stamp
         )
         let second = LibraryGroupingCacheKey(
             notes: notes,
             matchingIDs: nil,
-            todayOnly: false,
+            range: .all,
             now: stamp
         )
 
@@ -653,32 +709,32 @@ struct LibraryInterfaceTests {
         let base = LibraryGroupingCacheKey(
             notes: original,
             matchingIDs: nil,
-            todayOnly: false,
+            range: .all,
             now: stamp
         )
 
         #expect(base != LibraryGroupingCacheKey(
             notes: withAnotherNote,
             matchingIDs: nil,
-            todayOnly: false,
+            range: .all,
             now: stamp
         ))
         #expect(base != LibraryGroupingCacheKey(
             notes: original,
             matchingIDs: [original[0].libraryIdentity],
-            todayOnly: false,
+            range: .all,
             now: stamp
         ))
         #expect(base != LibraryGroupingCacheKey(
             notes: original,
             matchingIDs: nil,
-            todayOnly: true,
+            range: .today,
             now: stamp
         ))
         #expect(base != LibraryGroupingCacheKey(
             notes: original,
             matchingIDs: nil,
-            todayOnly: false,
+            range: .all,
             now: stamp.addingTimeInterval(86_400)
         ))
     }
@@ -694,13 +750,13 @@ struct LibraryInterfaceTests {
         let before = LibraryGroupingCacheKey(
             notes: [untouched],
             matchingIDs: nil,
-            todayOnly: false,
+            range: .all,
             now: stamp
         )
         let after = LibraryGroupingCacheKey(
             notes: [edited],
             matchingIDs: nil,
-            todayOnly: false,
+            range: .all,
             now: stamp
         )
 
@@ -724,13 +780,13 @@ struct LibraryInterfaceTests {
         let before = LibraryGroupingCacheKey(
             notes: [original],
             matchingIDs: nil,
-            todayOnly: false,
+            range: .all,
             now: stamp
         )
         let after = LibraryGroupingCacheKey(
             notes: [renamed],
             matchingIDs: nil,
-            todayOnly: false,
+            range: .all,
             now: stamp
         )
 
@@ -746,13 +802,13 @@ struct LibraryInterfaceTests {
         let forward = LibraryGroupingCacheKey(
             notes: [first, second],
             matchingIDs: nil,
-            todayOnly: false,
+            range: .all,
             now: stamp
         )
         let reversed = LibraryGroupingCacheKey(
             notes: [second, first],
             matchingIDs: nil,
-            todayOnly: false,
+            range: .all,
             now: stamp
         )
 

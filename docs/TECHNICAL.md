@@ -15,6 +15,22 @@
 
 ## System overview
 
+The command palette uses a cancellable search controller and the existing
+in-memory document cache. Fuzzy matching runs in an off-main-actor worker;
+revision and cancellation checks reject results after a newer query or library
+change. Exact title prefixes/substrings rank before fuzzy title hits and content
+hits. Matching includes complete transcripts and structured fields without
+rewriting them. Initials are title-only, short queries do not fuzzily match
+scattered content letters, and edit-distance work is bounded without truncating
+exact long-word queries. Empty queries retain the five most recent notes.
+
+Library ranges are All, Today and Yesterday. Calendar-day filtering and group
+headings account for 23/25-hour days; ranges and
+calendar day contribute to the grouping cache key. Changing range uses the
+existing unsaved-editor leave guard, and Cancel preserves the original range.
+The production palette is a native sheet. Synthetic state tests or an older
+overlay render are not proof of native keyboard/VoiceOver interaction.
+
 ```mermaid
 flowchart TD
     App["NookApp + AppDelegate"] --> Model["AppModel"]
