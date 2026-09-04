@@ -89,6 +89,8 @@ The Listening pane includes a Start Test control for checking microphone and
 meeting audio levels before recording. The test is an in-memory meter only: it
 does not record, save audio, transcribe speech, or send anything, and it stops
 when Settings closes or a meeting or dictation session starts.
+Normal macOS recording indicators still appear. A failed stop remains retryable;
+new capture waits until the audio test has finished stopping.
 
 Notes are stored as plaintext Markdown in `~/Documents/Nook` by default. The
 folder can be changed in Settings. Temporary video containers are removed after

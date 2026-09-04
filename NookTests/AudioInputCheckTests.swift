@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import ScreenCaptureKit
 import Testing
@@ -257,6 +258,137 @@ struct AudioInputCheckTests {
         #expect(session.stopCalls == 1)
         #expect(service.phase == .idle)
         #expect(!service.isStopAvailable)
+    }
+
+    @Test(arguments: [false, true]) @MainActor
+    func aStopCallbackBeforeStartupReturnsCannotPublishARunningMeter(failStart: Bool) async throws {
+        let gate = AudioCheckTestGate()
+        let session = AudioCheckTestSession()
+        session.startGate = gate
+        session.failsStart = failStart
+        let service = AudioInputCheckService { _ in session }
+        let starting = try #require(service.start())
+        try await waitUntil { gate.isWaiting }
+
+        service.handleUnexpectedStop(streamID: ObjectIdentifier(session))
+        #expect(service.phase == .failed)
+        #expect(service.start() == nil)
+        var completionNotifications = 0
+        let observation = service.objectWillChange.sink { completionNotifications += 1 }
+        defer { observation.cancel() }
+        gate.release()
+        await starting.value
+
+        #expect(service.phase == .failed)
+        #expect(completionNotifications > 0)
+        #expect(service.levels == .zero)
+        #expect(!service.isStopAvailable)
+        #expect(session.stopCalls == 0)
+        await service.stop()
+    }
+
+    @Test @MainActor
+    func aStopCallbackDuringCancelledStartupConfirmsCleanupWithoutStoppingAgain() async throws {
+        let gate = AudioCheckTestGate()
+        let session = AudioCheckTestSession()
+        session.startGate = gate
+        session.failsStop = true
+        let service = AudioInputCheckService { _ in session }
+        service.start()
+        try await waitUntil { gate.isWaiting }
+        let stopping = Task { await service.stop() }
+        try await waitUntil { service.phase == .stopping }
+        service.handleUnexpectedStop(streamID: ObjectIdentifier(session))
+        gate.release()
+        await stopping.value
+
+        #expect(service.phase == .idle)
+        #expect(!service.isStopAvailable)
+        #expect(session.stopCalls == 0)
+        try await service.prepareForOtherCapture()
+    }
+
+    @Test @MainActor
+    func aStopCallbackDuringFailedStartCleanupCannotRestoreAStoppedStream() async throws {
+        let gate = AudioCheckTestGate()
+        let session = AudioCheckTestSession()
+        session.failsStart = true
+        session.failsStop = true
+        session.stopGate = gate
+        let service = AudioInputCheckService { _ in session }
+        let starting = try #require(service.start())
+        try await waitUntil { gate.isWaiting }
+        service.handleUnexpectedStop(streamID: ObjectIdentifier(session))
+        gate.release()
+        await starting.value
+
+        #expect(service.phase == .failed)
+        #expect(!service.isStopAvailable)
+        #expect(service.errorMessage == AudioInputCheckError.captureUnavailable.errorDescription)
+        session.failsStop = false
+        session.stopGate = nil
+        try await service.prepareForOtherCapture()
+    }
+
+    @Test @MainActor
+    func anOldStopCallbackCannotEndANewerAudioCheck() async throws {
+        let old = AudioCheckTestSession()
+        let current = AudioCheckTestSession()
+        var creations = 0
+        let service = AudioInputCheckService { _ in
+            creations += 1
+            return creations == 1 ? old : current
+        }
+        await service.start()?.value
+        service.handleUnexpectedStop(streamID: ObjectIdentifier(old))
+        #expect(service.phase == .failed)
+        await service.start()?.value
+        #expect(service.phase == .running)
+        service.handleUnexpectedStop(streamID: ObjectIdentifier(old))
+        #expect(service.phase == .running)
+        #expect(service.isStopAvailable)
+        await service.stop()
+    }
+
+    @Test @MainActor
+    func stoppingAfterAnEarlyFailureStillWaitsForTheStartupBarrier() async throws {
+        let gate = AudioCheckTestGate()
+        let session = AudioCheckTestSession()
+        session.startGate = gate
+        let service = AudioInputCheckService { _ in session }
+        service.start()
+        try await waitUntil { gate.isWaiting }
+        service.handleUnexpectedStop(streamID: ObjectIdentifier(session))
+        #expect(service.phase == .failed)
+        #expect(service.isStopAvailable)
+        let stopping = Task { await service.stop() }
+        try await waitUntil { service.phase == .stopping }
+        #expect(service.start() == nil)
+        gate.release()
+        await stopping.value
+        #expect(service.phase == .idle)
+        #expect(!service.isStopAvailable)
+        #expect(session.stopCalls == 0)
+    }
+
+    @Test @MainActor
+    func cancellingTheReturnedStartupTaskDoesNotLeaveAPermanentStartingState() async throws {
+        let gate = AudioCheckTestGate()
+        let session = AudioCheckTestSession()
+        session.startGate = gate
+        let service = AudioInputCheckService { _ in session }
+        let starting = try #require(service.start())
+        try await waitUntil { gate.isWaiting }
+        starting.cancel()
+        gate.release()
+        await starting.value
+        #expect(service.phase == .idle)
+        #expect(!service.isStopAvailable)
+        #expect(session.stopCalls == 1)
+        session.startGate = nil
+        await service.start()?.value
+        #expect(service.phase == .running)
+        await service.stop()
     }
 
     @MainActor

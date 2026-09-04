@@ -148,7 +148,8 @@ final class AudioInputCheckService: NSObject, ObservableObject, SCStreamDelegate
     /// teardown. Exposing this lets Settings offer Stop again without ever
     /// allowing a competing Start.
     var isStopAvailable: Bool {
-        phase == .starting
+        startTask != nil
+            || phase == .starting
             || phase == .running
             || phase == .stopping
             || stream != nil
@@ -162,6 +163,11 @@ final class AudioInputCheckService: NSObject, ObservableObject, SCStreamDelegate
         super.init()
     }
     private var streamID: ObjectIdentifier?
+    // A delegate can report failure while startCapture is still suspended.
+    // Retain that receipt until the startup/cleanup barrier finishes; ignoring
+    // it would publish a dead stream or retain it after a redundant stop fails.
+    private var startingStreamID: ObjectIdentifier?
+    private var startingStreamDidStop = false
     private var startTask: Task<Void, Never>?
     private var stopTask: Task<Void, Never>?
     private var pollingTask: Task<Void, Never>?
@@ -311,7 +317,7 @@ final class AudioInputCheckService: NSObject, ObservableObject, SCStreamDelegate
         levels = .zero
         clearCaptureState()
 
-        if phase == .starting {
+        if startTask != nil {
             phase = .stopping
             startTask?.cancel()
             if let startTask {
@@ -357,7 +363,15 @@ final class AudioInputCheckService: NSObject, ObservableObject, SCStreamDelegate
     private func performStart(operation: UInt64) async {
         var candidate: (any AudioInputCheckSession)?
         var didAttemptStart = false
-        defer { startTask = nil }
+        defer {
+            // An early delegate failure may already be visible while startup
+            // is suspended. Releasing this unpublished task changes Settings'
+            // computed Stop/Start control even though phase stays failed.
+            if phase == .failed, stream == nil { objectWillChange.send() }
+            startingStreamID = nil
+            startingStreamDidStop = false
+            startTask = nil
+        }
         do {
             try Task.checkCancellation()
             let stream: any AudioInputCheckSession
@@ -368,9 +382,14 @@ final class AudioInputCheckService: NSObject, ObservableObject, SCStreamDelegate
             }
             candidate = stream
             try Task.checkCancellation()
+            startingStreamID = ObjectIdentifier(stream)
             didAttemptStart = true
             try await stream.startCapture()
 
+            if startingStreamDidStop {
+                finishCanceledStart()
+                return
+            }
             guard isCurrentStart(operation) else {
                 if await stopCandidate(stream) { finishCanceledStart() }
                 return
@@ -385,7 +404,8 @@ final class AudioInputCheckService: NSObject, ObservableObject, SCStreamDelegate
             phase = .running
             beginPolling()
         } catch {
-            if didAttemptStart, let candidate, !(await stopCandidate(candidate)) { return }
+            if didAttemptStart, let candidate, !startingStreamDidStop,
+               !(await stopCandidate(candidate)) { return }
             if Task.isCancelled || phase == .stopping {
                 finishCanceledStart()
             } else {
@@ -505,13 +525,15 @@ final class AudioInputCheckService: NSObject, ObservableObject, SCStreamDelegate
     private func finishCanceledStart() {
         // Stop advances operationID to reject a late successful start. A new
         // start is barred until startTask releases this cancellation boundary.
-        guard phase == .stopping else { return }
+        guard phase == .starting || phase == .stopping else { return }
         stream = nil
         streamID = nil
         clearCaptureState()
         levels = .zero
         // The stop caller still owns the barrier until its await returns.
         // Publishing idle here could let a new start be erased by that caller.
+        // Direct cancellation of the returned startup task has no stop caller.
+        if phase == .starting { phase = .idle }
         errorMessage = nil
     }
 
@@ -539,6 +561,9 @@ final class AudioInputCheckService: NSObject, ObservableObject, SCStreamDelegate
             try await cleanup.value
             return true
         } catch {
+            // The delegate is a terminal receipt even when stopCapture later
+            // fails because that candidate has already stopped.
+            if startingStreamID == ObjectIdentifier(candidate), startingStreamDidStop { return true }
             stream = candidate
             streamID = ObjectIdentifier(candidate)
             phase = .failed
@@ -577,7 +602,22 @@ final class AudioInputCheckService: NSObject, ObservableObject, SCStreamDelegate
         stopTask = nil
     }
 
-    private func handleUnexpectedStop(streamID: ObjectIdentifier) {
+    /// Main-actor half of the native terminal callback. Synthetic sessions use
+    /// the same boundary to exercise callback/start/cleanup ordering.
+    func handleUnexpectedStop(streamID: ObjectIdentifier) {
+        if startingStreamID == streamID {
+            guard !startingStreamDidStop else { return }
+            startingStreamDidStop = true
+            clearCaptureState()
+            levels = .zero
+            // An explicit Stop still owns its startup barrier. Preserve it
+            // until the start call returns instead of reopening capture early.
+            if phase != .stopping {
+                phase = .failed
+                errorMessage = AudioInputCheckError.captureUnavailable.errorDescription
+            }
+            return
+        }
         guard self.streamID == streamID else { return }
         guard phase != .stopping else { return }
         pollingTask?.cancel()

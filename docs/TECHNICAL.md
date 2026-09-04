@@ -82,6 +82,14 @@ the native implementation still uses the same ScreenCaptureKit configuration.
 Failed cleanup retains the candidate stream for Stop/retry instead of losing
 its only handle. `prepareForOtherCapture` refuses meeting/dictation startup
 until every input-check start/stop operation has relinquished ownership.
+The candidate identity is recorded before awaiting native startup. A matching
+terminal delegate callback remains recorded through the startup/cleanup barrier:
+late startup success cannot publish a stopped stream, and a redundant cleanup
+failure cannot restore its ownership. An explicit Stop still waits for that
+barrier after an early failure. Direct cancellation of the returned startup task
+also leaves no permanent Starting state. Callbacks from older identities do not
+stop a newer session. These are synthetic ordering guarantees, not a claim about
+physical permission prompts or audio-device behavior.
 Tests exercise cancellation before scheduling, delayed permission resolution,
 cancelled/failed startup, failed cleanup and overlapping stop requests without
 microphone, system audio, Speech or model access. These tests are not physical
