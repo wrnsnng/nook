@@ -9,7 +9,7 @@ struct QuickNoteView: View {
     /// The paragraph the user declined; it stays declined until the words
     /// change.
     @State private var dismissedSuggestion: String?
-    @State private var showsFilingPicker = false
+    @State private var reviewingVoiceCorrection: VoiceCorrectionProposal?
     private var taskSuggestion: QuickCaptureTaskParser.Suggestion? {
         guard let suggestion = note.taskSuggestion,
               !suggestion.paragraph.utf8.elementsEqual(dismissedSuggestion?.utf8 ?? "".utf8)
@@ -27,12 +27,13 @@ struct QuickNoteView: View {
             noticeIsFailure: note.message == nil || !note.messageIsAdvisory,
             hearing: isHearing ? dictation.volatileText : nil,
             hasSuggestion: taskSuggestion != nil,
-            hasAssistant: !note.availableEngines.isEmpty || note.isWorking
+            hasAssistant: !note.availableEngines.isEmpty || note.isWorking,
+            hasVoiceStatus: note.voiceStatus != nil
         )
     }
 
     private var isHearing: Bool {
-        dictation.phase == .listening && note.isFrontmost
+        dictation.phase == .listening && note.isDictationSurfaceActive
             && !dictation.volatileText.isEmpty
     }
 
@@ -48,7 +49,16 @@ struct QuickNoteView: View {
         .tint(NookPalette.accent)
         .background { closeShortcut }
         // Escape leaves the pad the way every other exit does, by saving.
-        .onExitCommand { note.done() }
+        .onExitCommand {
+            if let proposal = note.voiceCorrection { note.keepVoiceWords(proposal) }
+            else { note.done() }
+        }
+        .sheet(item: $note.filingRequest) { request in
+            QuickNoteFilingView(note: note, request: request)
+        }
+        .sheet(item: $reviewingVoiceCorrection, onDismiss: note.endVoiceCorrectionReview) { proposal in
+            VoiceCorrectionView(note: note, proposal: proposal)
+        }
         .onAppear { note.refreshTaskSuggestion() }
         // String equality folds canonically equivalent Unicode. The exact
         // revision also schedules saves for a byte-changing Unicode edit.
@@ -130,10 +140,39 @@ struct QuickNoteView: View {
             }
         case .noAssistant:
             noAssistantRow
+        case .voice:
+            voiceRow
         }
     }
 
     // MARK: - Rows
+
+    private var voiceRow: some View {
+        HStack(spacing: 8) {
+            Text(note.voiceStatus ?? "")
+                .font(NookType.caption)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            voiceActions
+        }
+        .buttonStyle(.bordered)
+    }
+
+    @ViewBuilder
+    private var voiceActions: some View {
+        if let proposal = note.voiceCorrection {
+            Button("Review") {
+                if note.beginVoiceCorrectionReview(proposal) { reviewingVoiceCorrection = proposal }
+            }
+            .accessibilityLabel("Review proposed voice correction")
+            .help("Pause dictation and review the original and replacement words.")
+            Button("Keep Words") { note.keepVoiceWords(proposal) }
+                .accessibilityLabel("Cancel proposed voice correction and keep words")
+        } else if note.canUndoVoiceCorrection {
+            Button("Undo", action: note.undoVoiceCorrection)
+                .accessibilityLabel("Undo voice correction and restore original words")
+        }
+    }
 
     /// States plainly, and permanently, that actions will send this note away.
     ///
@@ -188,6 +227,17 @@ struct QuickNoteView: View {
                     ? AnyShapeStyle(NookPalette.warning)
                     : AnyShapeStyle(.secondary)
             )
+
+            // Privacy and save failures take both notice slots. Keep the
+            // correction decision reachable inside the existing notice row,
+            // without replacing either warning or adding another banner.
+            if !rows.contains(.voice), note.voiceCorrection != nil || note.canUndoVoiceCorrection {
+                HStack(spacing: NookSpacing.medium) {
+                    Text("Voice correction")
+                    voiceActions
+                }
+                .buttonStyle(.bordered)
+            }
 
             if note.message == nil, note.recoveryWarning == nil,
                note.filingCompletionMessage == text {
@@ -527,7 +577,7 @@ struct QuickNoteView: View {
     /// which only added a click in front of the choice that mattered.
     private func filingButton(showsTitle: Bool) -> some View {
         Button {
-            showsFilingPicker = true
+            note.requestFiling()
         } label: {
             utilityLabel(
                 "File",
@@ -538,12 +588,9 @@ struct QuickNoteView: View {
         }
         .buttonStyle(.bordered)
         .disabled(note.text.isEmpty)
-        .help("Add to meeting, or open in Library.")
-        .accessibilityLabel("Add to meeting, or open in Library")
-        .accessibilityHint("Save this quick note to a recent meeting or open it in Library.")
-        .popover(isPresented: $showsFilingPicker, arrowEdge: .bottom) {
-            filingPicker
-        }
+        .help("Choose a separate note or append to an existing note.")
+        .accessibilityLabel("Choose where to file this note")
+        .accessibilityHint("Choose a separate note, an existing note, or the most recent meeting.")
     }
 
     /// Only offered when dictation is on. A toggle for something that cannot
@@ -596,7 +643,7 @@ struct QuickNoteView: View {
         .accessibilityHint("Remove this quick note. A confirmation may be required.")
     }
 
-    /// Saves and closes. Return belongs to the editor, so this is on
+    /// Offers a filing destination. Return belongs to the editor, so this is on
     /// Command-Return, and it steps aside to Shift-Command-Return while the
     /// suggestion row is showing and has claimed Command-Return.
     private var doneButton: some View {
@@ -615,8 +662,8 @@ struct QuickNoteView: View {
         )
         .help(
             rows.contains(.suggestion)
-                ? "Save and close. Shift-Command-Return while a suggestion is showing."
-                : "Save and close. Command-Return."
+                ? "Choose where to save. Shift-Command-Return while a suggestion is showing."
+                : "Choose where to save. Command-Return."
         )
     }
 
@@ -637,67 +684,6 @@ struct QuickNoteView: View {
         .hidden()
         .frame(width: 0, height: 0)
         .accessibilityHidden(true)
-    }
-
-    private var filingPicker: some View {
-        let choices = note.filingChoices
-        return VStack(alignment: .leading, spacing: NookSpacing.xSmall) {
-            Text("Add these words to")
-                .font(NookType.control)
-            if note.hasOmittedDuplicateMeetings {
-                Text("Meetings with a shared note ID are not listed. Review the copies in Library before filing into them.")
-                    .font(NookType.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Button("Review Copies in Library") {
-                    showsFilingPicker = false
-                    note.reviewFilingTargetsInLibrary()
-                }
-                .buttonStyle(.borderless)
-                .help("Open Library without saving or closing this quick note.")
-                .accessibilityHint("Keeps this quick note and its unsaved words open while you review the copied files.")
-            } else if choices.isEmpty {
-                Text("No meetings are available for filing.")
-                    .font(NookType.caption)
-                    .foregroundStyle(.secondary)
-            }
-            ForEach(choices) { choice in
-                Button {
-                    showsFilingPicker = false
-                    note.fileIntoMeeting(choice.note)
-                } label: {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(choice.title)
-                            .lineLimit(1)
-                        Text(choice.dateLabel)
-                            .font(NookType.caption)
-                            .foregroundStyle(.secondary)
-                        if let filename = choice.disambiguatingFilename {
-                            Text(verbatim: filename)
-                                .font(NookType.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
-                                .truncationMode(.middle)
-                        }
-                    }
-                }
-                .buttonStyle(QuickNotePickerRowStyle())
-                .accessibilityLabel(choice.accessibilityLabel)
-                .help(choice.note.fileURL?.path ?? choice.accessibilityLabel)
-            }
-
-            Divider()
-                .padding(.vertical, 2)
-
-            Button("Open in Library") {
-                showsFilingPicker = false
-                note.saveAndOpenInLibrary()
-            }
-            .buttonStyle(.borderless)
-            .help("Save this note and show it in the library.")
-        }
-        .padding(NookSpacing.medium + 2)
-        .frame(width: 280)
     }
 
     @ViewBuilder
@@ -744,47 +730,144 @@ struct QuickNoteView: View {
     }
 }
 
-/// The meeting rows in the filing popover, which are the pad's only piece of
-/// custom chrome. They owe the user the same states as every system control
-/// beside them: something under the pointer, something when pressed, and a
-/// focus ring for anyone who never touches the pointer at all.
-private struct QuickNotePickerRowStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        RowBody(configuration: configuration)
+/// The default saves the pad as its own note. Selecting an existing file is
+/// an explicit move of these words, never an implicit merge on ordinary quit.
+struct QuickNoteFilingView: View {
+    @ObservedObject var note: QuickNoteController
+    let request: QuickNoteFilingRequest
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+    @State private var destination: QuickNoteFilingDestination? = .separate
+    @FocusState private var searchFocused: Bool
+
+    private var choices: [QuickNoteFilingChoice] {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return request.choices }
+        return request.choices.filter {
+            $0.title.localizedStandardContains(needle)
+                || ($0.note.fileURL?.lastPathComponent.localizedStandardContains(needle) == true)
+        }
     }
 
-    private struct RowBody: View {
-        let configuration: Configuration
-        @State private var isHovering = false
-        @Environment(\.isFocused) private var isFocused
-        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var body: some View {
+        VStack(alignment: .leading, spacing: NookSpacing.medium) {
+            Text("Save this quick note")
+                .font(NookType.editorialSummary)
+                .accessibilityAddTraits(.isHeader)
+            Text("A separate note is the default. Choosing an existing note adds your words there and moves the earlier autosaved copy to Trash after saving.")
+                .font(NookType.caption)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Library: \(request.libraryPath)")
+                .font(NookType.caption)
+                .textSelection(.enabled)
+                .lineLimit(2)
+                .help(request.libraryPath)
 
-        private var shape: RoundedRectangle {
-            RoundedRectangle(
-                cornerRadius: NookRadius.control,
-                style: .continuous
-            )
-        }
-
-        var body: some View {
-            configuration.label
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, NookSpacing.small)
-                .padding(.vertical, NookSpacing.xSmall + 1)
-                .background { shape.fill(fill) }
-                .nookFocusRing(shape, isVisible: isFocused)
-                .contentShape(.rect)
-                .onHover { isHovering = $0 }
-                .animation(NookMotion.quickAnimation(reduceMotion: reduceMotion), value: isHovering)
-        }
-
-        private var fill: Color {
-            if configuration.isPressed {
-                return NookPalette.accent.opacity(0.18)
+            if note.outboundEngine != nil {
+                Label(note.outboundMessage, systemImage: "arrow.up.forward.app.fill")
+                    .font(NookType.caption)
+                    .foregroundStyle(NookPalette.warning)
             }
-            return isHovering ? NookPalette.accent.opacity(0.10) : .clear
+
+            TextField("Find an existing note", text: $query)
+                .textFieldStyle(.roundedBorder)
+                .focused($searchFocused)
+                .accessibilityLabel("Find a filing destination")
+            if let recent = request.choices.first(where: { $0.note.kind == .meeting }) {
+                Button("Most recent meeting: \(recent.title)") {
+                    query = ""
+                    destination = .existing(recent.id)
+                }
+                .buttonStyle(.borderless)
+                .help("Select this meeting's My notes field as the destination.")
+            }
+
+            List(selection: $destination) {
+                Text("Separate spoken note")
+                    .tag(QuickNoteFilingDestination.separate)
+                Section("Existing notes") {
+                    ForEach(choices) { choice in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(choice.title).lineLimit(1)
+                            Text("\(choice.note.kind.label) · \(choice.dateLabel)")
+                                .font(NookType.caption)
+                                .foregroundStyle(.secondary)
+                            if let filename = choice.disambiguatingFilename {
+                                Text(verbatim: filename)
+                                    .font(NookType.caption)
+                                    .lineLimit(2)
+                            }
+                        }
+                        .tag(QuickNoteFilingDestination.existing(choice.id))
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(choice.accessibilityLabel)
+                        .help(choice.note.fileURL?.path ?? choice.title)
+                    }
+                }
+            }
+            .frame(minHeight: 150, idealHeight: 240, maxHeight: 280)
+            .accessibilityLabel("Filing destination")
+            .onChange(of: query) { _, _ in
+                if case .existing(let identity) = destination,
+                   !choices.contains(where: { $0.id == identity }) {
+                    // Filtering cannot leave a hidden destructive destination
+                    // selected behind the default Save control.
+                    destination = .separate
+                }
+            }
+            if choices.isEmpty {
+                Text("No existing notes match. You can save a separate note.")
+                    .font(NookType.caption)
+            }
+            if request.hasOmittedDuplicates {
+                Text("Notes with a shared ID are omitted. Review the copies in Library before filing into them.")
+                    .font(NookType.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Review Copies in Library") { note.reviewFilingTargetsInLibrary() }
+                    .buttonStyle(.borderless)
+            }
+            if let message = note.message {
+                ScrollView {
+                    Text(message)
+                        .foregroundStyle(NookPalette.warning)
+                        .font(NookType.caption)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 70)
+            }
+            HStack {
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Spacer()
+                Button(destination == .separate ? "Save Separate Note" : "Add to Selected Note") {
+                    save()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(destination == nil)
+            }
+        }
+        .padding(NookSpacing.large)
+        .frame(width: 460)
+        .defaultFocus($searchFocused, true)
+    }
+
+    private func save() {
+        switch destination {
+        case .separate:
+            note.close()
+            if !note.hasUnsavedFailure { dismiss() }
+        case .existing(let identity):
+            guard let choice = request.choices.first(where: { $0.id == identity }) else { return }
+            if note.fileIntoNote(choice.note) { dismiss() }
+        case nil:
+            break
         }
     }
+}
+
+enum QuickNoteFilingDestination: Hashable {
+    case separate
+    case existing(LibraryNoteIdentity)
 }
 
 /// One thing the pad has to say above its bar.
@@ -796,6 +879,7 @@ enum QuickNotePadRow: Hashable {
     case hearing(text: String)
     case suggestion
     case noAssistant
+    case voice
 }
 
 /// Which of those rows are shown, and in what order.
@@ -815,7 +899,8 @@ enum QuickNotePadLayout {
         noticeIsFailure: Bool,
         hearing: String?,
         hasSuggestion: Bool,
-        hasAssistant: Bool
+        hasAssistant: Bool,
+        hasVoiceStatus: Bool = false
     ) -> [QuickNotePadRow] {
         var rows: [QuickNotePadRow] = []
         // Order is priority. The privacy warning is first because it is the
@@ -826,6 +911,7 @@ enum QuickNotePadLayout {
         if let notice, !notice.isEmpty {
             rows.append(.notice(text: notice, isFailure: noticeIsFailure))
         }
+        if hasVoiceStatus { rows.append(.voice) }
         if let hearing, !hearing.isEmpty {
             rows.append(.hearing(text: hearing))
         }

@@ -9,7 +9,7 @@ struct SnapshotRenderer {
         guard (2...4).contains(arguments.count),
               arguments.count < 4 || arguments[3] == "--interactive" else {
             FileHandle.standardError.write(
-                Data("Usage: NookSnapshot <output.png> [library|library-light|library-compact|welcome-light|welcome-dark|welcome-permission-light|welcome-permission-dark|welcome-ready-light|welcome-ready-dark|welcome-microphone-light|welcome-microphone-dark|welcome-speech-light|welcome-speech-dark|welcome-calendar-light|welcome-calendar-dark|welcome-dictation-light|welcome-dictation-dark|detail-transcript-light|detail-transcript-dark|detail-transcript-partial-light|detail-transcript-partial-dark|detail-transcript-no-matches-light|detail-transcript-no-matches-dark|detail-markdown-light|detail-markdown-dark|detail-markdown-conflict-light|detail-markdown-conflict-dark|detail-notes-light|detail-notes-dark|copy-failure-long-light|copy-failure-long-dark|copy-failure-pathological-light|copy-failure-pathological-dark|settings-about-light|settings-about-dark|settings-general-light|settings-general-dark|settings-listening-light|settings-listening-dark|settings-dictation-light|settings-dictation-dark|settings-assistant-unavailable-light|settings-assistant-unavailable-dark|settings-keyboard-light|settings-keyboard-dark|settings-privacy-light|settings-privacy-dark|settings-updates-light|settings-updates-dark|storage-light|storage-dark|storage-long-light|storage-long-dark|quick-note-light|quick-note-dark|quick-note-filled-light|quick-note-filled-dark|quick-note-codex-light|quick-note-codex-dark|quick-note-conflict-light|quick-note-conflict-dark|quick-note-conflict-codex-light|quick-note-conflict-codex-dark|quick-note-assistant-unavailable-light|quick-note-assistant-unavailable-dark|quick-note-assistant-running-light|quick-note-assistant-running-dark|quick-note-assistant-stopping-light|quick-note-assistant-stopping-dark|quick-note-filing-copy-retained-light|quick-note-filing-copy-retained-dark|draft-recovery-light|draft-recovery-dark|draft-recovery-minimum-light|draft-recovery-long-light|draft-recovery-invalid-light|draft-recovery-stale-light|draft-recovery-unavailable-light|recovery-section-light|recovery-section-dark|recovery-section-minimum-light|recovery-section-failure-light|recovery-section-failure-dark|recovery-section-library-light|library-draft-recovery-light|library-draft-recovery-dark|prep-light|prep-dark|ask-light|ask-dark|ask-answer-light|ask-answer-dark|ask-refusal-light|ask-refusal-dark|ask-long-light|ask-long-dark|ask-long-question-light|ask-long-question-dark|palette-light|palette-dark|floating-notes-light|floating-notes-dark|library-recording-light|library-recording-dark|live-follow-light|live-follow-dark|live|notch|external-panel|panel-compact-idle|panel-compact-flagged|panel-hidden-recording|panel-hidden-paused|summary-light|summary-dark|summary-regeneration-light|summary-regeneration-dark|notes-light|notes-dark|detected-light|detected-dark|detected-compact-light|detected-compact-dark|processing-light|processing-dark|completed-light|completed-dark|failure-light|failure-dark] [--interactive]\n".utf8)
+                Data("Usage: NookSnapshot <output.png> [library|library-light|library-compact|welcome-light|welcome-dark|welcome-permission-light|welcome-permission-dark|welcome-ready-light|welcome-ready-dark|welcome-microphone-light|welcome-microphone-dark|welcome-speech-light|welcome-speech-dark|welcome-calendar-light|welcome-calendar-dark|welcome-dictation-light|welcome-dictation-dark|detail-transcript-light|detail-transcript-dark|detail-transcript-partial-light|detail-transcript-partial-dark|detail-transcript-no-matches-light|detail-transcript-no-matches-dark|detail-markdown-light|detail-markdown-dark|detail-markdown-conflict-light|detail-markdown-conflict-dark|detail-notes-light|detail-notes-dark|copy-failure-long-light|copy-failure-long-dark|copy-failure-pathological-light|copy-failure-pathological-dark|settings-about-light|settings-about-dark|settings-general-light|settings-general-dark|settings-listening-light|settings-listening-dark|settings-dictation-light|settings-dictation-dark|settings-assistant-unavailable-light|settings-assistant-unavailable-dark|settings-keyboard-light|settings-keyboard-dark|settings-privacy-light|settings-privacy-dark|settings-updates-light|settings-updates-dark|storage-light|storage-dark|storage-long-light|storage-long-dark|quick-note-light|quick-note-dark|quick-note-filled-light|quick-note-filled-dark|quick-note-codex-light|quick-note-codex-dark|quick-note-conflict-light|quick-note-conflict-dark|quick-note-conflict-codex-light|quick-note-conflict-codex-dark|quick-note-assistant-unavailable-light|quick-note-assistant-unavailable-dark|quick-note-assistant-running-light|quick-note-assistant-running-dark|quick-note-assistant-stopping-light|quick-note-assistant-stopping-dark|quick-note-voice-conflict-codex-light|quick-note-voice-conflict-codex-dark|quick-note-voice-scratch-light|quick-note-voice-scratch-dark|quick-note-voice-item-light|quick-note-voice-item-dark|quick-note-voice-stale-light|quick-note-voice-stale-dark|quick-note-filing-light|quick-note-filing-dark|quick-note-filing-copy-retained-light|quick-note-filing-copy-retained-dark|draft-recovery-light|draft-recovery-dark|draft-recovery-minimum-light|draft-recovery-long-light|draft-recovery-invalid-light|draft-recovery-stale-light|draft-recovery-unavailable-light|recovery-section-light|recovery-section-dark|recovery-section-minimum-light|recovery-section-failure-light|recovery-section-failure-dark|recovery-section-library-light|library-draft-recovery-light|library-draft-recovery-dark|prep-light|prep-dark|ask-light|ask-dark|ask-answer-light|ask-answer-dark|ask-refusal-light|ask-refusal-dark|ask-long-light|ask-long-dark|ask-long-question-light|ask-long-question-dark|palette-light|palette-dark|floating-notes-light|floating-notes-dark|library-recording-light|library-recording-dark|live-follow-light|live-follow-dark|live|notch|external-panel|panel-compact-idle|panel-compact-flagged|panel-hidden-recording|panel-hidden-paused|summary-light|summary-dark|summary-regeneration-light|summary-regeneration-dark|notes-light|notes-dark|detected-light|detected-dark|detected-compact-light|detected-compact-dark|processing-light|processing-dark|completed-light|completed-dark|failure-light|failure-dark] [--interactive]\n".utf8)
             )
             Foundation.exit(64)
         }
@@ -534,6 +534,7 @@ struct SnapshotRenderer {
         case "quick-note-light", "quick-note-dark", "quick-note-filled-light", "quick-note-filled-dark", "quick-note-codex-light", "quick-note-codex-dark",
              "quick-note-conflict-light", "quick-note-conflict-dark",
              "quick-note-conflict-codex-light", "quick-note-conflict-codex-dark",
+             "quick-note-voice-conflict-codex-light", "quick-note-voice-conflict-codex-dark",
              "quick-note-assistant-unavailable-light", "quick-note-assistant-unavailable-dark",
              "quick-note-assistant-running-light", "quick-note-assistant-running-dark",
              "quick-note-assistant-stopping-light", "quick-note-assistant-stopping-dark",
@@ -547,7 +548,7 @@ struct SnapshotRenderer {
                     quickNote, target: roundTripped, store: store, files: filingFiles
                 )
             } else if mode.contains("conflict") {
-                validateConflictFixture = try prepareQuickNoteConflict(quickNote)
+                validateConflictFixture = try prepareQuickNoteConflict(quickNote, voiceCorrection: mode.contains("voice"))
             } else if mode.hasPrefix("quick-note-filled") || mode.contains("codex") {
                 quickNote.text = "Call Priya about the vendor contract by Thursday.\nShe wants the revised scope before the board meeting.\n\n- [ ] Send the scope doc"
             }
@@ -556,6 +557,38 @@ struct SnapshotRenderer {
                     .environmentObject(quickNote)
                     .environmentObject(dictation)
                     .frame(width: canvasSize.width, height: canvasSize.height)
+                    .environment(\.colorScheme, snapshotColorScheme)
+                    .transaction { $0.disablesAnimations = true }
+            )
+        case "quick-note-voice-scratch-light", "quick-note-voice-scratch-dark",
+             "quick-note-voice-item-light", "quick-note-voice-item-dark",
+             "quick-note-voice-stale-light", "quick-note-voice-stale-dark":
+            let removesPhrase = mode.contains("scratch")
+            canvasSize = CGSize(width: 520, height: removesPhrase ? 520 : 760)
+            quickNote.text = "Design review\n- [x] Send the revised outline"
+            quickNote.receiveDictation("after the planning call.", inserting: "after the planning call.")
+            let command = removesPhrase ? "Scratch that." : "Change the previous item to send the outline on Friday."
+            quickNote.receiveDictation(command, inserting: command)
+            guard let proposal = quickNote.voiceCorrection else { throw SnapshotError.fixtureValidationFailed }
+            if mode.contains("stale") { quickNote.text += "\nA newer edit." }
+            content = AnyView(
+                VoiceCorrectionView(note: quickNote, proposal: proposal)
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .environment(\.colorScheme, snapshotColorScheme)
+                    .transaction { $0.disablesAnimations = true }
+            )
+        case "quick-note-filing-light", "quick-note-filing-dark":
+            canvasSize = CGSize(width: 508, height: 640)
+            quickNote.text = "A synthetic thought to file after the design review."
+            quickNote.requestFiling()
+            guard let request = quickNote.filingRequest else {
+                throw SnapshotError.fixtureValidationFailed
+            }
+            content = AnyView(
+                QuickNoteFilingView(note: quickNote, request: request)
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .background(Color(nsColor: .windowBackgroundColor))
                     .environment(\.colorScheme, snapshotColorScheme)
                     .transaction { $0.disablesAnimations = true }
             )
@@ -1057,15 +1090,19 @@ struct SnapshotRenderer {
 
     @MainActor
     private static func prepareQuickNoteConflict(
-        _ controller: QuickNoteController
+        _ controller: QuickNoteController, voiceCorrection: Bool = false
     ) throws -> (@MainActor () throws -> Void) {
         controller.text = "Synthetic planning note. Keep the review checklist beside the source."
         guard let saved = controller.saveIfNeeded(), let file = saved.fileURL else {
             throw SnapshotError.fixtureValidationFailed
         }
         let original = try Data(contentsOf: file)
-        let localEdit = controller.text + "\n\nThese additional words are still held in the pad."
-        controller.text = localEdit
+        controller.text += "\n\nThese additional words are still held in the pad."
+        if voiceCorrection {
+            controller.receiveDictation("One more thought.", inserting: "One more thought.")
+            controller.receiveDictation("Scratch that.", inserting: "Scratch that.")
+        }
+        let localEdit = controller.text
         var externalEdit = original
         externalEdit.append(Data("\n\nSynthetic external edit: another writer changed this file.\n".utf8))
         try externalEdit.write(to: file, options: .atomic)
@@ -1075,6 +1112,7 @@ struct SnapshotRenderer {
                   controller.text.utf8.elementsEqual(localEdit.utf8),
                   controller.message?.hasSuffix(MarkdownStoreError.fileChangedElsewhere.localizedDescription) == true,
                   !controller.isWorking, !controller.isContinuous,
+                  !voiceCorrection || controller.voiceCorrection != nil,
                   try Data(contentsOf: file) == externalEdit else {
                 throw SnapshotError.fixtureValidationFailed
             }
@@ -1100,7 +1138,7 @@ struct SnapshotRenderer {
         controller.onDismissRequested = { dismissalRequests += 1 }
         let existing = target.personalNotes.trimmingCharacters(in: .whitespacesAndNewlines)
         let expected = existing.isEmpty ? words : "\(existing)\n\n\(words)"
-        controller.fileIntoMeeting(target)
+        controller.fileIntoNote(target)
         let retainedSource = try Data(contentsOf: sourceFile)
         let filedTarget = try Data(contentsOf: targetFile)
         guard let decodedSource = MarkdownCodec.decode(String(decoding: retainedSource, as: UTF8.self)),

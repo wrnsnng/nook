@@ -12,6 +12,29 @@ import SwiftUI
 final class TextViewInsertionPort {
     fileprivate weak var textView: NSTextView?
 
+    enum ReplacementResult { case applied, unavailable, refused }
+
+    /// An explicit reviewed correction is one native undo group. An input
+    /// method or a stale rendered buffer must never lose its text to it.
+    func replaceText(expected: String, with replacement: String, actionName: String) -> ReplacementResult {
+        guard let textView else { return .unavailable }
+        guard textView.isEditable, !textView.hasMarkedText(),
+              textView.string.utf16.elementsEqual(expected.utf16) else { return .refused }
+        textView.breakUndoCoalescing()
+        textView.undoManager?.beginUndoGrouping()
+        textView.insertText(replacement, replacementRange: NSRange(location: 0, length: textView.string.utf16.count))
+        textView.undoManager?.setActionName(actionName)
+        textView.undoManager?.endUndoGrouping()
+        textView.breakUndoCoalescing()
+        return textView.string.utf16.elementsEqual(replacement.utf16) ? .applied : .refused
+    }
+
+    func announce(_ message: String) {
+        guard let textView else { return }
+        NSAccessibility.post(element: textView, notification: .announcementRequested,
+                             userInfo: [.announcement: message, .priority: NSAccessibilityPriorityLevel.medium.rawValue])
+    }
+
     /// Inserts text at the cursor, starting a fresh line first when the
     /// cursor sits mid-line so prefixes like `- [ ] ` always begin a line.
     func insertLineStarting(with prefix: String) {

@@ -16,6 +16,15 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
   Searching runs off the main actor and ignores cancelled or stale results.
 - Library adds an explicit Yesterday range beside All and Today. Date ranges
   use calendar days and preserve the editor's Save/Discard/Cancel decision.
+## Unreleased
+
+- Quick Note offers a filing destination on Done or close, with a separate
+  spoken note as the default. Existing spoken notes, older meetings and digests
+  are available; stale destinations and the pad's own saved copy are excluded.
+- Quick Note recognizes complete "scratch that" and "change the previous item"
+  utterances as correction proposals. Words stay in the note until an explicit
+  review applies the change; Undo restores them. Ambiguous targets, changed
+  notes and active text composition cannot authorize a correction.
 
 ## 1.20.1
 
