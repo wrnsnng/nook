@@ -6,6 +6,10 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
+## 1.21.0
+
+[Release notes](Releases/Nook-1.21.0.md)
+
 - The notch is redesigned as one island that grows out of the camera housing,
   springs between states and folds back into it when a meeting is saved.
   While recording it wraps the camera, a waveform on one side and the clock
