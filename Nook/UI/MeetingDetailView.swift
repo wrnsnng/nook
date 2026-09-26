@@ -260,6 +260,7 @@ struct MeetingDetailView: View {
             reduceMotion ? nil : .easeOut(duration: 0.24),
             value: tab
         )
+        .toolbar { detailToolbar }
         .sheet(item: $reviewingSummaryItem, onDismiss: returnFromSummaryReview) { session in
             SummaryItemReviewView(session: session)
         }
@@ -280,35 +281,24 @@ struct MeetingDetailView: View {
         note.kind != .spoken || !note.transcript.isEmpty
     }
 
+    /// Title and metadata only. The view switcher and actions live in the
+    /// window toolbar, where every Mac document window keeps them.
     private var documentHeader: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .center, spacing: 16) {
-                    titleBlock
-                    Spacer(minLength: 24)
-                    DetailTabBar(
-                        selection: $tab,
-                        showsTranscript: showsTranscriptTab
-                    )
-                    detailActions
-                }
+        titleBlock
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 42)
+            .padding(.top, 28)
+            .padding(.bottom, 12)
+    }
 
-                VStack(alignment: .leading, spacing: 18) {
-                    titleBlock
-                    HStack {
-                        DetailTabBar(
-                            selection: $tab,
-                            showsTranscript: showsTranscriptTab
-                        )
-                        Spacer()
-                        detailActions
-                    }
-                }
-            }
+    @ToolbarContentBuilder
+    private var detailToolbar: some ToolbarContent {
+        ToolbarItem(placement: .principal) {
+            DetailTabBar(selection: $tab, showsTranscript: showsTranscriptTab)
         }
-        .padding(.horizontal, 42)
-        .padding(.top, 28)
-        .padding(.bottom, 12)
+        ToolbarItem(placement: .automatic) {
+            detailActions
+        }
     }
 
     private var detailActions: some View {
@@ -361,14 +351,9 @@ struct MeetingDetailView: View {
                 RecordIntoNoteMenuItem(note: note)
             }
         } label: {
-            Image(systemName: "ellipsis")
-                .font(NookType.control)
-                .frame(width: 28, height: 28)
-                .contentShape(Rectangle())
+            Label(detailActionsLabel, systemImage: "ellipsis.circle")
         }
-        .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
-        .fixedSize()
         .help(detailActionsLabel)
         .accessibilityLabel(detailActionsLabel)
     }
@@ -931,23 +916,27 @@ struct MeetingDetailView: View {
 
     private var summarySection: some View {
         VStack(alignment: .leading, spacing: 16) {
-            NookSectionLabel(
-                title: note.kind == .spoken ? "Spoken words"
-                    : note.summaryProvenance != nil ? "Fallback write-up" : "The gist",
-                symbol: note.kind == .spoken
-                    ? "waveform" : "text.alignleft",
-                tint: NookPalette.accent
-            )
-            .focusable()
-            .focused($summaryReviewFocus, equals: "summary-section")
-            .accessibilityFocused($summaryReviewAccessibilityFocus, equals: "summary-section")
-
-            if SummaryRegenerator.isAvailable(for: note) {
-                SummaryRecipeControl(
-                    recipe: Binding(get: { note.summaryRecipe }, set: { selectSummaryRecipe($0) }),
-                    isEnabled: !markdownDraft.hasChanges && !isRegenerating,
-                    regenerate: regenerateSummary
+            HStack(alignment: .firstTextBaseline) {
+                NookSectionLabel(
+                    title: note.kind == .spoken ? "Spoken words"
+                        : note.summaryProvenance != nil ? "Fallback write-up" : "The gist",
+                    symbol: note.kind == .spoken
+                        ? "waveform" : "text.alignleft",
+                    tint: NookPalette.accent
                 )
+                .focusable()
+                .focused($summaryReviewFocus, equals: "summary-section")
+                .accessibilityFocused($summaryReviewAccessibilityFocus, equals: "summary-section")
+
+                Spacer(minLength: 12)
+
+                if SummaryRegenerator.isAvailable(for: note) {
+                    SummaryRecipeControl(
+                        recipe: Binding(get: { note.summaryRecipe }, set: { selectSummaryRecipe($0) }),
+                        isEnabled: !markdownDraft.hasChanges && !isRegenerating,
+                        regenerate: regenerateSummary
+                    )
+                }
             }
             summaryProse
         }
@@ -1328,18 +1317,13 @@ struct MeetingDetailView: View {
                     Button("Revert") {
                         markdownDraft.discardChanges()
                     }
-                    .buttonStyle(NookButtonStyle())
+                    .buttonStyle(.bordered)
                     .disabled(!hasMarkdownChanges)
 
                     Button("Save") {
                         saveMarkdown()
                     }
-                    .buttonStyle(
-                        NookButtonStyle(
-                            tint: NookPalette.accent,
-                            isProminent: true
-                        )
-                    )
+                    .buttonStyle(.borderedProminent)
                     .disabled(!hasMarkdownChanges)
                     .keyboardShortcut(
                         shortcuts.binding(for: .saveNote).keyEquivalent,

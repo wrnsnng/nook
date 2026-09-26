@@ -114,7 +114,7 @@ struct LiveMeetingView: View {
                         } label: {
                             Label("Jump to latest", systemImage: "arrow.down")
                         }
-                        .buttonStyle(NookButtonStyle())
+                        .buttonStyle(.bordered)
                         .background(
                             NookPalette.paper,
                             in: RoundedRectangle(cornerRadius: NookRadius.control, style: .continuous)
@@ -466,7 +466,7 @@ struct LiveMeetingView: View {
                     Button("Cancel and discard recording") {
                         meeting.requestProcessingCancellation()
                     }
-                    .buttonStyle(NookButtonStyle())
+                    .buttonStyle(.bordered)
                     .accessibilityHint(
                         "Asks before permanently discarding this recording without saving a note"
                     )
@@ -497,22 +497,17 @@ struct LiveMeetingView: View {
                     Button(permission.primaryActionTitle) {
                         meeting.performPermissionPrimaryAction()
                     }
-                    .buttonStyle(NookButtonStyle())
+                    .buttonStyle(.bordered)
 
                     Button("Open \(settingsName(for: permission)) Settings") {
                         meeting.revealPermissions()
                     }
-                    .buttonStyle(
-                        NookButtonStyle(
-                            tint: NookPalette.accent,
-                            isProminent: true
-                        )
-                    )
+                    .buttonStyle(.borderedProminent)
                 } else {
                     Button("Dismiss") {
                         meeting.resetStatus()
                     }
-                    .buttonStyle(NookButtonStyle())
+                    .buttonStyle(.bordered)
                 }
             }
         }

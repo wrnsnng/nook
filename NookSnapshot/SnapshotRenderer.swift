@@ -47,7 +47,9 @@ struct SnapshotRenderer {
             : .dark
 
         let app = NSApplication.shared
-        app.setActivationPolicy(isInteractive ? .regular : .prohibited)
+        let wantsWindow = isInteractive
+            || ProcessInfo.processInfo.environment["NOOK_SNAPSHOT_WINDOWED"] == "1"
+        app.setActivationPolicy(wantsWindow ? .regular : .prohibited)
 
         let workspace = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -1065,9 +1067,15 @@ struct SnapshotRenderer {
         let appearance: NSAppearance.Name = isLightAppearance ? .aqua : .darkAqua
         hostingView.appearance = NSAppearance(named: appearance)
 
+        // NOOK_SNAPSHOT_WINDOWED=1 captures a real on-screen window, so the
+        // toolbar, titlebar and sidebar materials appear. Offscreen caching
+        // draws the sidebar blank and has no toolbar at all.
+        let isWindowed = ProcessInfo.processInfo.environment["NOOK_SNAPSHOT_WINDOWED"] == "1"
         let window = NSWindow(
             contentRect: hostingView.frame,
-            styleMask: isInteractive ? [.titled, .closable, .resizable] : [.borderless],
+            styleMask: isInteractive || isWindowed
+                ? [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+                : [.borderless],
             backing: .buffered,
             defer: false
         )
@@ -1078,6 +1086,20 @@ struct SnapshotRenderer {
         window.contentView = hostingView
         window.layoutIfNeeded()
         hostingView.layoutSubtreeIfNeeded()
+        if isWindowed {
+            window.toolbarStyle = .unified
+            window.center()
+            window.makeKeyAndOrderFront(nil)
+            app.activate(ignoringOtherApps: true)
+            RunLoop.current.run(until: Date().addingTimeInterval(2.0))
+            let capture = Process()
+            capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+            capture.arguments = ["-x", "-o", "-l", String(window.windowNumber), arguments[1]]
+            try capture.run()
+            capture.waitUntilExit()
+            print(arguments[1])
+            Foundation.exit(capture.terminationStatus)
+        }
         RunLoop.current.run(until: Date().addingTimeInterval(1.2))
         // View preparation and asynchronous store reloads must not replace
         // the refused draft or clear its actual controller error before capture.

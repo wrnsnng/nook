@@ -518,7 +518,7 @@ struct WelcomeView: View {
                 Button(status == .needsAttention ? "Open Settings" : "Set up") {
                     resolve(permission)
                 }
-                .buttonStyle(NookButtonStyle(tint: NookPalette.accent))
+                .buttonStyle(.bordered)
                 .disabled(permissions.permissionInFlight != nil)
                 .accessibilityLabel("Set up \(permission.title)")
             }
@@ -698,23 +698,13 @@ struct WelcomeView: View {
                 Button("Done") {
                     finishWelcome()
                 }
-                .buttonStyle(
-                    NookButtonStyle(
-                        tint: NookPalette.accent,
-                        isProminent: true
-                    )
-                )
+                .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
             } else {
                 Button("Continue") {
                     advance()
                 }
-                .buttonStyle(
-                    NookButtonStyle(
-                        tint: NookPalette.accent,
-                        isProminent: true
-                    )
-                )
+                .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
             }
         }
@@ -757,12 +747,7 @@ struct WelcomeView: View {
                 Text(title)
             }
         }
-        .buttonStyle(
-            NookButtonStyle(
-                tint: NookPalette.accent,
-                isProminent: true
-            )
-        )
+        .buttonStyle(.borderedProminent)
         .keyboardShortcut(.defaultAction)
         .disabled(permissions.permissionInFlight != nil)
     }

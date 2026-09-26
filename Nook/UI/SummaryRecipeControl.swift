@@ -7,42 +7,27 @@ struct SummaryRecipeControl: View {
     let isEnabled: Bool
     let regenerate: () -> Void
 
+    /// A pull-down beside the section title, the way Photos and Notes tuck
+    /// view options away. Choosing a recipe inside the menu only saves it;
+    /// Regenerate is a separate item, so a selection never starts a model.
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ViewThatFits(in: .horizontal) {
-                HStack {
-                    recipePicker
-                    Spacer(minLength: 8)
-                    regenerateButton
-                }
-                VStack(alignment: .leading, spacing: 8) {
-                    recipePicker
-                    regenerateButton
-                }
+        Menu {
+            Picker("Summary Recipe", selection: $recipe) {
+                ForEach(SummaryRecipe.allCases) { option in Text(option.title).tag(option) }
             }
-            .disabled(!isEnabled)
-            Text(recipe == .general
-                 ? "General keeps the usual balance. Select a recipe for emphasis, then regenerate on this Mac."
-                 : recipe.guidance + " Select Regenerate Summary to apply it on this Mac.")
-                .font(NookType.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            .pickerStyle(.inline)
+            Divider()
+            Button("Regenerate Summary", action: regenerate)
+        } label: {
+            Text(recipe.title)
         }
-        .accessibilityElement(children: .contain)
-    }
-
-    private var recipePicker: some View {
-        Picker("Summary recipe", selection: $recipe) {
-            ForEach(SummaryRecipe.allCases) { option in Text(option.title).tag(option) }
-        }
-        .pickerStyle(.menu)
+        .menuStyle(.borderlessButton)
         .fixedSize()
-    }
-
-    private var regenerateButton: some View {
-        Button("Regenerate Summary", action: regenerate)
-            .buttonStyle(.bordered)
-            .fixedSize()
+        .disabled(!isEnabled)
+        .help(recipe == .general
+              ? "General keeps the usual balance. Choose a recipe for emphasis, then regenerate on this Mac."
+              : recipe.guidance + " Choose Regenerate Summary to apply it on this Mac.")
+        .accessibilityLabel("Summary recipe, \(recipe.title)")
     }
 }
 

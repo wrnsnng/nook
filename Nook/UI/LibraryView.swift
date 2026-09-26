@@ -481,8 +481,33 @@ struct LibraryView: View {
             sidebar
                 .navigationSplitViewColumnWidth(min: 260, ideal: 304, max: 380)
         } detail: {
+            // Attached to the detail column so these sit trailing, beside
+            // the note's own actions, rather than against the sidebar.
             detail
+            .toolbar {
+                // `.primaryAction` is the leading edge on macOS; actions that
+                // belong to the whole library sit trailing, as in Mail.
+                ToolbarItemGroup(placement: .automatic) {
+                    Button(action: presentAskSheet) {
+                        Label("Ask your library", systemImage: "sparkle.magnifyingglass")
+                    }
+                    .help("Ask a question across all your notes")
+                    .disabled(store.isLoading)
+
+                    Button {
+                        createWeeklyDigest()
+                    } label: {
+                        Label("Create weekly digest", systemImage: "newspaper")
+                    }
+                    .help("Compile this week's meetings into one note")
+
+                    LibraryRecordingToolbar(createNote: createNote)
+                }
+            }
         }
+        // Like Notes and Mail: the selected note names itself in the
+        // content, so a window title would only crowd the toolbar.
+        .toolbar(removing: .title)
         .tint(NookPalette.accent)
         .background {
             CommandPaletteWindowAnchor(presenter: commandPaletteSheet)
@@ -509,24 +534,6 @@ struct LibraryView: View {
                 .frame(width: 0, height: 0)
                 .opacity(0)
                 .accessibilityHidden(true)
-        }
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button(action: presentAskSheet) {
-                    Label("Ask your library", systemImage: "sparkle.magnifyingglass")
-                }
-                .help("Ask a question across all your notes")
-                .disabled(store.isLoading)
-
-                Button {
-                    createWeeklyDigest()
-                } label: {
-                    Label("Create weekly digest", systemImage: "newspaper")
-                }
-                .help("Compile this week's meetings into one note")
-
-                LibraryRecordingToolbar(createNote: createNote)
-            }
         }
         .nookNotice(copyNotice.current) { id in
             withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
@@ -1008,14 +1015,6 @@ struct LibraryView: View {
                             showsFileIdentity: store.duplicateNoteIDs.contains(note.id)
                         )
                         .tag(LibrarySelection.note(note.libraryIdentity))
-                        // Nook's own selection fill rather than the system's:
-                        // it is a deeper blue chosen so white row text keeps
-                        // AA contrast in an inactive window too.
-                        .listRowBackground(
-                            selection == .note(note.libraryIdentity)
-                                ? NookPalette.sidebarSelection
-                                : Color.clear
-                        )
                         .contextMenu {
                             Button("Show in Finder") {
                                 store.reveal(note)
@@ -1074,55 +1073,18 @@ struct LibraryView: View {
         librarySidebarSectionHeader(title)
     }
 
-    /// A section header that folds its own section away.
-    ///
-    /// The disclosure is a real button rather than a tap on the label, so it
-    /// has a hit target, a focus ring, and something for VoiceOver to say.
-    private func collapsibleSectionHeader(
-        _ title: String,
-        isExpanded: Binding<Bool>
-    ) -> some View {
-        Button {
-            withAnimation(reduceMotion ? nil : NookMotion.quick) {
-                isExpanded.wrappedValue.toggle()
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.semibold))
-                    .rotationEffect(
-                        .degrees(isExpanded.wrappedValue ? 90 : 0)
-                    )
-                    .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
-                sidebarSectionHeader(title)
-                Spacer(minLength: 0)
-            }
-            .frame(minHeight: 28)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(isExpanded.wrappedValue ? "Hide \(title)" : "Show \(title)")
-        .accessibilityLabel(title)
-        .accessibilityValue(isExpanded.wrappedValue ? "Showing" : "Hidden")
-        .accessibilityHint("Shows or hides this section")
-    }
-
     /// A quiet pointer at the next sitting of a series with history. Time-
     /// sensitive, so it leads the sidebar; tapping opens the brief.
     @ViewBuilder
     private var prepSection: some View {
         if let brief = prep.current {
-            Section {
-                if prepExpanded {
-                    PrepCard(
-                        brief: brief,
-                        isOpen: selection == .prep,
-                        onOpen: { requestSelection(.prep) }
-                    )
-                    .tag(LibrarySelection.prep)
-                }
-            } header: {
-                collapsibleSectionHeader("Prep", isExpanded: $prepExpanded)
+            Section("Prep", isExpanded: $prepExpanded) {
+                PrepCard(
+                    brief: brief,
+                    isOpen: selection == .prep,
+                    onOpen: { requestSelection(.prep) }
+                )
+                .tag(LibrarySelection.prep)
             }
         }
     }
@@ -1140,10 +1102,8 @@ struct LibraryView: View {
             showingAll: openActionsShowAll
         )
         if !pool.isEmpty || openActions.lastError != nil {
-            Section {
-                if openActionsExpanded {
-                    openActionRows(visible: visible, pool: pool)
-                }
+            Section(isExpanded: $openActionsExpanded) {
+                openActionRows(visible: visible, pool: pool)
                 if let message = openActions.lastError {
                     Label {
                         Text(message)
@@ -1157,10 +1117,7 @@ struct LibraryView: View {
                         .help(message)
                 }
             } header: {
-                collapsibleSectionHeader(
-                    "Open actions",
-                    isExpanded: $openActionsExpanded
-                )
+                Text("Open actions")
             }
         }
     }
@@ -1866,11 +1823,6 @@ private struct LibraryLiveSection: View {
                     isSelected: selection == .live
                 )
                 .tag(LibrarySelection.live)
-                .listRowBackground(
-                    selection == .live
-                        ? NookPalette.sidebarSelection
-                        : Color.clear
-                )
             } header: {
                 librarySidebarSectionHeader("Now")
             }
@@ -2147,108 +2099,45 @@ private struct LibraryRecoverySection: View {
 /// `LibraryLiveSection`, which cannot call a private method on the view.
 private func librarySidebarSectionHeader(_ title: String) -> some View {
     Text(title)
-        .font(.caption.weight(.semibold))
-        .foregroundStyle(Color(nsColor: .secondaryLabelColor))
-        .textCase(nil)
 }
 
+/// Laid out like a Voice Memos row: title, then date and duration. Colours
+/// are hierarchical styles, so the system selection highlight inverts them
+/// in active and inactive windows without any per-row bookkeeping.
 private struct MeetingRow: View {
     let note: MeetingNote
     let isSelected: Bool
     var showsFileIdentity = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: 11) {
-            sourceMark
+        VStack(alignment: .leading, spacing: 3) {
+            Text(note.title)
+                .font(.headline)
+                .lineLimit(1)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(note.title)
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(primaryTextColor)
-                    .lineLimit(1)
-
-                if showsFileIdentity, let file = note.fileURL {
-                    Label(file.lastPathComponent, systemImage: "doc.on.doc")
-                        .font(.caption)
-                        .foregroundStyle(secondaryTextColor)
-                        .lineLimit(2)
-                        .help(file.path)
-                }
-
-                if !note.summary.trimmingCharacters(
-                    in: .whitespacesAndNewlines
-                ).isEmpty {
-                        Text(note.summary)
-                            .font(NookType.caption)
-                            .foregroundStyle(secondaryTextColor)
-                            .lineLimit(1)
-                }
-
-                HStack(spacing: 5) {
-                    Text(
-                        note.startedAt,
-                        format: .dateTime
-                            .hour()
-                            .minute()
-                    )
-                    Text("·")
-                    Text(note.durationLabel)
-                    if !note.sourceApp.isEmpty {
-                        Text("·")
-                        Text(note.sourceApp)
-                            .lineLimit(1)
-                    }
-                }
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(secondaryTextColor)
+            if showsFileIdentity, let file = note.fileURL {
+                Label(file.lastPathComponent, systemImage: "doc.on.doc")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .help(file.path)
             }
+
+            HStack(spacing: 6) {
+                Text(note.startedAt, format: .dateTime.hour().minute())
+                if !note.sourceApp.isEmpty {
+                    Text(note.sourceApp)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                Text(note.durationLabel)
+                    .monospacedDigit()
+            }
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
         }
-        .padding(.vertical, 5)
+        .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
-    }
-
-    private var primaryTextColor: Color {
-        Color(
-            nsColor: isSelected
-                ? .alternateSelectedControlTextColor
-                : .labelColor
-        )
-    }
-
-    private var secondaryTextColor: Color {
-        if isSelected {
-            return Color(nsColor: .alternateSelectedControlTextColor)
-                .opacity(0.78)
-        }
-        return Color(nsColor: .secondaryLabelColor)
-    }
-
-    private var sourceMark: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(
-                    isSelected
-                        ? Color.white.opacity(0.14)
-                        : sourceTint.opacity(0.12)
-                )
-            Image(systemName: sourceSymbol)
-                .font(NookType.bodyEmphasized)
-                .foregroundStyle(isSelected ? Color.white : sourceTint)
-        }
-        .frame(width: 29, height: 29)
-        .accessibilityHidden(true)
-    }
-
-    private var sourceTint: Color {
-        return NookPalette.accent
-    }
-
-    private var sourceSymbol: String {
-        let source = note.sourceApp.lowercased()
-        if source.contains("teams") { return "person.3.fill" }
-        if source.contains("zoom") { return "video.fill" }
-        if source.contains("meet") { return "video.bubble.fill" }
-        return "quote.bubble.fill"
     }
 }
 
@@ -2263,45 +2152,26 @@ private struct LiveSidebarRow: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(spacing: 11) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(
-                        isSelected
-                            ? Color.white.opacity(0.14)
-                            : tint.opacity(0.14)
-                    )
-                Image(systemName: symbol)
-                    .font(NookType.bodyEmphasized)
-                    .foregroundStyle(isSelected ? Color.white : tint)
-                    .symbolEffect(
-                        .pulse,
-                        isActive: phase.isRecording
-                            && !isPaused
-                            && !reduceMotion
-                    )
-            }
-            .frame(width: 30, height: 30)
-
+        Label {
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(NookType.control)
-                    .foregroundStyle(
-                        isSelected
-                            ? Color.white
-                            : Color(nsColor: .labelColor)
-                    )
+                    .font(.headline)
                 Text(detail)
-                    .font(.system(size: 10))
-                    .foregroundStyle(
-                        isSelected
-                            ? Color.white.opacity(0.82)
-                            : Color(nsColor: .secondaryLabelColor)
-                    )
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
             }
-            Spacer()
+        } icon: {
+            Image(systemName: symbol)
+                .foregroundStyle(tint)
+                .symbolEffect(
+                    .pulse,
+                    isActive: phase.isRecording
+                        && !isPaused
+                        && !reduceMotion
+                )
         }
-        .padding(.vertical, 5)
+        .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(title), \(detail)")
     }
@@ -2368,12 +2238,7 @@ private struct EmptyLibraryView: View {
                     Label("Record your first meeting", systemImage: "waveform.badge.mic")
                         .padding(.horizontal, 5)
                 }
-                .buttonStyle(
-                    NookButtonStyle(
-                        tint: NookPalette.accent,
-                        isProminent: true
-                    )
-                )
+                .buttonStyle(.borderedProminent)
                 .controlSize(.large)
             }
             .padding(50)
@@ -2436,15 +2301,6 @@ private struct OpenActionRow: View {
                                 .foregroundStyle(
                                     dueChip.isOverdue
                                         ? NookPalette.danger : .secondary
-                                )
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1)
-                                .background(
-                                    Capsule().fill(
-                                        (dueChip.isOverdue
-                                            ? NookPalette.danger
-                                            : Color.secondary).opacity(0.12)
-                                    )
                                 )
                                 .accessibilityLabel(
                                     dueChip.isOverdue
