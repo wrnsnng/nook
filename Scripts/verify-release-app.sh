@@ -105,7 +105,14 @@ SPARKLE_VERSION=$(read_plist_value "$SPARKLE_INFO_PLIST" CFBundleShortVersionStr
   || fail "the bundled speaker diarization models are missing or differ from the pinned files."
 [[ ! -e "$APP_PATH/Contents/Resources/FluidAudio_FluidAudio.bundle" ]] \
   || fail "FluidAudio's unused text-to-speech lexicon is bundled."
-/usr/bin/strings "$APP_PATH/Contents/MacOS/Nook" | /usr/bin/grep -Fq "NemoTextProcessing engine not linked" \
+# Not grep -q: it exits at the first match, strings then dies of SIGPIPE, and
+# pipefail reports the whole check as failed. FluidAudio emits this message
+# only when its normalizer is absent.
+NORMALIZER_ABSENT=$(
+  /usr/bin/strings "$APP_PATH/Contents/MacOS/Nook" \
+    | /usr/bin/grep -Fc "NemoTextProcessing engine not linked" || true
+)
+(( NORMALIZER_ABSENT > 0 )) \
   || fail "FluidAudio's text normalizer is linked; the FluidAudio package must have no traits."
 SPARKLE_LICENSE_SHA256=$(
   /usr/bin/shasum -a 256 "$SPARKLE_LICENSE_PATH" | /usr/bin/awk '{print $1}'
