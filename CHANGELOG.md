@@ -6,38 +6,49 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
-- The meeting-audio check retains control of streams whose startup cleanup or
-  stop failed. Meeting capture and dictation wait for confirmed cleanup, and
-  denied permissions link to the corresponding macOS Settings pane.
-  A stream confirmed stopped by its callback cannot become stuck after a late
-  Stop error; other capture still waits for the stop operation to finish.
-- Command-palette note search finds abbreviations and typos across titles,
-  transcripts and structured note content, with exact title matches first.
-  Searching runs off the main actor and ignores cancelled or stale results.
-- Library adds an explicit Yesterday range beside All and Today. Date ranges
-  use calendar days and preserve the editor's Save/Discard/Cancel decision.
-## Unreleased
-
-- Quick Note offers a filing destination on Done or close, with a separate
-  spoken note as the default. Existing spoken notes, older meetings and digests
-  are available; stale destinations and the pad's own saved copy are excluded.
-- Quick Note recognizes complete "scratch that" and "change the previous item"
-  utterances as correction proposals. Words stay in the note until an explicit
-  review applies the change; Undo restores them. Ambiguous targets, changed
-  notes and active text composition cannot authorize a correction.
+- The notch is redesigned as one island that grows out of the camera housing,
+  springs between states and folds back into it when a meeting is saved.
+  While recording it wraps the camera, a waveform on one side and the clock
+  on the other, and hangs nothing below the menu bar; hovering lowers the
+  controls. A light along its lower edge follows the voice, sweeps while notes
+  are written and flashes when they are saved. Reduce Motion replaces the
+  movement with cross-fades.
+- Rest the pointer on the notch, or the middle of the menu bar on a display
+  without one, to record, write a quick note or open the library. Settings,
+  General turns this off. When calendar context is on, the notch also comes
+  out briefly before an event starts, with Record and, for a series with
+  earlier notes, Prep.
+- While recording, Take a Note (Option-Command-N, rebindable) or the pencil on
+  the hover shelf opens a one-line note field in the notch; each line joins
+  My notes. The My notes tab no longer disappears while notes are in their
+  own window. Lines said at a flagged moment show the flag in live captions.
+- Draft Follow-up writes a recap of a saved meeting (summary, decisions, next
+  steps with owners and dates, open questions) for email or chat, on this Mac.
+  Review it, copy it, or open it in Mail; Nook never sends anything. Share a
+  note's summary or its Markdown file from the toolbar or the actions menu.
+- Action items show their owner when the item names one, as in
+  `Maya: refine the copy` or `@Maya refine the copy`, in the note and in Open
+  actions. The note's wording is not changed.
+- Transcripts tell the other voices in a meeting apart, on this Mac, after the
+  meeting ends: lines are labelled Speaker 1, Speaker 2 until you name them
+  from the transcript, and summaries, search, Ask and copied transcripts use
+  the names. Your own voice stays You. Settings, Listening can turn this off.
+- A new accent colour, lagoon teal, and a new app icon built around the notch.
+- Setup shows what each step is for on a small animated Mac, from a meeting
+  being noticed to its note being saved.
+- The Library, Settings and setup now use standard macOS controls and layout.
+  Note view switching and actions live in the window toolbar, the sidebar uses
+  system selection and collapsible sections, and each note reads as one
+  document column with a title, headings and body text. Supporting-transcript
+  buttons appear when the pointer is over a line or the button has keyboard
+  focus, and stay available to VoiceOver. Rename a note by double-clicking its
+  title or choosing Rename from the actions menu.
 - New captures preserve microphone/system input labels in a separate local
   audio copy for file transcription and recovery. The original recording
   remains the fallback if the source copy cannot be completed or validated.
   Recovery refreshes older playback mixes from all remaining capture parts,
   including resumed parts without a completed source copy.
   Legacy recordings without source metadata remain Unattributed.
-- Extracted recordings include every audio track across paused/resumed parts,
-  preserving track offsets and gaps. Failed or cancelled exports no longer
-  delete previously extracted audio before a replacement is ready.
-- Recordings, recovered recordings and live-caption rescue notes save their
-  words before summary enrichment. Saved notes show background progress,
-  non-destructive cancellation and Retry without hiding the transcript or
-  current write-up. Unfinished summaries remain retryable after relaunch.
 - Fallback write-ups are explicitly labeled and keep a visible Retry action
   after reopening. Their origin stays separate from progress and failure
   messages. Failed note merging retains earlier facts, decisions and questions;
@@ -50,6 +61,34 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
   Choose General, Standup, One-to-one or Interview emphasis on a saved meeting,
   then explicitly regenerate on this Mac. Recipe selection does not start a
   model, and existing user-written Open questions headings keep their meaning.
+- Extracted recordings include every audio track across paused/resumed parts,
+  preserving track offsets and gaps. Failed or cancelled exports no longer
+  delete previously extracted audio before a replacement is ready.
+- Quick Note recognizes complete "scratch that" and "change the previous item"
+  utterances as correction proposals. Words stay in the note until an explicit
+  review applies the change; Undo restores them. Ambiguous targets, changed
+  notes and active text composition cannot authorize a correction.
+- Quick Note offers a filing destination on Done or close, with a separate
+  spoken note as the default. Existing spoken notes, older meetings and digests
+  are available; stale destinations and the pad's own saved copy are excluded.
+- The Library adds a Yesterday range. Command-palette fuzzy search includes
+  transcript and structured content, runs away from the typing thread, and
+  ignores results from superseded searches.
+- Audio-input checks retain failed-cleanup streams for retry, including when
+  startup was cancelled. Meeting and dictation capture wait for confirmed
+  teardown. Input permission failures open the matching Settings pane.
+  A stream confirmed stopped by its callback cannot become stuck after a late
+  Stop error; other capture still waits for the stop operation to finish.
+- Recordings, recovered recordings and live-caption rescue notes save their
+  words before summary enrichment. Saved notes show background progress,
+  non-destructive cancellation and Retry without hiding the transcript or
+  current write-up. Unfinished summaries remain retryable after relaunch.
+- Shortcuts and Siri can start, pause, resume and finish a recording, flag a
+  moment, take a note, ask your library, list open action items, read the
+  latest meeting summary and open a chosen meeting. Saved meetings and quick
+  notes appear in Spotlight by title, summary, key points and decisions, and
+  open in the library; the index stays on this Mac and Settings, General turns
+  it off.
 
 ## 1.20.1
 

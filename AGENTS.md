@@ -13,8 +13,13 @@ what an agent gets wrong.
 ## Commands
 
 ```sh
+# Once per checkout, and again when the script's pinned revision changes:
+# fetch and verify the bundled speaker separation models. Builds fail without
+# them on purpose; the app never downloads models at runtime.
+Scripts/fetch-diarization-models.sh
+
 # Regenerate the Xcode project. Required after adding, moving or deleting ANY
-# file, including test files.
+# file, including test files. Use the XcodeGen version CI pins (see rule 1).
 xcodegen generate
 
 # Build
@@ -44,6 +49,14 @@ until you have confirmed the file is in the project.
 xcodegen generate
 git diff --exit-code -- Nook.xcodeproj   # must be committed together
 ```
+
+Generate with the exact XcodeGen version pinned in `.github/workflows/ci.yml`
+(`xcodegen --version` to check; 2.46.0 or later is also required for the
+FluidAudio package's `traits: []`). Other versions order the project file
+differently, and CI's "Verify generated project" step fails on any difference,
+even when every file is present. If yours differs, download the pinned release
+and verify its checksum as the workflow does, rather than committing its
+output.
 
 ### 2. Never make behaviour depend on the building toolchain
 

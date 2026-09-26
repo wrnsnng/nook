@@ -15,25 +15,12 @@
 
 ## System overview
 
-The command palette uses a cancellable search controller and the existing
-in-memory document cache. Fuzzy matching runs in an off-main-actor worker;
-revision and cancellation checks reject results after a newer query or library
-change. Exact title prefixes/substrings rank before fuzzy title hits and content
-hits. Matching includes complete transcripts and structured fields without
-rewriting them. Initials are title-only, short queries do not fuzzily match
-scattered content letters, and edit-distance work is bounded without truncating
-exact long-word queries. Empty queries retain the five most recent notes.
-Cancellation is checked between individual fuzzy word comparisons, not only
-between notes or query terms, and discards any already-ranked partial result.
-The synchronous normalizing/tokenizing/sorting passes are not interruptible
-mid-call; this is cooperative cancellation, not a hard execution deadline.
-
-Library ranges are All, Today and Yesterday. Calendar-day filtering and group
-headings account for 23/25-hour days; ranges and
-calendar day contribute to the grouping cache key. Changing range uses the
-existing unsaved-editor leave guard, and Cancel preserves the original range.
-The production palette is a native sheet. Synthetic state tests or an older
-overlay render are not proof of native keyboard/VoiceOver interaction.
+Command-palette fuzzy matching uses an off-main worker and the in-memory search
+document cache. Cancellation checks between word comparisons prevent an obsolete
+query from finishing a whole long transcript's fuzzy scan; already-ranked partial
+hits are discarded. The controller separately rejects stale/cancelled worker
+results. Normalization, tokenization and sorting remain synchronous passes, so
+this is cooperative cancellation rather than a hard execution deadline.
 
 ```mermaid
 flowchart TD
@@ -63,16 +50,7 @@ and detached notes.
 
 ## Important components
 
-### Quick Note filing and voice corrections
-
-`QuickNoteFilingRequest` captures the library and offered file identities and
-revisions when Done/close opens the native destination sheet. The default is a
-separate spoken note; all unambiguous existing notes are available, excluding
-the pad's autosaved copy. Filing rechecks ownership and revisions, appends to
-My notes for meetings/digests or exact source for spoken notes, then verifies
-the destination before trashing the owned source. Failed cleanup retains a
-visible copy without allowing the completed move to replay. Autosave and
-termination still use the existing conflict and recovery paths.
+### `VoiceCorrectionIntent` / `VoiceCorrectionProposal`
 
 Complete Quick Note utterances can propose `scratch that` or `change the
 previous item`, optionally with explicit replacement words. The former targets
@@ -96,9 +74,7 @@ Undo controls even when privacy and save warnings occupy both status slots.
 results from cancelled runs out, and bypasses model refinement for runs with a
 correction intent. Externally targeted speech never becomes a correction.
 Injected focus, recognizer, audio, refinement and preferences enable synthetic
-delivery tests without microphone access or real assistant calls. Such tests
-and isolated sheet-content renders do not establish real Speech, physical IME,
-native-sheet keyboard behavior or VoiceOver acceptance.
+delivery tests without microphone access or real assistant calls.
 
 ### `MeetingCoordinator`
 
@@ -176,7 +152,7 @@ recoverable if only its original MP4 was removed. Partial packages remain
 discoverable for Reveal/Delete. Recovery, artifact cleanup, retention and
 storage accounting include these directories.
 
-Synthetic buffer/file tests for the auxiliary writer
+The auxiliary writer remains unmerged local work. Synthetic buffer/file tests
 do not establish real callback completeness, physical pause/stop boundaries,
 audio quality or sustained capture resource use; those acceptance checks remain.
 The marker records an input route, not a person's identity and not authenticated
@@ -233,14 +209,12 @@ main-actor polling task applies stale-level decay for the Settings meters.
 `AppModel` rejects a start while a meeting or dictation capture is active and
 stops the check when either feature becomes active. Stop owns a teardown
 barrier, so a new check cannot start while ScreenCaptureKit is still winding
-down. Input permission failures are shown in Settings and no sample leaves
-the process.
+down. Cancelled startup also retains a stream whose cleanup failed; meeting and
+dictation startup require confirmed teardown before using audio. The injectable
+`AudioInputCheckSession` exposes only start/stop, allowing lifecycle regression
+tests without microphone, screen or speech permission requests. Input permission
+failures link to the matching Settings pane and no sample leaves the process.
 
-The lifecycle accepts an injectable start/stop session for synthetic testing;
-the native implementation still uses the same ScreenCaptureKit configuration.
-Failed cleanup retains the candidate stream for Stop/retry instead of losing
-its only handle. `prepareForOtherCapture` refuses meeting/dictation startup
-until every input-check start/stop operation has relinquished ownership.
 The candidate identity is recorded before awaiting native startup. A matching
 terminal delegate callback remains recorded through the startup/cleanup barrier:
 late startup success cannot publish a stopped stream, and a redundant cleanup
@@ -253,10 +227,6 @@ stream, without releasing the competing-capture barrier early. That receipt is
 cleared before another stop and cannot authorize a later failed teardown.
 These are synthetic ordering guarantees, not a claim about
 physical permission prompts or audio-device behavior.
-Tests exercise cancellation before scheduling, delayed permission resolution,
-cancelled/failed startup, failed cleanup and overlapping stop requests without
-microphone, system audio, Speech or model access. These tests are not physical
-permission, real-meter, artifact-absence or keyboard/VoiceOver acceptance.
 
 ### `LiveTranscriptionService`
 
@@ -273,6 +243,61 @@ the current partial phrase.
 Performs a careful saved-audio pass when live speech recognition did not
 complete reliably. This is a recovery/refinement path rather than a cloud
 transcription service.
+
+### `SpeakerDiarizationService` / `SpeakerAttribution`
+
+The engine for on-device speaker separation (issue #28), in
+`Nook/Services/Speakers/`.
+
+`MeetingSpeakerSeparation.labelled` runs it during processing, after the
+transcript is ready and before the note is first saved, because with audio
+retention off the capture files are removed right after that save. It builds
+one meeting-side file from every system-labelled track of every captured part
+at its part offset (`MeetingSideAudio`), so a voice keeps one number across
+pauses; separates it; attributes system passages by overlap; and writes
+`Speaker N` onto `TranscriptSegment.speaker`. It is best effort: no labelled
+system track, missing models, unreadable audio or any error leaves the
+transcript unchanged, and the note is saved either way. Recordings joined to an
+existing note are not separated, since new numbers would collide with names
+the user already gave that note. `SpeakerNames` renames a speaker everywhere;
+Markdown writes `**Name:**` beside lines and lists names in a `speakers:`
+frontmatter array, and only listed names decode as speakers.
+
+- `SpeakerDiarizationService.diarize(audioURL:)` returns `[SpeakerTurn]`
+  (`start`, `end`, 0-based `speaker`, numbered by first appearance). It runs
+  FluidAudio's offline pipeline: pyannote Community-1 powerset segmentation
+  over 10 s windows stepped every 2 s, WeSpeaker embeddings, PLDA and VBx
+  clustering, with the speaker count found automatically and non-overlapping
+  output. It is a stateless `Sendable` struct; each call loads the models and
+  releases them on return.
+- `DiarizationAudio` reads the file with `AVAudioFile`, converts it with
+  `AVAudioConverter` (channels mixed down, 16 kHz mono Float32) in 64k-frame
+  chunks into a private temporary file, memory-maps it and unlinks it. Long
+  recordings are therefore never materialized as one array; the pipeline
+  copies one window at a time. Measured on an M4 Pro, 36 minutes of audio took
+  12 s and raised peak memory by about 450 MB, largely independent of length.
+- Errors are `SpeakerDiarizationError` (`modelsMissing`, `unreadableAudio`,
+  `failed`). Cancellation surfaces as `CancellationError`; it is checked while
+  converting and between analysis windows. Silence returns no turns.
+- Engine output is not trusted: turns with non-finite or inverted times are
+  dropped, the rest clamped to the audio, and speaker identifiers renumbered.
+- `SpeakerAttribution.assign(segments:turns:audio:)` maps each attributable
+  `TranscriptSegment` to the speaker with the greatest total time overlap.
+  Microphone passages are never attributed. `.mixed` passages are attributed
+  only when the turns came from the same mixed recording
+  (`.mixedRecording`); against the remote-only system track (`.systemTrack`)
+  a `.mixed` passage might be the user, so it stays unassigned. Passages with
+  no overlap stay unassigned; ties go to the speaker already talking when the
+  passage began, then the lower number.
+  `renumberedByFirstAppearance(_:in:)` renumbers so labels count up in reading
+  order.
+
+No network path is reachable. The models are loaded with
+`MLModel.load(contentsOf:)` from the bundle and passed to
+`OfflineDiarizerManager.initialize(models:)`, so the manager never calls
+`prepareModels()`, which is its only route to FluidAudio's `ModelHub`. The hub
+is also put in `offlineMode` once, before FluidAudio is first used, so any
+download path throws instead of fetching.
 
 ### `SummaryService`
 
@@ -365,9 +390,31 @@ It reads:
 - actual menu-bar height
 - backing scale for pixel alignment
 
+The window is a stage, not the shape. `NotchPanelMetrics.mode` names what the
+island shows (prompt, ears, shelf, workspace, processing, saved, failed,
+hidden) and `bodySize(for:)` sizes it. On a change the coordinator first grows
+the window to cover both the old and new island, lets SwiftUI spring the
+`NotchIslandShape` between them, and trims the window once
+`NookMotion.morphSettleSeconds` has passed. Nothing animates the window frame,
+so the shape and its content always move on one curve. `sizingOptions` is
+empty so SwiftUI never resizes the stage itself.
+
+Appearing grows the island out of the camera housing (`revealProgress` from 0
+with `NookMotion.morph`); going away folds it back with `NookMotion.tuck`
+while `isTucking` keeps the last content on screen. Compact recording wraps
+the housing (waveform left, clock right) and hangs nothing below the menu
+bar; hovering lowers a control shelf, and every shelf control is also a
+VoiceOver action on the ears. Only floating states keep a transparent shadow
+margin, because that margin still takes clicks.
+
 Normal resizes preserve the exact screen center. Hidden recording is a special
 case: an 86-point window is positioned at the physical camera housing's right
-edge. External displays center that same indicator.
+edge, reached by folding into the housing and reappearing beside it. External
+displays center that same indicator.
+
+Audio level, elapsed time and captions are read only by leaf views
+(`IslandWaveform`, `VoiceRim`, `NotchRecordingClock`, `NotchCaptionStream`).
+They smooth the 80 ms meter at up to 30 fps; the shell never observes it.
 
 ### `StatusMenuState`
 
@@ -482,9 +529,25 @@ actions sidebar. Checkbox state and due dates are not part of the decoded
 model, so items are read straight from each file, and toggling one rewrites
 exactly that line through the codec.
 
+Owners are read, never written: `ActionItemOwner` recognises `Name: task`,
+`Name — task`, `@Name task` and `Name will task`, refusing labels such as
+`TODO:` and pronouns. Rows show the owner beside the task; the file keeps its
+own wording.
+
+### `FollowUpDraft`
+
+Builds a recap of a saved note for email or chat from the note's own
+sections: the first summary paragraph, decisions, unfinished action items with
+owners and due dates, and open questions. It is deterministic, so it works
+without a model and cannot state more than the note does. `FollowUpDraftView`
+shows it for editing; Open in Mail uses the system compose service, and Nook
+never sends anything.
+
 ### `MomentHotKeyController`
 
-The system-wide "flag this moment" hotkey, active only while recording.
+System-wide meeting hotkeys (flag this moment, take a note), active only
+while recording. Each instance has its own identifier and answers only its own
+presses, because every handler on the application target sees every hotkey.
 Registered with Carbon's `RegisterEventHotKey` for the same reason dictation
 uses it: the keystroke is consumed globally and needs no Accessibility
 permission.
@@ -529,6 +592,68 @@ them, which happens whenever processing could not finish. The audio is kept
 deliberately, since at that point it is the only copy of the conversation;
 this service is what lets Settings turn one into a note or delete it instead
 of it sitting on disk unnoticed.
+
+### App Intents (`Nook/Intents`)
+
+Shortcuts, Siri and Spotlight actions run in the app's own process through
+the AppIntents framework; there is no extension target. Each action calls the
+same coordinator method as its button (`startManualMeeting`, `stopRecording`,
+`togglePause`, `flagMoment`, `requestNoteLine`, `QuickNoteController.present`),
+so permission prompts and consent behave identically. The phase checks and
+reply wording are pure functions (`RecordingIntentRules`, `TakeNoteRoute`,
+`IntentLibrary`, `LibraryAskReply`) so they can be tested without a running
+meeting, and an action that does not apply throws a `NookIntentError` with a
+readable sentence instead of silently doing nothing. Ask Your Library reuses
+`LibraryAnswerService`, and Get Open Action Items reuses
+`OpenActionsController.refresh`, so neither duplicates retrieval or file
+parsing. `MeetingEntity` exposes saved notes by their Markdown UUID with an
+`EntityStringQuery` over titles that uses the library search's own term
+matching. Intent type names are what saved Shortcuts refer to, so the actions
+that predate this folder keep theirs. `NookShortcuts` offers ten App Shortcuts,
+the system maximum.
+
+### `MeetingSpotlightIndexer`
+
+Mirrors saved meetings and quick notes into Core Spotlight under the domain
+`meetings`, keyed by note UUID: title, summary as the description, key points
+and decisions as keywords, and the start date. Digests, unsaved notes and
+copies sharing a UUID are excluded. It observes `MarkdownStore.notes`,
+`isLoading` (a loading library looks empty, so nothing syncs until it settles)
+and the `showMeetingsInSpotlight` default. Changes are coalesced by a single
+worker reading one `AsyncStream`, so a burst of saves costs one sync after a
+two-second quiet period and syncs never overlap. Each sync fingerprints what
+would be indexed per note and diffs it with a record of what Spotlight was
+last sent (`Caches/<bundle-identifier>/Spotlight/indexed-notes.json`), so an
+unchanged library sends nothing at launch, edits to transcripts or My notes
+send nothing, and notes trashed while Nook was closed are removed. With no
+record, it clears its items and rebuilds. Items are sent in batches of 500
+with a distant expiration date, since Spotlight otherwise drops items a month
+after indexing. Turning the setting off deletes every item and the record.
+
+A Spotlight result arrives as a `CSSearchableItemActionType` user activity.
+Both `AppDelegate.application(_:continue:restorationHandler:)` and the library
+scene's `onContinueUserActivity` hand it to `MeetingSpotlightContinuation`,
+which ignores a second delivery of the same activity and opens the note once
+the library has loaded and the window actions are installed.
+
+## Bundled speaker diarization models
+
+`Scripts/fetch-diarization-models.sh` downloads the five offline-pipeline
+artifacts (`Segmentation`, `FBank`, `Embedding` and `PldaRho` `.mlmodelc`
+folders plus `plda-parameters.json`, about 21 MB) from
+`FluidInference/speaker-diarization-coreml` at the revision FluidAudio 0.17.4
+pins, checks every file against a SHA-256 in the script, and moves them into
+the gitignored `ThirdParty/SpeakerDiarizationModels/`. It is idempotent: when
+the folder already verifies, it does nothing. `--check [directory]` verifies
+without any network access and also rejects unexpected extra files.
+
+`project.yml` adds that folder to the Nook target as a folder reference, so the
+generated project is identical whether or not the models have been fetched,
+and runs `fetch-diarization-models.sh --check` as a pre-build script. A build
+without the exact models fails with an error telling the developer to run the
+script, so no build can quietly ship without speaker separation.
+`Scripts/build-app.sh` and both CI workflows fetch before building, and
+`Scripts/verify-release-app.sh` and CI re-verify the copy inside the built app.
 
 ## Permissions
 
@@ -575,9 +700,15 @@ Detached notes close when recording stops or leaves the recording phase.
 - Appearance choices: Auto, Light, Dark.
 - The camera-attached top panel is always edge-black because the physical bezel
   is its material, independent of app appearance.
+- Accent: lagoon teal. `NookPalette.accent` is the luminous value for text,
+  icons and light on dark surfaces; `NookPalette.accentFill` is the fill behind
+  white labels (system prominent buttons, switches) and matches
+  `AccentColor`. Both hold AA in their roles and are pinned by
+  `NookDesignContrastTests`.
 - The current app icon source is
-  `Nook/Resources/Brand/NookIconSource-Cobalt.png`.
-- `AppDelegate` sets the packaged cobalt master explicitly to avoid stale
+  `Nook/Resources/Brand/NookIconSource-Lagoon.png`, rendered with the app icon
+  set by `Scripts/brand/render-icon.swift`.
+- `AppDelegate` sets the packaged lagoon master explicitly to avoid stale
   Launch Services/Dock artwork after an update.
 
 ## Tests and audit hooks
@@ -588,7 +719,12 @@ status-menu state, search, storage collisions, and update configuration, plus
 calendar context, prep briefs, weekly digests, multi-session append and
 merge, note-combining, action item due dates, quick capture task parsing,
 "ask your library" retrieval, recording recovery, dictation output guarding
-and settings, and interface copy rules.
+and settings, interface copy rules, and speaker attribution. The speaker
+separation engine is exercised end to end against a checked-in synthetic
+two-voice fixture (`NookTests/Fixtures`, made with macOS `say`), which requires
+the bundled models and fails, rather than skips, if they are absent.
+`Scripts/Tests` checks that the model check rejects missing, extra and altered
+files.
 
 Debug-only launch arguments provide deterministic states for visual and
 accessibility audits:

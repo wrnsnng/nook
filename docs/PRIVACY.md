@@ -4,12 +4,6 @@ Nook is designed so meeting content stays on the Mac. This document describes
 what the app observes, stores, sends, and deletes. It is a product description,
 not legal advice.
 
-Command-palette fuzzy search runs deterministically on local note text,
-including transcripts and structured fields. Its searchable documents are
-cached in memory, not a new persistent index. It does not invoke a model, send
-queries anywhere, log search text or change stored note content. Date-range
-navigation changes only which local notes are shown.
-
 ## Data-flow summary
 
 ```text
@@ -206,13 +200,6 @@ remain words, not permission for Nook to delete external text. There is no new
 storage location, permission, provider or network path; optional note-assistant
 consent and persistent outbound disclosure are unchanged.
 
-Quick Note filing defaults to a separate spoken note. An explicitly chosen
-existing note receives the words through the same local conflict checks. Only
-after verifying that write does Nook move the pad's earlier autosaved copy to
-Trash. Failed cleanup leaves that copy available and shows a retained-copy
-notice. Cancelling the destination sheet keeps the draft without restarting
-dictation. No new storage location or network operation is introduced.
-
 ## Transcription and summaries
 
 Apple's Speech framework performs transcription on-device. macOS may contact
@@ -222,6 +209,41 @@ content in that asset request.
 When available, Apple's Foundation Models framework creates summaries on-device.
 When it is unavailable or fails, Nook uses deterministic local extraction.
 Nook does not send transcripts to a hosted language model.
+
+## Follow-up drafts and sharing
+
+Draft Follow-up assembles a recap from the saved note on this Mac, without a
+model. Nothing is sent: Copy places the text on the clipboard, and Open in
+Mail hands it to the system's compose window for the user to review and send.
+Share uses the macOS share menu, so the destination is always one the user
+chooses.
+
+## Speaker separation
+
+After a new meeting is transcribed, Nook finds who spoke when on the meeting
+side and labels those passages *Speaker 1*, *Speaker 2*, and so on, until the
+user names them in the transcript. Names are written into the note's Markdown
+and nowhere else. Settings, Listening, *Tell speakers apart* turns this off.
+
+- **Where it runs.** On this Mac, through FluidAudio's offline pipeline on
+  Core ML (Neural Engine where available, otherwise the CPU). Audio never
+  leaves the machine.
+- **Models.** The Core ML models ship inside the application bundle. They
+  are fetched when Nook is *built*, from one pinned revision and checked
+  against pinned SHA-256 checksums; a build without them fails. The app never
+  downloads a model: it loads the bundled files directly, and FluidAudio's
+  model hub is switched to offline mode before the library is first used, so
+  any download path would fail instead of reaching the network.
+- **What it reads.** Only the audio file it is handed. It is designed to run
+  on the remote-only system-audio track, so the user's own microphone
+  passages stay **You** and are never attributed to someone else.
+- **What it writes.** While it runs, the audio is converted to 16 kHz mono in
+  a private temporary file (owner-only permissions) that is unlinked as soon as
+  it is memory-mapped, so no converted copy outlives the analysis even if Nook
+  quits. The result is a list of time ranges with speaker numbers, returned to
+  the caller. Voice embeddings (voiceprints) exist only in memory during one
+  analysis and are never written to disk or kept between meetings.
+- **Permissions.** None beyond those already used for recording.
 
 ## The command-line assistant bridge (opt-in)
 
@@ -319,14 +341,43 @@ Handling of that text once it reaches the CLI tool, and any request the tool
 makes from there, is covered by that provider's own terms and privacy policy,
 not Nook's.
 
-## Shortcuts
+## Shortcuts and Siri
 
-Nook exposes a small set of Shortcuts actions: starting, pausing, or finishing
-a recording, opening the library or the latest meeting, and reading back the
-latest note's text. Each action runs only when a Shortcut invokes it. The
-note-text action hands that text to the Shortcut that asked for it, and
-anything the user's own Shortcut does with it from there, such as sending it
-to another app, is outside Nook.
+Nook exposes a small set of Shortcuts actions, also offered to Siri and
+Spotlight as App Shortcuts: starting, pausing or resuming, and finishing a
+recording, flagging a moment, taking a note, opening the library, the latest
+meeting or a chosen meeting, reading back the latest meeting's summary, listing
+open action items, and asking the library a question. Each action runs inside
+Nook, on this Mac, only when a Shortcut or a spoken request invokes it.
+Starting a recording goes through the same path as the Record button, so the
+same permission prompts apply and nothing records without that request.
+
+Asking the library uses the same on-device retrieval and model as the Ask
+sheet. Choosing a meeting in a Shortcut shows note titles and dates. The
+actions that answer hand their text (a summary, action items, or an answer
+naming the meetings it came from) to the Shortcut that asked for it, and
+Siri may speak it aloud. Anything the user's own Shortcut does with it from
+there, such as sending it to another app, is outside Nook.
+
+## Spotlight
+
+Unless the user turns it off, Nook adds each saved meeting and quick note to
+the Mac's Spotlight index so it can be found from Spotlight and opened in the
+library. Each entry holds the note's title, summary, key points and decisions,
+and start date. Transcripts and My notes are not added. Digests are not added
+either, since they restate other notes. Copies sharing one note ID are left out
+until they are reviewed.
+
+The Spotlight index is kept by macOS on this Mac and is not uploaded by Nook.
+Nook keeps a small record of which notes it has added, as note IDs and content
+fingerprints with no note text, under `~/Library/Caches/<bundle-identifier>/Spotlight`
+so an unchanged library is not re-sent on every launch. Deleting that file
+only makes Nook rebuild its entries.
+
+Trashing a note, or moving it out of the notes folder, removes its entry at
+the next sync, including changes made while Nook was closed. To opt out, turn
+off **Show meetings in Spotlight** in Settings, General: Nook then removes
+every entry it added and adds no more until the switch is turned back on.
 
 ## Files and retention
 
@@ -583,6 +634,12 @@ signatures, Apple Developer ID signing, and notarization.
 
 Links to the project website or GitHub open only when a user activates them.
 
+Building Nook from source downloads the speaker separation models from
+Hugging Face (`Scripts/fetch-diarization-models.sh`). That is a build-time
+request made by the developer's machine or CI, at a pinned revision with
+checksum verification, and it carries no user data. The built app makes no
+request for models.
+
 ## Logs and diagnostics
 
 Nook has no application telemetry or remote crash-reporting integration. macOS
@@ -607,6 +664,7 @@ Users can:
 - pause, finish, or cancel a recording;
 - choose the notes folder;
 - choose whether extracted audio is retained;
+- keep their notes out of Spotlight;
 - edit, move, or delete Markdown and retained audio with ordinary file tools;
   deleting a note from the library moves its Markdown file to the Trash;
 - disable automatic update checks or downloads; and

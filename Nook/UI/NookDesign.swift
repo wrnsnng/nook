@@ -67,27 +67,46 @@ final class NookAppearanceController: ObservableObject {
 }
 
 enum NookPalette {
-    /// Nook's single brand accent: calm enough for long meetings, bright enough
-    /// to remain legible on both native window backgrounds and the top-edge glass.
+    /// Nook's accent: a lagoon teal. It glows on the black notch, stays calm
+    /// through a long meeting, and is distinct from system blue, the red of
+    /// recording and the orange microphone indicator. Light mode uses the
+    /// deepest value that still carries white text at 4.5:1 when pressed.
     static let accent = adaptive(
-        light: NSColor(red: 0.10, green: 0.34, blue: 0.72, alpha: 1),
-        dark: NSColor(red: 0.43, green: 0.68, blue: 1.00, alpha: 1)
+        light: NSColor(red: 0.000, green: 0.427, blue: 0.388, alpha: 1),
+        dark: NSColor(red: 0.290, green: 0.859, blue: 0.776, alpha: 1)
     )
+    /// The accent as a fill behind white text: system prominent buttons,
+    /// switches and selection. The luminous `accent` is right for text and
+    /// light on dark surfaces but carried white labels at under 2:1; this is
+    /// the brightest teal that keeps white text at 4.5:1. `AccentColor` in
+    /// the asset catalog matches it.
+    static let accentFill = adaptive(
+        light: NSColor(red: 0.000, green: 0.427, blue: 0.388, alpha: 1),
+        dark: NSColor(red: 0.043, green: 0.522, blue: 0.467, alpha: 1)
+    )
+    /// The luminous end of the accent, for glows, meters and the notch.
     static let accentHighlight = adaptive(
-        light: NSColor(red: 0.32, green: 0.55, blue: 0.92, alpha: 1),
-        dark: NSColor(red: 0.64, green: 0.80, blue: 1.00, alpha: 1)
+        light: NSColor(red: 0.106, green: 0.639, blue: 0.573, alpha: 1),
+        dark: NSColor(red: 0.651, green: 0.949, blue: 0.894, alpha: 1)
     )
     /// The dark accent is deliberately light enough for text and icons. A
-    /// filled button needs dark ink on that same color; white was only 2.3:1.
+    /// filled button needs dark ink on that same color.
     static let prominentButtonForeground = adaptive(
         light: .white,
-        dark: NSColor(red: 0.04, green: 0.10, blue: 0.18, alpha: 1)
+        dark: NSColor(red: 0.012, green: 0.125, blue: 0.106, alpha: 1)
     )
-    /// A deliberately deeper selection color so white sidebar text retains
-    /// AA contrast in both active and inactive windows.
+    /// Ink for labels and symbols on the notch's filled accent. Fixed, not
+    /// adaptive: the notch is always dark, and an adaptive ink let SF Symbols
+    /// resolve through the window's light appearance and draw white on mint.
+    static let notchInk = Color(red: 0.012, green: 0.125, blue: 0.106)
+    /// The notch's accent in its only appearance, for checks that must not
+    /// depend on how the surrounding window resolves colours.
+    static let notchAccent = Color(red: 0.290, green: 0.859, blue: 0.776)
+    /// A deeper selection color so white text retains AA contrast in both
+    /// active and inactive windows.
     static let sidebarSelection = adaptive(
-        light: NSColor(red: 0.07, green: 0.25, blue: 0.54, alpha: 1),
-        dark: NSColor(red: 0.10, green: 0.29, blue: 0.58, alpha: 1)
+        light: NSColor(red: 0.000, green: 0.369, blue: 0.333, alpha: 1),
+        dark: NSColor(red: 0.043, green: 0.361, blue: 0.325, alpha: 1)
     )
 
     /// Speaker roles are intentionally variations of the same ink rather than
@@ -99,22 +118,15 @@ enum NookPalette {
     )
     static let voiceSystem = accent
     static let voiceMixed = adaptive(
-        light: NSColor(red: 0.14, green: 0.38, blue: 0.64, alpha: 1),
-        dark: NSColor(red: 0.53, green: 0.70, blue: 0.91, alpha: 1)
+        light: NSColor(red: 0.06, green: 0.40, blue: 0.44, alpha: 1),
+        dark: NSColor(red: 0.47, green: 0.80, blue: 0.80, alpha: 1)
     )
 
-    static let canvasTop = adaptive(
-        light: NSColor(red: 0.982, green: 0.980, blue: 0.974, alpha: 1),
-        dark: NSColor(red: 0.112, green: 0.114, blue: 0.120, alpha: 1)
-    )
-    static let canvasBottom = adaptive(
-        light: NSColor(red: 0.958, green: 0.958, blue: 0.952, alpha: 1),
-        dark: NSColor(red: 0.080, green: 0.082, blue: 0.087, alpha: 1)
-    )
-    static let paper = adaptive(
-        light: NSColor(red: 0.995, green: 0.993, blue: 0.986, alpha: 1),
-        dark: NSColor(red: 0.122, green: 0.124, blue: 0.130, alpha: 1)
-    )
+    /// Surfaces are the system's own, so Nook sits in the same material as
+    /// Notes and Mail and follows every appearance and contrast setting.
+    static let canvasTop = Color(nsColor: .textBackgroundColor)
+    static let canvasBottom = Color(nsColor: .textBackgroundColor)
+    static let paper = Color(nsColor: .controlBackgroundColor)
 
     static let success = adaptive(
         light: NSColor(red: 0.12, green: 0.50, blue: 0.24, alpha: 1),
@@ -152,11 +164,12 @@ enum NookType {
     static let transcriptEmphasized = Font.body.weight(.semibold)
     static let spoken = Font.title3
     static let spokenEmphasized = Font.title3.weight(.semibold)
-    static let sectionTitle = Font.callout.weight(.semibold)
-    static let title = Font.system(.title, design: .rounded).weight(.semibold)
-    static let largeTitle = Font.system(.largeTitle, design: .rounded)
-        .weight(.semibold)
-    static let editorialSummary = Font.system(.title3, design: .serif)
+    /// Three steps, as in a Notes document: title, heading, body.
+    static let sectionTitle = Font.title3.weight(.semibold)
+    /// The default SF design: rounded read as a toy next to native chrome.
+    static let title = Font.title.weight(.bold)
+    static let largeTitle = Font.largeTitle.weight(.bold)
+    static let editorialSummary = Font.body
     static let code = Font.caption.monospaced()
 }
 
@@ -246,6 +259,21 @@ enum NookElapsedTime {
     }
 }
 
+/// One readable column shared by the header and every detail tab, so the
+/// title, the summary and the transcript all start at the same edge.
+enum NookLayout {
+    static let readableWidth: CGFloat = 680
+    static let margin: CGFloat = 40
+}
+
+extension View {
+    func nookReadableColumn() -> some View {
+        frame(maxWidth: NookLayout.readableWidth, alignment: .leading)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, NookLayout.margin)
+    }
+}
+
 enum NookRadius {
     static let control: CGFloat = 8
     static let surface: CGFloat = 14
@@ -296,6 +324,19 @@ enum NookMotion {
         .timingCurve(0.16, 1, 0.30, 1, duration: duration)
     }
 
+    /// The notch island changing shape: a spring with a little life in it,
+    /// so a state change reads as the notch itself growing, not a window
+    /// being resized.
+    static let morph = Animation.spring(response: 0.46, dampingFraction: 0.78)
+
+    /// The island folding back into the camera housing. No overshoot: going
+    /// away should feel settled, not bouncy.
+    static let tuck = Animation.spring(response: 0.34, dampingFraction: 1)
+
+    /// How long `morph` takes to come to rest, for work that has to wait for
+    /// the shape, such as shrinking the window behind it.
+    static let morphSettleSeconds: Double = 0.62
+
     static func quickAnimation(reduceMotion: Bool) -> Animation? {
         reduceMotion ? nil : quick
     }
@@ -329,7 +370,7 @@ struct NookButtonStyle: ButtonStyle {
             .font(NookType.control)
             .foregroundStyle(foregroundColor)
             .padding(.horizontal, 12)
-            .frame(minHeight: 32)
+            .frame(minHeight: 30)
             .background {
                 RoundedRectangle(
                     cornerRadius: NookRadius.control,
@@ -381,7 +422,7 @@ struct NookButtonStyle: ButtonStyle {
             // white text on the light accent fell below 4.5:1 over paper.
             return tint.opacity(isPressed ? 0.86 : 1)
         }
-        return .primary.opacity(isPressed ? 0.13 : 0.055)
+        return .primary.opacity(isPressed ? 0.12 : 0.05)
     }
 }
 
@@ -447,7 +488,7 @@ struct NookMark: View {
     private static let brandImage: NSImage = {
         if
             let url = Bundle.main.url(
-                forResource: "NookIconSource-Cobalt",
+                forResource: "NookIconSource-Lagoon",
                 withExtension: "png"
             ),
             let image = NSImage(contentsOf: url)
@@ -461,14 +502,16 @@ struct NookMark: View {
 struct SourceBadge: View {
     let source: TranscriptSegment.Source
     var compact = false
+    /// A separated speaker's name, shown in place of the source label.
+    var speaker: String? = nil
 
     var body: some View {
-        Label(source.label, systemImage: source.symbol)
+        Label(speaker ?? source.label, systemImage: speaker == nil ? source.symbol : "person.fill")
             .labelStyle(.titleAndIcon)
             .font((compact ? Font.caption2 : Font.caption).weight(.medium))
             .foregroundStyle(.secondary)
             .symbolRenderingMode(.monochrome)
-            .accessibilityLabel(source.label)
+            .accessibilityLabel(speaker ?? source.label)
     }
 }
 
@@ -536,10 +579,15 @@ struct NookMetadataLabel: View {
     let symbol: String
     var tint: Color = .secondary
 
+    /// Text only: a row of glyphs in front of a date and a duration added
+    /// noise without telling anyone anything the words did not. The symbol
+    /// still reaches VoiceOver users through the label's semantics.
     var body: some View {
-        Label(title, systemImage: symbol)
-            .font(.caption.weight(.medium))
+        Text(title)
+            .font(.subheadline)
             .foregroundStyle(tint)
+            .monospacedDigit()
+            .lineLimit(1)
     }
 }
 
@@ -549,15 +597,11 @@ struct NookSectionLabel: View {
     let tint: Color
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: symbol)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(NookPalette.accent)
-                .frame(width: 14)
-            Text(title)
-                .font(NookType.sectionTitle)
-                .foregroundStyle(.primary)
-        }
+        // The symbol is kept in the API for call sites but no longer drawn:
+        // one accent-coloured glyph per section competed with the content.
+        Text(title)
+            .font(NookType.sectionTitle)
+            .foregroundStyle(.primary)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isHeader)
     }
@@ -746,8 +790,8 @@ struct SoftDivider: View {
 struct NookBullet: View {
     var body: some View {
         Circle()
-            .fill(NookPalette.accent)
-            .frame(width: 4, height: 4)
+            .fill(.secondary)
+            .frame(width: 5, height: 5)
             // Keeps the bullet on the first line's optical centre, close
             // enough to its line to read as belonging to it.
             .frame(width: 10, height: 14, alignment: .leading)

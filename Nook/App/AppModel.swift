@@ -59,6 +59,7 @@ final class AppModel: ObservableObject {
     let prep: PrepBriefController
     let recovery: RecordingRecovery
     let audioInputCheck: AudioInputCheckService
+    let spotlight: MeetingSpotlightIndexer
     private let dictationIndicator = DictationIndicatorController()
     private var openLibraryAction: (@MainActor () -> Void)?
     private var openWelcomeAction: (@MainActor () -> Void)?
@@ -113,6 +114,7 @@ final class AppModel: ObservableObject {
         let prep = PrepBriefController(store: store, calendar: calendar)
         self.prep = prep
         self.audioInputCheck = audioInputCheck
+        self.spotlight = MeetingSpotlightIndexer()
         store.onStorageDirectoryWillChange = {
             markdownDraft.libraryWillChange()
             personalNotesDraft.libraryWillChange()
@@ -131,7 +133,7 @@ final class AppModel: ObservableObject {
             await draftJournal.scan()
             await draftRecovery.reconcileCompletedDrafts()
         }
-        calendar.onUpcomingEvent = { [weak notifications, weak store] event in
+        calendar.onUpcomingEvent = { [weak notifications, weak store, weak panel] event in
             // The notification's Record action routes back through
             // MeetingNotificationService, so nothing starts without a tap.
             // When this series has history, the notification says so and
@@ -145,7 +147,9 @@ final class AppModel: ObservableObject {
                 upcoming: event,
                 priorSittings: priorSittings
             )
+            panel?.presentUpcoming(hasPrep: priorSittings > 0)
         }
+        panel.observeCalendar(calendar)
 
         NotificationCenter.default
             .publisher(for: .nookRequestPrepBrief)
@@ -281,6 +285,10 @@ final class AppModel: ObservableObject {
         }
         .store(in: &cancellables)
 
+        // Follows every library change, including trashed notes and a new
+        // notes folder, and the Settings switch that turns it off.
+        spotlight.observe(store)
+
         detector.start()
     }
 
@@ -328,6 +336,10 @@ final class AppModel: ObservableObject {
         closeLiveNotesAction = closeLiveNotes
         presentLaunchExperience()
     }
+
+    /// Whether the SwiftUI scenes have handed over their window actions.
+    /// Until then `openLibrary` has no window to open.
+    var canPresentWindows: Bool { openLibraryAction != nil }
 
     func openLibrary(noteID: MeetingNote.ID? = nil) {
         promoteToWindowedApp()
@@ -400,6 +412,13 @@ final class AppModel: ObservableObject {
         }
         guard visibleWindowRoles.isEmpty else { return }
         NSApp.setActivationPolicy(.accessory)
+    }
+
+    /// Closes the floating notes window and shows My notes in the notch
+    /// again, with the same words.
+    func returnLiveNotesToPanel() {
+        closeLiveNotes()
+        meeting.selectPanelMode(.notes)
     }
 
     private func closeLiveNotes() {

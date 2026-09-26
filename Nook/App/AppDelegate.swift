@@ -143,12 +143,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Launch Services may preserve artwork from an older build for a stable
-    /// bundle identifier. Setting the packaged cobalt master explicitly keeps
+    /// bundle identifier. Setting the packaged lagoon master explicitly keeps
     /// the Dock and app switcher in sync immediately after an OTA update.
     private func installApplicationIcon() {
         guard
             let url = Bundle.main.url(
-                forResource: "NookIconSource-Cobalt",
+                forResource: "NookIconSource-Lagoon",
                 withExtension: "png"
             ),
             let image = NSImage(contentsOf: url)
@@ -170,6 +170,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             AppModel.shared.openLibrary()
         }
         return true
+    }
+
+    /// A meeting chosen in Spotlight opens in the library.
+    func application(
+        _ application: NSApplication,
+        continue userActivity: NSUserActivity,
+        restorationHandler: @escaping ([any NSUserActivityRestoring]) -> Void
+    ) -> Bool {
+        MeetingSpotlightContinuation.open(userActivity)
     }
 
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {

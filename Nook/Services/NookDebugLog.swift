@@ -25,6 +25,8 @@ enum NookEventLog {
         case meetingSavedFromLiveCaptions = "meeting.saved-from-live-captions"
         case meetingStopDeferred = "meeting.stop-deferred"
         case meetingStopStarted = "meeting.stop-started"
+        // Spotlight refused a sync. The next library change retries it.
+        case spotlightIndexFailed = "spotlight.index-failed"
         case summaryGenerated = "summary.generated"
         case summaryGenerationFailed = "summary.generation-failed"
         case summaryModelUnavailable = "summary.model-unavailable"

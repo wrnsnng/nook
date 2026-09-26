@@ -373,10 +373,10 @@ struct MarkdownCodecTests {
     }
 
     @Test
-    func applicationBundleShipsOnlyTheCobaltBrandIcon() {
+    func applicationBundleShipsOnlyTheLagoonBrandIcon() {
         #expect(
             Bundle.main.url(
-                forResource: "NookIconSource-Cobalt",
+                forResource: "NookIconSource-Lagoon",
                 withExtension: "png"
             ) != nil
         )
@@ -488,17 +488,90 @@ struct MarkdownCodecTests {
         #expect(state.notchCaptionLines.last?.text == "Passage 6")
     }
 
+    /// Recording without captions sits either side of the camera and hangs
+    /// nothing below the menu bar, so it covers none of the window beneath.
     @Test
-    func compactRecordingUsesTheUltraSlimTopEdgeRail() {
-        let size = NotchPanelMetrics.bodySize(
+    func compactRecordingWrapsTheCameraWithoutHangingBelowTheMenuBar() {
+        let resting = NotchPanelMetrics.bodySize(
             for: .recording(title: "Design review", startedAt: .now),
             showsCaptions: false,
-            panelMode: .transcript
+            panelMode: .transcript,
+            cameraHousingWidth: 184
         )
 
-        #expect(size.width == 316)
-        // Tall enough for 30pt controls, the app's own hit-target floor.
-        #expect(size.height == 42)
+        #expect(resting.height == 0)
+        // Room for the waveform on one side of the housing and the clock on
+        // the other.
+        #expect(resting.width >= 184 + 2 * 60)
+    }
+
+    /// The controls come down only while the pointer is on the island, and
+    /// then at the app's own 30pt hit-target floor.
+    @Test
+    func hoveringCompactRecordingLowersAShelfTallEnoughForItsControls() {
+        let shelf = NotchPanelMetrics.bodySize(
+            for: .recording(title: "Design review", startedAt: .now),
+            showsCaptions: false,
+            panelMode: .transcript,
+            isHovering: true,
+            cameraHousingWidth: 184
+        )
+
+        #expect(shelf.height >= 30 + 8)
+        #expect(shelf.width >= 5 * 30)
+    }
+
+    /// Hovering is only an answer for the compact recording state; it must
+    /// not resize a prompt or a result the pointer happens to cross.
+    @Test
+    func hoveringLeavesEveryOtherIslandShapeAlone() {
+        let detection = DetectedMeeting(appName: "Teams", windowTitle: "Design review")
+        for phase in [MeetingPhase.detected(detection), .completed("Design review")] {
+            let resting = NotchPanelMetrics.bodySize(
+                for: phase, showsCaptions: false, panelMode: .transcript
+            )
+            let hovered = NotchPanelMetrics.bodySize(
+                for: phase, showsCaptions: false, panelMode: .transcript, isHovering: true
+            )
+            #expect(resting == hovered)
+        }
+    }
+
+    /// A line typed into the notch's shelf becomes its own bullet in My
+    /// notes, whatever the notes already end with, and blank input adds
+    /// nothing.
+    @Test
+    func aQuickNoteLineJoinsMyNotesAsItsOwnBullet() {
+        #expect(LiveNoteLine.appending("  Ask Ana  ", to: "") == "- Ask Ana")
+        #expect(LiveNoteLine.appending("Ask Ana", to: "Budget first") == "Budget first\n- Ask Ana")
+        #expect(LiveNoteLine.appending("Ask Ana", to: "- Budget\n") == "- Budget\n- Ask Ana")
+        #expect(LiveNoteLine.appending("   ", to: "Budget first") == nil)
+    }
+
+    /// A caption line said at a flagged moment carries the flag, and only
+    /// that line; the line still being heard carries a flag set after the
+    /// last finished one.
+    @Test
+    func flaggedMomentsMarkTheCaptionLinesTheyFellIn() {
+        let first = TranscriptSegment(startTime: 10, duration: 4, text: "Budget first", source: .system)
+        let second = TranscriptSegment(startTime: 20, duration: 5, text: "Then hiring", source: .microphone)
+        let segments = [first, second]
+
+        #expect(LiveCaptionFlags.isFlagged(.segment(first.id), segments: segments, moments: [12]))
+        #expect(!LiveCaptionFlags.isFlagged(.segment(second.id), segments: segments, moments: [12]))
+        #expect(LiveCaptionFlags.isFlagged(.partial(.system), segments: segments, moments: [26]))
+        #expect(!LiveCaptionFlags.isFlagged(.partial(.system), segments: segments, moments: [12]))
+        #expect(!LiveCaptionFlags.isFlagged(.segment(first.id), segments: segments, moments: []))
+    }
+
+    /// The notch says when the next event starts in whole minutes, and says
+    /// "now" rather than "in 0 min".
+    @Test
+    func upcomingEventTimesReadAsMinutes() {
+        #expect(UpcomingEventTiming.label(until: 4 * 60 + 10) == "Starts in 4 min")
+        #expect(UpcomingEventTiming.label(until: 20) == "Starting now")
+        #expect(UpcomingEventTiming.label(until: -40) == "Starting now")
+        #expect(UpcomingEventTiming.label(until: -3 * 60) == "Started 3 min ago")
     }
 
     @Test
@@ -527,8 +600,10 @@ struct MarkdownCodecTests {
             panelMode: .transcript
         )
 
-        #expect(size.width == 360)
-        #expect(size.height == 48)
+        // A single row: title, app and both answers, no taller than two
+        // lines of text around a 30pt button.
+        #expect(size.width <= 440)
+        #expect(size.height <= 64)
     }
 
     /// The prompt used to disappear after eight seconds, which answered it on

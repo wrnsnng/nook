@@ -15,3 +15,8 @@ xcuserdata/
 *.mobileprovision
 .impeccable/
 .opencode/
+
+# Speaker diarization models are fetched at build time by
+# Scripts/fetch-diarization-models.sh and bundled into the app, never committed.
+ThirdParty/SpeakerDiarizationModels/
+ThirdParty/.SpeakerDiarizationModels.*

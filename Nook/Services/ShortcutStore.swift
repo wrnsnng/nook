@@ -11,6 +11,7 @@ import SwiftUI
 enum NookShortcutID: String, CaseIterable, Identifiable {
     /// System-wide, active while a recording runs.
     case flagMoment
+    case takeNote
     case startRecording
     case pauseResumeRecording
     case finishMeeting
@@ -28,6 +29,7 @@ enum NookShortcutID: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .flagMoment: "Flag This Moment"
+        case .takeNote: "Take a Note"
         case .startRecording: "Start Recording"
         case .pauseResumeRecording: "Pause or Resume Recording"
         case .finishMeeting: "Finish Meeting"
@@ -46,6 +48,8 @@ enum NookShortcutID: String, CaseIterable, Identifiable {
         switch self {
         case .flagMoment:
             "Add a timestamp to the meeting that is recording."
+        case .takeNote:
+            "Write a line into My notes from the notch, without leaving the app you are in."
         case .startRecording:
             "Start a new meeting recording."
         case .pauseResumeRecording:
@@ -70,7 +74,7 @@ enum NookShortcutID: String, CaseIterable, Identifiable {
     /// where it belongs is a compile-time reminder.
     var section: NookShortcutSection {
         switch self {
-        case .flagMoment, .startRecording, .pauseResumeRecording, .finishMeeting:
+        case .flagMoment, .takeNote, .startRecording, .pauseResumeRecording, .finishMeeting:
             .recording
         case .commandPalette, .newNote, .saveNote:
             .libraryAndNotes
@@ -82,7 +86,7 @@ enum NookShortcutID: String, CaseIterable, Identifiable {
     /// Whether this shortcut must work while another application is
     /// frontmost. Global shortcuts register with the system rather than
     /// waiting inside Nook's menus.
-    var isGlobal: Bool { self == .flagMoment }
+    var isGlobal: Bool { self == .flagMoment || self == .takeNote }
 
     /// A compact scope label for the Keyboard settings row.
     var scopeLabel: String { isGlobal ? "Global" : "Nook only" }
@@ -102,6 +106,14 @@ enum NookShortcutID: String, CaseIterable, Identifiable {
                 keyCode: UInt32(kVK_ANSI_F),
                 modifierFlags: NSEvent.ModifierFlags([.command, .option]).rawValue,
                 displayCharacter: "F"
+            )
+        case .takeNote:
+            // Registered only while recording, like the flag, so outside a
+            // meeting the combination still reaches every other app.
+            DictationShortcut(
+                keyCode: UInt32(kVK_ANSI_N),
+                modifierFlags: NSEvent.ModifierFlags([.command, .option]).rawValue,
+                displayCharacter: "N"
             )
         case .startRecording:
             DictationShortcut(

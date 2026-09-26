@@ -6,18 +6,630 @@ contribute.
 
 ## Current release
 
-Nook 1.19.0 is the current public release, published August 27, 2026. The
-release listing was checked on September 1; the 1.20.0 candidate has not been
-published.
+Nook 1.20.1 is the current public release, published September 3, 2026.
+The release listing was checked on September 4. Version 1.20.0 was published
+September 1. Publication does not prove that the hands-on acceptance items
+recorded below were completed.
 
 - Release builds use stable Xcode 26 and the macOS 26 SDK.
 - Distributed builds are Developer ID signed, notarized, stapled, and delivered
   through a signed Sparkle feed.
 - The release is available from the
-  [binary releases repository](https://github.com/wrnsnng/nook-releases/releases/tag/v1.19.0).
+  [binary releases repository](https://github.com/wrnsnng/nook-releases/releases/tag/v1.20.1).
 - User-facing changes are mapped in [CHANGELOG.md](../CHANGELOG.md).
 
-## Release 1.20.0 candidate
+## Remaining issue implementation, September 4
+
+### Code-review completion and remaining acceptance, September 5
+
+Code review is now complete for all five draft feature PRs: #22 through
+`2eb39a9`, #23 at `d5637d6`, #25 at `9e5ec8c`, #26 at `81c9c83`, and #27 through
+`bdee228`. This is code inspection, not physical acceptance or release approval.
+The final #22 review reproduced one more explicit-Stop race: a terminal callback
+arrived before `stopCapture()` threw, but was ignored, leaving ownership of a
+dead stream. Commit `2eb39a9f96a0d5056fcffde2a939d4e96056da13` remembers that
+receipt through the stop await without releasing the competing-capture barrier
+early. It resets between stops, so a later unconfirmed failure still retains
+ownership. The test failed with `stopFailed` in `00-52-36`; ten final focused
+repetitions passed 20 tests / 260 cases (`00-53-59`). Full isolated tests passed
+1,058 / 1,349 (`00-54-42`, `.build/Issue13ReviewTests`) and combined tests passed
+1,185 / 1,624 (`00-54-41`, `.build/IssueCompletionTests`), zero failures/skips.
+Both NookSnapshot targets build; pinned generation is unchanged. The focused
+commit is clean and pushed; [current #22 CI](https://github.com/wrnsnng/nook/actions/runs/33886644140)
+passed (job 101067930490), including contributor tests, Release build and
+development-identity/updater checks. All five feature PRs now have completed
+code reviews and passing current-head CI. The latest #27 [CI for bdee228](https://github.com/wrnsnng/nook/actions/runs/33885904492)
+passed at 2026-09-04 14:55:43 UTC (job 101065479064).
+
+Issues #9/#12/#13 and PRs #22/#23/#27 now separate completed code review from
+uncompleted physical acceptance. The remaining gates need real Mac permission
+prompts/indicators, microphone/system capture and Speech/model behavior, native
+keyboard/VoiceOver/physical IME, recovery/force-quit and storage scenarios,
+display/accessibility settings and long-capture/editor performance. No signed
+running app, permissions or user recordings changed. #27 must still follow #26,
+be retargeted/reverified on main, and pass required acceptance before merge.
+
+### Source-audio recovery review follow-up, September 5
+
+PR #27 now contains `bdee2281933751a80e61b658126ae42538deb2ef` on
+`codex/source-audio-recovery`, still stacked on #26 at `81c9c83`. Recovery had
+refreshed cached playback only when a completed source package existed. A
+synthetic primary-only resumed recording reproduced skipped extraction, omitted
+resumed audio and deletion of the originals after saving the incomplete note.
+Recovery now re-exports whenever capture parts remain, including absent or
+unfinished source packages. An M4A with no remaining captures is still reused.
+Failed export keeps the cached bytes, captures and unfinished package. This can
+require repairing/removing an unreadable capture deliberately before retrying;
+recovery does not silently accept an older, potentially incomplete cached mix.
+
+The four new tone cases failed before the change (`00-43-45`). The first retest
+also exposed a fixture assumption that two AAC inputs total exactly two seconds;
+the assertion now uses their actual encoded durations with the same 50 ms
+tolerance. Five repetitions of extraction/source-writer/source-transcription/
+recovery suites passed 70 tests / 615 cases (`00-45-37`). Full isolated tests
+passed 1,131 / 1,509 (`00-46-43`, `.build/SourceAudioReviewTests`); the combined
+worktree passed 1,184 / 1,622 (`00-46-44`, `.build/IssueCompletionTests`), all with
+zero failures/skips. NookSnapshot builds in both, existing test membership is
+verified and pinned project generation is unchanged. The root project hash is
+still `b0fcbab1fa94d6d62ac26d71e332516a464d8857b67e959e1c897eee4011dafb`.
+
+The clean focused commit is pushed. [CI for bdee228](https://github.com/wrnsnng/nook/actions/runs/33885904492)
+is queued/running. Previous #26 `81c9c83` CI and #27 `478a94d` CI passed; these
+are historical evidence, not CI for this new fix. Code inspection covered the
+writer, pause/stop ownership, source markers, export/transcription selection and
+recovery/retention/cleanup, and produced the fix above. Final source-audio review
+sign-off, real capture/model/native/accessibility/long-capture acceptance and
+merges remain open. No signed running app, permissions or user recordings were
+changed. The root combined worktree remains intentionally uncommitted.
+
+Work is on `codex/remaining-issues`; these changes are not in a published
+release. The original proposals remain preserved in GitHub issues #7 and
+#9 through #15. No issue is considered complete from compilation alone.
+
+- #7: Done/close offers a native destination sheet. All unambiguous Library
+  notes are eligible except the pad's own autosaved copy. Spoken-note appends
+  preserve existing source bytes; stale targets and self-filing are rejected.
+  Source cleanup rechecks its revision, and failed cleanup retains a notice.
+  Filing and #11 corrections are isolated together in draft
+  [PR #25](https://github.com/wrnsnng/nook/pull/25), commit `9e5ec8c` on
+  `codex/quick-note-filing-corrections`, checkout `.build/quick-note-review`.
+  This patch is based on main `69fa135`, without #13's lifecycle changes or
+  the search, summary and source-audio changes. Standalone verification passed
+  1,068 tests / 1,392 cases, zero failures/skips, in
+  `Test-Nook-2026.09.04_23-00-05-+1000.xcresult` under `.build/QuickNoteReviewTests`.
+  NookSnapshot builds; new files belong to their app/snapshot/test targets.
+  Repeated pinned generation is stable with project hash
+  `c92338aa67d8b0d272472c7ed93bf1caa5ba61abfa73cc273d981a0d9a7dc83d`.
+  Six isolated content renders were inspected in `.build/quick-note-review-renders`:
+  filing light/dark, scratch light, item dark, stale correction light and
+  correction/save-conflict/CLI disclosure dark at 380x240. The snapshot CLI
+  needed its built Sparkle framework in `DYLD_FRAMEWORK_PATH`; no production
+  build setting changed. These are not native-sheet interaction or physical
+  acceptance. [Contributor CI](https://github.com/wrnsnng/nook/actions/runs/33876007150)
+  passed generated-project verification, release-tooling tests, contributor
+  tests, Release build and development-identity/updater checks. The PR remains
+  draft/unmerged; review, real dictation, physical IME and keyboard/VoiceOver remain.
+  A September 5 focused safety review found no new defect in filing ownership,
+  stale correction decisions, verified-before-trash ordering or native edit
+  refusal/Undo safeguards. No application code changed. The focused pad safety,
+  correction parser/controller/routing and hosted-editor suites passed 81 tests /
+  139 cases, zero failures/skips, in
+  `Test-Nook-2026.09.05_00-01-52-+1000.xcresult`. This does not complete the native-
+  sheet lifecycle review or physical acceptance. Issues #7/#11 and PR #25 record
+  the scoped evidence and remain open.
+  The subsequent September 5 code review completed sheet bindings/actions,
+  dismissal/focus ownership and dictation routing, with no new actionable finding.
+  PR #25 and #7/#11 now mark code review complete for `9e5ec8c`. Controller gates
+  exclude simultaneous filing/correction decisions, actions validate captured
+  identities/revisions, and cancellation guards late dictation. This was code
+  inspection, not native interaction acceptance. Physical checks and merge remain
+  open; the PR stays draft and no application code changed.
+- #9: All/Today/Yesterday ranges share the unsaved-editor leave guard and use
+  calendar days across daylight-saving changes. Cancellable off-main-actor
+  fuzzy search includes transcripts and structured fields. Exact title matches
+  lead abbreviations/typos and content matches; file identities stay distinct.
+  This slice is now committed separately as `e5aff29` on
+  `codex/palette-search-date-navigation` in draft
+  [PR #23](https://github.com/wrnsnng/nook/pull/23), isolated at
+  `.build/issue-9-review` from main `69fa135`. Its standalone full suite passed
+  1,056 tests / 1,356 cases, zero failures/skips, in
+  `Test-Nook-2026.09.04_22-43-19-+1000.xcresult` under `.build/Issue9ReviewTests`.
+  NookSnapshot builds. The new PaletteSearchTests file is in the regenerated
+  project, whose repeated-generation hash is
+  `48f308cccbc5dbad47f6a90c7b1ae6310f3f17279448c4889cb94c574eef48a0`.
+  The PR excludes #12 summary-session wiring and the #10 Open Questions field;
+  its indexing addition remains with that later feature.
+  [Contributor CI run 33874489034](https://github.com/wrnsnng/nook/actions/runs/33874489034)
+  passed project generation, release-tooling tests, contributor tests, Release
+  build and development-identity/updater checks. The PR remains draft/unmerged;
+  code review and production native-sheet keyboard/VoiceOver acceptance remain.
+  Search review follow-up `d5637d691cc1d81e836c00cb7c50babc4b0d2dda` is committed
+  in PR #23. Cancellation now polls between fuzzy word comparisons within a long
+  transcript and rejects already-ranked partial hits. The controller already
+  refused stale output; this fixes obsolete comparison work continuing through
+  the current term's word scan. A cached/uncached checkpoint regression failed
+  against the preceding algorithm, which polled only four times, then passed.
+  Ten focused repetitions passed 11 tests / 210 cases in
+  `Test-Nook-2026.09.04_23-50-23-+1000.xcresult`. Final isolated tests passed
+  1,057 tests / 1,358 cases, zero failures/skips, in
+  `Test-Nook-2026.09.04_23-51-30-+1000.xcresult`; NookSnapshot builds and pinned
+  generation stays unchanged. Source/test fixes were mirrored into the combined
+  worktree; `Test-Nook-2026.09.04_23-53-19-+1000.xcresult` passed 1,181 tests /
+  1,597 cases, zero failures/skips. No text truncation or modal/selection/leave-
+  guard change was introduced. Normalization/tokenization/sorting remain
+  synchronous passes, not interruptible deadlines. Follow-up
+  [CI run 33880549268](https://github.com/wrnsnng/nook/actions/runs/33880549268)
+  passed; job 101047864259 completed at 2026-09-04 13:59:11 UTC. Code review and
+  physical native-sheet/keyboard/VoiceOver acceptance
+  remain open.
+- #13: The real audio-check lifecycle has an injectable start/stop session for
+  synthetic tests. Cancelled/failed startup retains a session whose stop failed.
+  Meeting/dictation capture refuses to proceed until teardown is confirmed.
+  Permission failures offer their matching Settings pane, and copy names normal
+  macOS recording indicators.
+  This slice is now committed separately as `4b759c3` on
+  `codex/audio-check-lifecycle` in draft [PR #22](https://github.com/wrnsnng/nook/pull/22).
+  Its isolated checkout is `.build/issue-13-review`; the original combined
+  worktree remains unchanged. Standalone full-suite verification passed 1,051
+  tests / 1,340 cases, zero failures/skips, in
+  `Test-Nook-2026.09.04_22-32-17-+1000.xcresult` under `.build/Issue13ReviewTests`.
+  NookSnapshot builds and pinned project regeneration is unchanged.
+  [Contributor CI run 33873533028](https://github.com/wrnsnng/nook/actions/runs/33873533028)
+  subsequently passed project generation, release-tooling tests, contributor
+  tests, Release build and development-identity/updater checks. The PR remains
+  draft and unmerged. Code review and physical acceptance are still open.
+  Review follow-up is committed as `d646a82742d2889dbe40cdb260e82328b4895325`
+  in the same PR. Regression tests first reproduced a stopped candidate being
+  ignored before startup returned, a redundant failed cleanup retaining an
+  already stopped candidate, and direct task cancellation leaving Starting
+  stuck. The service now records the candidate identity and terminal receipt
+  across startup/cleanup, preserves explicit Stop's barrier, and releases direct
+  cancellation to idle. It also publishes completion when the computed Settings
+  Stop/Start control changes without another phase change; that missing signal
+  was separately reproduced with an observer assertion. Six new tests cover
+  these paths and old-callback isolation. README setup copy is now included in
+  the isolated PR, matching the existing combined-worktree guidance.
+  Final standalone verification: 1,057 tests / 1,347 cases passed, zero failures/
+  skips, `Test-Nook-2026.09.04_23-41-01-+1000.xcresult`. Ten focused repetitions
+  passed 19 tests / 240 cases in `Test-Nook-2026.09.04_23-41-33-+1000.xcresult`.
+  NookSnapshot builds; pinned generation remains unchanged. Source/test changes
+  were mirrored into the original combined worktree without replacing other
+  features; its full run `Test-Nook-2026.09.04_23-42-10-+1000.xcresult` passed
+  1,180 tests / 1,595 cases with zero failures/skips.
+  [Follow-up CI](https://github.com/wrnsnng/nook/actions/runs/33879546012)
+  passed for `d646a82` at `2026-09-04T13:48:07Z`, including generated-project,
+  release-tooling, contributor tests, Release build and development-identity/
+  updater checks. Actual native callback, permission/device, keyboard and
+  VoiceOver acceptance remain unverified; this is synthetic ordering evidence.
+- #12: Initial, appended, recovered and live-caption rescue notes hand off to
+  shared per-file background summary sessions after saving their transcript.
+  Progress and explicit Cancel Summary/Retry live above every saved-note tab;
+  the existing prose stays visible. A local `summary_status: pending` field
+  survives relaunch without automatically starting a model; `pending-append`
+  retains the earlier session's actions on Retry. Failed, cancelled,
+  stale and timed-out jobs preserve the note, and a successful write-up retains
+  the live-caption incomplete-recording warning. Physical recording/recovery
+  and keyboard/VoiceOver acceptance still require direct evidence.
+  The shared summary portion and #10 item review/questions/recipes/fallback are
+  isolated together in draft [PR #26](https://github.com/wrnsnng/nook/pull/26),
+  commit `fa7860a` on `codex/saved-note-summary-review`, checkout `.build/summary-review`.
+  It is based on main `69fa135`, independently of PRs #22 through #25, and excludes
+  source-audio/capture/export changes (including their unused file-identity helper).
+  Final standalone tests passed 1,090 tests / 1,405 cases, zero failures/skips,
+  in `Test-Nook-2026.09.04_23-10-50-+1000.xcresult` under `.build/SummaryReviewTests`.
+  NookSnapshot builds. Nine new source/test files have verified membership;
+  repeatable pinned generation has hash
+  `3c696873a3ccfd1a8cb260e4db1cd4b4918089bb193850f86bb727582c785eba`.
+  Eight isolated content renders were inspected in `.build/summary-review-renders`:
+  progress, fallback plus progress, questions, item correction/removal/staleness,
+  and 300-point fallback/recipe controls. The fallback detail is 560x1050, not
+  minimum-height acceptance. [Initial Contributor CI](https://github.com/wrnsnng/nook/actions/runs/33876908870)
+  failed in the process test `aChildThatNeverReadsItsInputAndIgnoresTermCannotOutliveTheDeadline`;
+  its quiet log did not retain the failed assertion. Follow-up commit `d4dcba8`
+  adds failure-only xcresult summaries without changing application behavior,
+  timeouts or assertions. The reporting shell preserves exit 65 even if the
+  diagnostic command fails, and emits nothing extra on success. Five local
+  process-suite repetitions passed 15 tests / 80 cases in
+  `Test-Nook-2026.09.04_23-20-06-+1000.xcresult`; this does not establish the
+  original CI failure's cause. [Follow-up CI](https://github.com/wrnsnng/nook/actions/runs/33877575885)
+  passed for `d4dcba8`, including tests, Release build and development-identity/
+  updater verification (job completed `2026-09-04T13:27:53Z`). Code review,
+  actual-model, native-sheet focus/VoiceOver and
+  recording/recovery acceptance remain. #12 still requires its separate source
+  identity implementation and verification below, not just this summary PR.
+  September 5 review reproduced a returned-task cancellation gap: cancelling
+  `start`'s task before or during execution stopped work but left `isRunning`
+  true, blocking Retry. The UI's existing session-level Cancel was unaffected.
+  Commit `81fbddde221c7fb14b3494b1a9cf9aeb8e4b5a7f` adds identity-guarded exit
+  cleanup, so an old cancelled task cannot clear a newer request. The regression
+  failed in both cases in `Test-Nook-2026.09.05_00-07-03-+1000.xcresult`;
+  an earlier method-filter attempt ran zero tests and is not evidence.
+  Ten session-suite repetitions passed 17 tests / 350 cases in
+  `Test-Nook-2026.09.05_00-07-26-+1000.xcresult`. Full isolated tests passed
+  1,091 tests / 1,407 cases in `Test-Nook-2026.09.05_00-07-53-+1000.xcresult`.
+  NookSnapshot builds; pinned project generation is unchanged. The exact source/
+  test fix is mirrored into the combined worktree, whose full suite passed
+  1,182 tests / 1,599 cases in `Test-Nook-2026.09.05_00-08-28-+1000.xcresult`.
+  All passing runs had zero failures/skips. No model, save or merge rules changed.
+  [CI for #26 at 81fbddd](https://github.com/wrnsnng/nook/actions/runs/33882099624)
+  passed at 2026-09-04 14:16:10 UTC, job 101052958914.
+  The dependent source branch merged `81fbddd` without history rewriting as
+  `92eeaa8815ed3e930603d3a4101e1e7a6a80d1e0`. Its source-audio diff remains
+  21 files (+2,519/-123). Full stacked tests passed 1,129 tests / 1,486 cases,
+  zero failures/skips, in `Test-Nook-2026.09.05_00-09-37-+1000.xcresult`;
+  NookSnapshot builds and pinned generation is unchanged. The merge is pushed,
+  the checkout was clean, but [#27 CI at 92eeaa8](https://github.com/wrnsnng/nook/actions/runs/33882283155)
+  failed at 2026-09-04 14:16:09 UTC, job 101053561694. The diagnostic summary
+  records an empty PID marker in the process-deadline test, not a failed timeout
+  or reap assertion. Issues #10/#12 and PRs #26/#27 record these revisions,
+  preserve earlier CI failure history and leave acceptance/review/merge open.
+  Further summary review found initial/appended merges compared segment UUIDs
+  after the session had accepted identical model input. They could discard the
+  generated write-up yet clear its pending state. `622bb3d67a4107f62dfc4e423d6cb2ac312657ad`
+  shares exact transcript-input comparison across all three purposes, ignoring
+  only row UUIDs while retaining count/wording/timing/duration/source checks.
+  Expanded tests failed for initial/appended in `00-14-18`, then ten session
+  repetitions passed 17 tests / 490 cases in `00-15-01`. Full isolated tests
+  passed 1,091 / 1,421 in `00-15-40`; NookSnapshot builds. The commit also removes
+  the duplicate Unreleased heading, retaining all release-note text.
+  `17e6fa44fab24ab51b27a2070ad463bd7413a864` fixes the test-fixture PID readiness
+  race exposed by CI: shell redirection makes an empty file before printf writes
+  its number. The helper now waits for a positive PID rather than file existence.
+  The empty-file regression reproduced the CI assertion in `00-18-03`; five
+  process-suite repetitions passed 16 tests / 100 cases in `00-18-53`, including
+  empty/zero/negative/malformed intermediate markers. Timeout, signal escalation
+  and reap assertions are unchanged. This explains the observed 33882283155
+  failure; the earlier 33876908870 run did not retain its assertion.
+  Final isolated tests passed 1,092 / 1,425 in `00-19-48`; combined tests passed
+  1,183 / 1,617 in `00-19-34`. All counts are tests / executed cases, zero
+  failures/skips. Short result names here mean `Test-Nook-2026.09.05_<time>-+1000.xcresult`
+  under the previously named separate derived-data test directories.
+  The source branch merged both fixes as `eace31415b77112aba9c189def434e6a784c2a61`,
+  resolving only the changelog-heading conflict while retaining both sets of
+  release notes. Its code diff remains unchanged relative to the updated base;
+  the total is 21 files (+2,519/-121), now that the base owns header deduplication.
+  Full stacked tests passed 1,130 / 1,504 in `00-21-01`; NookSnapshot builds and
+  pinned generation is unchanged. Source/test fixes are mirrored into the root
+  combined worktree. Both PRs remain draft/unmerged and need latest-revision CI,
+  remaining review and actual-model/native/physical acceptance.
+  Those heads were pushed. [#26 CI at 17e6fa4](https://github.com/wrnsnng/nook/actions/runs/33883176334)
+  failed at 2026-09-04 14:23:56 UTC (job 101056502025): the recovery conflict test
+  observed zero in-memory notes. [#27 CI at eace314](https://github.com/wrnsnng/nook/actions/runs/33883384182)
+  passed at 2026-09-04 14:30:14 UTC (job 101057187430).
+  The tracker records the observed PID race as diagnosed and fixed, while
+  preserving the uncertainty about the earlier assertion-free CI failure.
+  Subsequent review diagnosed the recovery test fixture: its always-empty loader
+  erased the saved note when conflict handling reloaded the library. An explicit
+  reload reproduced the CI assertion in `00-25-44`. The fixture now uses the real
+  decoder restricted to its temporary directory, awaits reload completion, and
+  verifies the external summary/personal notes byte-for-byte. Ten recovery-suite
+  repetitions passed 33 tests / 410 cases (`00-26-16`), and full isolated/combined
+  suites passed 1,092 / 1,425 (`00-27-27`) and 1,183 / 1,617 (`00-26-36`), all with
+  zero failures/skips. No production code changed.
+  Commit `81c9c834043444774f95c9e5670690acaa150b70` also corrects the minimum summary
+  snapshot height from 1,050 to 580 points at width 560. Four light/dark fallback-
+  running/questions initial-viewport renders were inspected in
+  `.build/summary-review-renders/*-minimum-*-20260905.png`. Tabs, visible review
+  controls, fallback provenance and Cancel remain visible; lower document content
+  still requires scrolling. These are not physical interaction/VoiceOver/IME
+  acceptance. NookSnapshot builds in isolated and combined worktrees, pinned
+  generation is stable, and the root project hash remains `b0fcbab1fa94d6d62ac26d71e332516a464d8857b67e959e1c897eee4011dafb`.
+  Code review for PR #26 is complete, including generation/merge/write guards,
+  compatibility, shared-session lifecycle and item-sheet presentation/focus.
+  Actual-model and physical acceptance plus merge remain open. [CI at 81c9c83](https://github.com/wrnsnng/nook/actions/runs/33884144663)
+  is queued/running; the dependent source branch has merged this fixture-only
+  revision as `478a94dfd7d2bd9ea17f6fc71b1c35c1b7dea5aa` for verification.
+  That stack passed 1,130 tests / 1,504 cases, zero failures/skips, in
+  `Test-Nook-2026.09.05_00-31-05-+1000.xcresult`. NookSnapshot builds, pinned
+  generation is unchanged and the clean merge is pushed. [Latest #27 CI](https://github.com/wrnsnng/nook/actions/runs/33884304862)
+  is running. The tracker now marks #26 code review complete while keeping #27
+  source review and every actual-model/native/physical gate open.
+  The source-audio patch is now committed as `fdf2696` on
+  `codex/source-audio-recovery` in draft [PR #27](https://github.com/wrnsnng/nook/pull/27),
+  checkout `.build/source-audio-review`. It is stacked on PR #26 at `d4dcba8`,
+  not directly on main: source recovery tests exercise the new background-summary
+  handoff. Its 21-file diff excludes PRs #22–25 and includes source capture,
+  extraction, transcription, lifecycle, recovery, retention, storage accounting,
+  six new source/test files, regenerated project and privacy/technical/changelog
+  documentation. It also removes the duplicated Unreleased heading inherited
+  from PR #26. Full isolated stacked tests passed 1,128 tests / 1,484 cases,
+  zero failures/skips, in `Test-Nook-2026.09.04_23-22-38-+1000.xcresult`
+  under `.build/SourceAudioReviewTests`; NookSnapshot builds. Membership is
+  verified and repeated pinned generation has hash
+  `712b09b5d18fec75bf3478d76c29dec1641e82747694aaa359ebb5fcb93c09f5`.
+  [Contributor CI](https://github.com/wrnsnng/nook/actions/runs/33877989687)
+  passed for `fdf2696` at `2026-09-04T13:31:18Z`, including generated-project,
+  release-tooling, contributor tests, Release build and development-identity/
+  updater checks. Code review and real-Mac acceptance remain required. After #26 merges,
+  retarget and reverify #27 against main before merge. Neither PR is released.
+  Source identity now has a local auxiliary capture writer and source-aware
+  file-transcription path; both still need review and physical acceptance.
+  The legacy mixed-file `transcribeFile` path still emits `.mixed`. The local
+  `AudioExtractor` now mixes every audio track of each part, retaining offsets,
+  between-part gaps and final silence. A short synthetic silent endpoint is
+  needed because the M4A exporter drops final empty composition edits even with
+  an explicit export time range. Staged export validation protects the previous
+  destination, and cleanup failures remain visible. The
+  source-file and writer tests recover labelled synthetic audio through saved
+  Markdown, not actual microphone/system capture. Verify actual captured
+  metadata and complete sound before closing #12; never infer a speaker
+  from track order or stereo channel position without evidence.
+- #11: Quick Note now proposes deterministic natural voice corrections after
+  inserting the literal command words. Review pauses capture, defaults to
+  keeping words, and requires an unchanged note before applying an undoable
+  native edit. Missing replacement words are entered in the review. Synthetic
+  parser/controller/native-editor/delivery coverage includes exact Unicode,
+  stale proposals, library changes, cancellation, external-field literal speech,
+  refinement bypass, file conflicts and simulated composition refusal. Real
+  dictation, native-sheet keyboard and VoiceOver acceptance remain open.
+- #10: Open questions now travel through generation, validation, Markdown and
+  saved-note presentation. Explicit General/Standup/One-to-one/Interview recipes
+  persist in the note, influence local summary guidance and invalidate old-input
+  results. Choosing a recipe never invokes generation. Existing user-written
+  Open questions headings retain their original meaning; Nook-owned sections
+  use an invisible ownership comment. Item review now opens exact related
+  transcript passages in a native sheet for sentences and structured items.
+  Local correction and removal require preview/Apply, retain action metadata
+  and provide one-shot revision-guarded Undo until the sheet closes. Keyboard
+  and accessibility focus request the first source and return to the origin
+  or summary section when removal/staleness invalidates it. Fallback origin
+  now survives reopening independently of progress, remains labeled during
+  Retry and clears only with the accepted summary field. Physical focus and
+  actual-model behavior remain to verify.
+- #14 and #15: publication wording is reconciled. Physical IME, real audio,
+  VoiceOver, force-quit, minimum-hardware and installed-update acceptance remain
+  open unless supported by direct evidence. No new durability claim is made.
+  The two-file publication correction is committed as `89e46bc` on
+  `codex/reconcile-release-status`, isolated at `.build/release-status-review`,
+  in [PR #24](https://github.com/wrnsnng/nook/pull/24). Release records were
+  re-read September 4: v1.20.0 was published at `2026-09-01T01:39:49Z` and
+  v1.20.1 at `2026-09-03T00:01:25Z`, neither draft nor prerelease. No new
+  runtime tests, signature/feed verification or physical acceptance are claimed
+  for this documentation-only patch.
+  [Contributor CI](https://github.com/wrnsnng/nook/actions/runs/33874780284)
+  passed at `2026-09-04T12:57:12Z`, including tests, Release build, generated-project
+  and development-identity/updater checks. The two-file diff was reviewed against
+  the release API records, then squash-merged September 4 at `13:30:32Z` as
+  main commit `a46aa7adf50b8391de3c9af4ffe42a2bd88a9d9c`. GitHub confirms the
+  merge changes only the two documentation files and retains `69fa135` as parent.
+  Issues #14/#15 record the documentation task complete; every outstanding
+  physical criterion remains open. No new app release or manual sign-off occurred.
+  [Post-merge CI](https://github.com/wrnsnng/nook/actions/runs/33878458218)
+  passed for `a46aa7a` at `2026-09-04T13:37:16Z`, including generated-project,
+  release-tooling, contributor tests, Release build and development-identity/
+  updater checks.
+
+The initial full suite passed 1,043 tests on stable Xcode 26.6. The combined
+#7/#9/#13 implementation then passed 1,068 tests with no failures or skips
+(`Test-Nook-2026.09.04_18-56-42-+1000.xcresult`). The first
+combined filing/search/navigation run passed 117 tests (149 parameter cases),
+and the focused audio-check run passed 13 tests (17 parameter cases). Test builds
+use `.build/IssueCompletionTests`, separate from any signed local app.
+Light/dark filing snapshots were rendered and inspected under
+`.build/issue-completion/`; snapshots do not prove native sheet keyboard or
+VoiceOver behavior. The older palette fixture draws an overlay, unlike the
+production native sheet, so it is not native presentation evidence.
+
+The #12 background-summary integration passed **1,077 tests** (1,384 executed
+parameter cases), with zero failures/skips, on the same stable Xcode/Mac mini.
+The final run is
+`.build/IssueCompletionTests/Logs/Test/Test-Nook-2026.09.04_19-21-45-+1000.xcresult`.
+This includes deadline abandonment, exact-note retention, pending-status
+round-trips, action-preserving append retry after relaunch, registry ownership,
+and recovery-before-summary regression coverage. The generated project contains
+`NoteSummarySessions.swift` in both app and snapshot targets and is unchanged
+by a second pinned XcodeGen generation. Light/dark full saved-note running and
+pending-status renders are under `.build/issue-completion/summary-*.png`; the
+pending notice uses primary text and the existing bounded long-message view.
+These are synthetic render/storage tests, not physical source-label recovery,
+VoiceOver, keyboard-only flow or real capture acceptance.
+
+The #11 correction work passed the full **1,098-test** suite (1,442 executed
+parameter cases), zero failures/skips, in
+`.build/IssueCompletionTests/Logs/Test/Test-Nook-2026.09.04_19-54-25-+1000.xcresult`.
+The real hidden NSTextView tests cover one-step exact Undo/Redo and refusal to
+replace disabled, stale, Unicode-equivalent-but-different or composing text.
+Injected delivery tests prove that correction runs bypass refinement, retain
+their original pad ownership across focus changes, leave external speech
+literal, and reject a late callback after Review cancels capture. The native
+default-action and physical VoiceOver behavior still require manual acceptance.
+The new files are in the generated project; repeated pinned generation keeps
+its SHA-256 unchanged. Synthetic light/dark removal, replacement and stale
+review renders are in `.build/issue-completion/voice-*.png`. These are view
+renders, not evidence that physical recognition or sheet keyboard routing works.
+The light/dark minimum-size (380 × 240) conflict fixtures also retain both
+privacy/save warnings with Review and Keep Words reachable. Fixture validation
+confirms that rendering leaves the external file and the local draft unchanged.
+
+The #12 saved-audio extraction work passes the full **1,110-test** suite (1,464
+executed parameter cases), zero failures/skips, in
+`.build/IssueCompletionTests/Logs/Test/Test-Nook-2026.09.04_20-23-16-+1000.xcresult`.
+The audio suite has 12 tests with 22 parameter cases. Synthetic separate-track
+MOV inputs and decoded M4A samples verify every source frequency, both stereo
+channels, increasing/decreasing track counts, headroom, offsets and part
+boundaries. Video that actually outlasts audio verifies both final and resumed
+silent tails. The earlier audio-only empty-tail fixture was invalid: passthrough
+removed its empty tail. Replacing that fixture exposed the separate real export
+gap, now fixed with a short silent PCM endpoint. Failure, cancellation, invalid
+export, file alias, concurrent-change and cleanup-error tests retain the
+appropriate source/destination evidence. This does not verify real speech,
+source attribution, physical capture or installed-app permissions. No first-track
+selection remains in the local extractor; the change is not merged or released.
+
+The first #10 implementation slice passes **1,121 tests** (1,480 executed cases),
+zero failures/skips, in
+`.build/IssueCompletionTests/Logs/Test/Test-Nook-2026.09.04_20-37-54-+1000.xcresult`.
+`SummaryQuestionsTests` adds 11 tests/16 cases for portable storage, legacy
+headings, duplicate sections, bounded harvests, source/number filtering, explicit
+recipe guidance, stale/Unicode edits, regeneration and merge failure retention.
+Merge now carries typed failure provenance from the production summarizer rather
+than relying only on matching fallback prose. NookSnapshot builds, new files are
+in the generated project, and repeated pinned generation is unchanged.
+
+Light/dark complete-note, narrow-note and 300-point recipe-control renders are
+under `.build/issue-completion/summary-questions*.png` and
+`summary-recipe-minimum-*.png`. The narrow control stacks its native picker and
+Regenerate button rather than clipping them. Initial transparent standalone
+renders were unusable and were replaced with the actual ambient background;
+the final images were inspected. No physical keyboard/VoiceOver interaction or
+actual model behavior is established by these renders and synthetic tests.
+Evidence links, item correction and fallback presentation remain open in #10.
+
+The subsequent item-review implementation derives exact references from the
+saved transcript without a persisted evidence cache. The first scaffold did
+not compile: a private generated schema was inaccessible to its macro, and the
+repository deadline helper returns an optional nonthrowing result. Both were
+corrected without a toolchain fence. `SummaryItemReviewTests` covers Unicode
+ranges, source changes, long tails, contradictory retrieval, unsupported quotes
+and quantities, negation/uncertainty, explicit Apply, action dates/completion,
+failed saves, cancellation/deadline abandonment, stale revisions/content and
+one-shot Undo. Incomplete live-caption warnings cannot be removed as claims.
+Feedback/source edits invalidate prior proposals, and feedback is explicitly
+transient rather than a durable instruction for future regeneration.
+
+Synthetic `summary-item-review`, `summary-item-removal`, `summary-item-stale`
+and `summary-item-empty` snapshot modes use an injected local generator and
+verify that rendering does not save changes. These are not actual-model or
+physical keyboard/VoiceOver acceptance. The native sheet keeps Back to Item as
+the default action and Apply separate. The whole-summary fallback/Retry audit
+and manual acceptance remain open; no issue is closed by this implementation.
+
+Final item-review verification: **1,137 tests / 1,504 executed cases passed**,
+zero failures/skips, in
+`.build/IssueCompletionTests/Logs/Test/Test-Nook-2026.09.04_21-04-51-+1000.xcresult`.
+The review suite adds 16 tests/24 cases. NookSnapshot builds and seven final
+light/dark review, removal, stale, empty and full-note renders were inspected.
+All new files are present in their generated targets; repeated pinned XcodeGen
+keeps project hash `852117d653049cf4f4eb6cb35e38a1a498f01f6b6e4c117269c86ba5e7045638`.
+The work remains uncommitted and unreleased.
+
+The fallback/Retry follow-up adds `summary_origin` for transcript highlights,
+partial extraction and edited fallback. Decode migrates exact known legacy
+output without writing files or starting a model. The fallback card keeps its
+label during progress and exposes Retry across saved-note tabs; empty results
+describe what the write-up contains rather than claiming the conversation had
+no actions. Failed merges retain older facts, decisions, actions and questions
+and remain retryable as an append; successful merges clear stale pending state.
+An empty transcript does not acquire an impossible Retry obligation. A newer
+user summary retains its provenance when an optimistic generated-field merge
+keeps that text. Item correction retains edited-fallback status and Undo restores
+the original classification.
+
+The Foundation Models availability probe on this Mac returned
+`appleIntelligenceNotEnabled` on September 4. No setting was changed and no real
+model generation was run. Enabling Apple Intelligence and completing actual-model
+acceptance requires the user's involvement; this does not block the remaining
+source-attribution implementation or code review work.
+
+The earlier #12 file-boundary slice preceded the capture-side writer described
+below. `RecordedSourceTranscription` requires one exact versioned
+per-track QuickTime input marker, isolates every track (including unknown ones),
+and preserves offsets and ordered-part duration when assembling results. It
+never treats track order, stereo position or the recognizer's own result label
+as source identity. Normal finishing and recovery pass their original capture
+parts into this path; entirely unlabelled input retains mixed transcription.
+Any failed track, invalid timing, changed file or cancellation rejects a partial
+result. Temporary track audio is private and cleaned with reported failures.
+Tests use real synthetic multi-track MOV files and injected recognition, not
+actual microphones or Speech. The fixture needs explicit PCM reader output to
+obtain per-sample timing; offsets may be represented as leading silence inside
+a zero-start MOV time range, so its synthetic recognizer measures actual tone
+onset. At this checkpoint the capture writer emitted no markers. The subsequent
+auxiliary writer implements that boundary locally; legacy unlabelled files
+still cannot establish source identity. See the public implementation plan on
+#12 for the ownership, fallback and physical-acceptance constraints.
+
+Source-file verification: the full suite passed **1,158 tests / 1,552 executed
+cases**, zero failures/skips, in
+`Test-Nook-2026.09.04_21-35-40-+1000.xcresult`. The new source suite contributes
+10 tests / 21 cases, including real muxed audio, metadata ambiguity, offsets,
+legacy fallback, changed-input rejection, cancellation, cleanup failure and
+an injected-recognition recovery through persisted Markdown and idempotent retry.
+`NookSnapshot` also builds. The new source is in both app and snapshot targets,
+the new tests are in the test target, and repeated pinned XcodeGen generation
+preserves project hash
+`ad9899530c0f3ce61fc17bf22d62d3a7e771bf0bec57174b952c020ae8816000`.
+
+The six final fallback renders generated at 21:19 were also inspected:
+`detail-fallback-light`, `detail-fallback-dark`,
+`detail-fallback-running-minimum-light`, `detail-fallback-extraction-dark`,
+`fallback-card-minimum-light` and `fallback-card-minimum-dark` under
+`.build/issue-completion`. The corrected empty-result wording is visible and
+the 300-point card fits in both appearances. The narrow detail render is
+560 points wide and 1,050 points tall; this is not minimum-window-height or
+physical keyboard/VoiceOver acceptance. All work remains uncommitted/unmerged;
+the current capture writer, real-source capture, on-device Speech/model behavior
+and physical acceptance are not proven by these synthetic tests or images.
+
+### Source capture writer checkpoint, September 4 at 22:19
+
+`SourceAudioRecording` now writes separate explicitly tagged microphone/system
+tracks from typed callbacks into per-part private `.sources` packages. The
+original MP4 remains the fallback; only finalized companions with valid
+file-identity receipts are selected for playback and source-aware transcription.
+Sealing, cancellation, bounded buffering, resumed PCM trimming, repeated finish,
+internal silent gaps and final tails have synthetic coverage. Pause now retains
+the actual successful-removal receipt instead of guessing from the waiter error.
+Recovery can use a complete companion without its original MP4. Partial packages
+remain visible for Reveal/Delete, including failed cleanup. Artifact ownership,
+retention and storage accounting include packages and preserve other recordings.
+Privacy and technical documentation records the extra local audio copy and its
+limits. This is still uncommitted/unmerged work, not a release announcement.
+
+The expanded writer tests initially failed two tone-amplitude assertions. A
+diagnostic run measured 0.28278 and 0.28310 for the internal-gap tones, 0.28258
+for the resumed tone, and zero in the expected silent windows. These are
+consistent with 0.4-amplitude mono input distributed over two stereo channels,
+not missing or shifted sound. The assertions now check both channels against
+0.4 / sqrt(2) for mono input and 0.4 for stereo, with AAC tolerance. Both input
+layouts are covered; the timeline and silence assertions remain. Diagnostic
+forced failures were removed. No production gain change was made to satisfy
+an invalid single-channel threshold.
+
+The focused writer suite passed **10 tests / 20 cases** in
+`Test-Nook-2026.09.04_22-16-20-+1000.xcresult`. The subsequent full suite passed
+**1,170 tests / 1,575 cases**, zero failures/skips, in
+`Test-Nook-2026.09.04_22-18-16-+1000.xcresult`. `NookSnapshot` builds, source/test
+membership is present, and repeated pinned generation preserves project hash
+`b0fcbab1fa94d6d62ac26d71e332516a464d8857b67e959e1c897eee4011dafb`.
+`git diff --check` passes. The earlier failed full-suite result remains historical,
+not the latest outcome.
+
+Remaining: review and merge; real two-input capture, silence, pause/resume/stop,
+failed finalization and recovery/deletion; long-capture resource use and quality;
+actual on-device Speech/model behavior; physical keyboard/VoiceOver and other
+issue-specific acceptance. Synthetic callbacks do not prove SDK delivery
+completeness or physical capture boundaries.
+
+### Source recording review follow-up, September 4 at 22:29
+
+Review found that encoder completion alone authorized a companion receipt.
+The writer now reopens the finished asset and checks total duration, exact
+source markers, valid track ranges and each source's expected final timestamp.
+A full-length system track cannot conceal a shortened microphone track. The
+audio identity is captured before asynchronous validation and rechecked before
+publication. The cancellation gate prevents delayed validation from publishing
+after cancellation or recreating a package removed during cleanup. Tests cover
+wrong duration/source sets, corrupt files, a short secondary track, validation
+failure, external replacement, cancellation and cleanup while validation waits.
+These are container/ownership checks, not proof of audible captured content.
+
+Review also found that recovery could transcribe valid source companions while
+reusing an older cached M4A for retained playback, then delete the complete
+sources. Companion-backed recovery now re-exports playback even when a cached
+mix exists. A synthetic first-part cache plus later resumed part verifies the
+new full playback and transcript timeline. Injected re-export failure verifies
+that cached bytes and all originals/companions remain, with no note saved.
+Legacy recovery without a source companion retains its existing cache behavior.
+
+The combined source-writer/recovery suites passed **47 tests / 75 cases** in
+`Test-Nook-2026.09.04_22-27-57-+1000.xcresult`. The final full suite passed
+**1,174 tests / 1,588 cases**, zero failures/skips, in
+`Test-Nook-2026.09.04_22-28-45-+1000.xcresult`. The generated project is unchanged
+from the previous checkpoint. No real audio, model or physical acceptance is
+claimed; review and delivery remain open.
+
+## Historical release 1.20.0 candidate evidence
 
 Version 1.20.0, build 36 includes the accumulated review corrections and the
 Library/editor work proposed in [issue 15](https://github.com/wrnsnng/nook/issues/15).

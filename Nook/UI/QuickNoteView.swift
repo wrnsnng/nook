@@ -46,7 +46,7 @@ struct QuickNoteView: View {
         // One accent for the whole pad. Without this the system controls here
         // carry the user's system accent while Nook's own chrome carries the
         // brand colour, and the pad shows two different blues at once.
-        .tint(NookPalette.accent)
+        .tint(NookPalette.accentFill)
         .background { closeShortcut }
         // Escape leaves the pad the way every other exit does, by saving.
         .onExitCommand {
@@ -296,7 +296,7 @@ struct QuickNoteView: View {
             Text("Make this a task?")
                 .foregroundStyle(.secondary)
 
-            Button("Make task") {
+            Button("Make Task") {
                 note.applyTaskSuggestion(suggestion)
                 dismissedSuggestion = suggestion.paragraph
             }
@@ -306,7 +306,7 @@ struct QuickNoteView: View {
                 "Make this a task due \(suggestion.cueLabel). Command-Return."
             )
 
-            Button("Not now") {
+            Button("Not Now") {
                 dismissedSuggestion = suggestion.paragraph
             }
             .buttonStyle(.borderless)

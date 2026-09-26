@@ -6,7 +6,7 @@ Nook is a native, local-first macOS meeting notebook. It lives in the menu bar,
 captures system audio and your microphone only after you choose to record,
 transcribes and summarizes on-device, and saves a portable Markdown note.
 
-![Nook icon](Nook/Resources/Brand/NookIconSource-Cobalt.png)
+![Nook icon](Nook/Resources/Brand/NookIconSource-Lagoon.png)
 
 ## Highlights
 
@@ -24,7 +24,8 @@ transcribes and summarizes on-device, and saves a portable Markdown note.
   words appear where you were already typing — verbatim, tidied, or rewritten
   as prose, all on-device.
 - Includes a searchable native library, editable notes, raw Markdown editing,
-  Shortcuts actions, and signed automatic updates.
+  Shortcuts and Siri actions, Spotlight search of saved meetings, and
+  signed automatic updates.
 - Supports VoiceOver, keyboard navigation, Reduce Motion, Reduce Transparency,
   Increased Contrast, and light/dark appearance.
 
@@ -34,11 +35,14 @@ transcribes and summarizes on-device, and saves a portable Markdown note.
 - A Mac supported by Apple's on-device Speech framework.
 - Apple Intelligence enabled for generated summaries. Transcription and the
   deterministic summary fallback work without it.
-- Stable Xcode 26 and XcodeGen 2.45.4 to regenerate and build the project.
+- Stable Xcode 26 and XcodeGen 2.46.0 to regenerate and build the project.
 
-The generated Xcode project is committed, so a contributor can start with:
+The generated Xcode project is committed. Fetch the speaker separation models
+once (they are pinned, checksum-verified and bundled into the app, not
+committed; the build fails without them), then open the project:
 
 ```sh
+./Scripts/fetch-diarization-models.sh
 open Nook.xcodeproj
 ```
 
@@ -56,10 +60,12 @@ metadata during setup; it does not start or save a test recording.
 
 ## Build and test
 
-Install the pinned XcodeGen version, regenerate the project, and run tests:
+Install the pinned XcodeGen version, fetch the speaker separation models,
+regenerate the project, and run tests:
 
 ```sh
-xcodegen --version # expected: 2.45.4
+xcodegen --version # expected: 2.46.0
+./Scripts/fetch-diarization-models.sh # once; does nothing when already present
 xcodegen generate
 
 xcodebuild test -quiet \

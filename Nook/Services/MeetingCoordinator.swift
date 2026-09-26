@@ -14,6 +14,7 @@ enum MeetingPhase: Equatable, Sendable {
         case preparing = "Gathering the recording"
         case refining = "Refining the transcript"
         case transcribing = "Listening back locally"
+        case separatingSpeakers = "Telling voices apart"
         case summarizing = "Distilling the conversation"
         case saving = "Tucking away your notes"
         case discarding = "Discarding the recording"
@@ -30,6 +31,8 @@ enum MeetingPhase: Equatable, Sendable {
                 "Cleaning up the live captions while preserving what was actually said."
             case .transcribing:
                 "Giving the saved audio a careful second listen, entirely on this Mac."
+            case .separatingSpeakers:
+                "Working out who said what on the meeting side, entirely on this Mac."
             case .summarizing:
                 "Finding the useful shape of the conversation: themes, decisions, and next steps."
             case .saving:
@@ -159,6 +162,9 @@ final class MeetingCoordinator: ObservableObject {
     /// How far the final summary has got through a long transcript, while it
     /// is being condensed in parts.
     @Published private(set) var summaryProgress: SummaryProgress?
+    /// The note the last successful recording created or joined, so the
+    /// panel's saved state can open that note rather than the Library.
+    @Published private(set) var lastSavedNoteID: MeetingNote.ID?
     /// The meeting currently being recorded or processed, named by the
     /// identifier its recording files carry.
     ///
@@ -233,6 +239,11 @@ final class MeetingCoordinator: ObservableObject {
     /// Global flag hotkey, registered only while a recording is running.
     private let momentHotKeys = MomentHotKeyController(
         shortcut: ShortcutStore.shared.binding(for: .flagMoment)
+    )
+    /// Global "take a note" hotkey, on the same lifecycle as the flag.
+    private let noteHotKeys = MomentHotKeyController(
+        shortcut: ShortcutStore.shared.binding(for: .takeNote),
+        identifier: 2
     )
     private let transcriber = TranscriptionService()
     private let liveTranscriber = LiveTranscriptionService()
@@ -329,8 +340,11 @@ final class MeetingCoordinator: ObservableObject {
         capture.onUnexpectedStop = { [weak self] _ in
             self?.finishAfterCaptureStopped()
         }
-        momentHotKeys.onFlag = { [weak self] in
+        momentHotKeys.onPress = { [weak self] in
             self?.flagMoment()
+        }
+        noteHotKeys.onPress = { [weak self] in
+            self?.requestNoteLine()
         }
     }
 
@@ -446,6 +460,7 @@ final class MeetingCoordinator: ObservableObject {
         meterTask?.cancel()
         momentNoticeTask?.cancel()
         momentHotKeys.stop()
+        noteHotKeys.stop()
         onRecordingStopped?()
         topPanelHidden = false
         processingCancellationRequested = false
@@ -758,6 +773,21 @@ final class MeetingCoordinator: ObservableObject {
         momentHotKeys.apply(
             ShortcutStore.shared.binding(for: .flagMoment)
         )
+        noteHotKeys.apply(
+            ShortcutStore.shared.binding(for: .takeNote)
+        )
+    }
+
+    /// Bumped to ask the notch for its note line. The panel answers: in the
+    /// compact island with a one-line field, in the workspace with My notes.
+    @Published private(set) var noteLineRequest = 0
+
+    /// Brings the panel back if it was hidden and asks it for a note line.
+    func requestNoteLine() {
+        guard phase.isRecording else { return }
+        topPanelHidden = false
+        onPresentationRequested?()
+        noteLineRequest += 1
     }
 
     func revealPermissions() {
@@ -974,6 +1004,7 @@ final class MeetingCoordinator: ObservableObject {
                 startElapsedClock()
                 startAudioMeter()
                 momentHotKeys.start()
+                noteHotKeys.start()
                 startLiveCaptions()
             } catch {
                 if Task.isCancelled || processingCancellationRequested {
@@ -1292,7 +1323,18 @@ final class MeetingCoordinator: ObservableObject {
                 )
             }
             try Task.checkCancellation()
-            let transcript = TranscriptAssembler.coalesce(rawTranscript)
+            var transcript = TranscriptAssembler.coalesce(rawTranscript)
+
+            // Who said what, while the recording still exists. A new note
+            // only: a joined sitting's voices would be numbered afresh and
+            // collide with names the user already gave that note.
+            if draft.attachedNoteID == nil {
+                phase = .processing(.separatingSpeakers)
+                transcript = await MeetingSpeakerSeparation.labelled(
+                    transcript, recordingURLs: recordingURLs
+                )
+                try Task.checkCancellation()
+            }
 
             // A recording started from an existing note joins that note
             // instead of creating one; everything downstream differs.
@@ -1307,7 +1349,8 @@ final class MeetingCoordinator: ObservableObject {
                 )
                 completeSuccessfulProcessing(
                     cleanupFailures: cleanupFailures,
-                    title: saved.title
+                    title: saved.title,
+                    noteID: saved.id
                 )
                 return
             }
@@ -1338,7 +1381,8 @@ final class MeetingCoordinator: ObservableObject {
 
             completeSuccessfulProcessing(
                 cleanupFailures: cleanupFailures,
-                title: saved.title
+                title: saved.title,
+                noteID: saved.id
             )
         } catch {
             if Task.isCancelled || processingCancellationRequested {
@@ -1510,7 +1554,8 @@ final class MeetingCoordinator: ObservableObject {
             )
             completeSuccessfulProcessing(
                 cleanupFailures: [],
-                title: saved.title
+                title: saved.title,
+                noteID: saved.id
             )
             return true
         } catch {
@@ -1558,8 +1603,10 @@ final class MeetingCoordinator: ObservableObject {
     /// created a note or joined one.
     private func completeSuccessfulProcessing(
         cleanupFailures: [URL],
-        title: String
+        title: String,
+        noteID: MeetingNote.ID
     ) {
+        lastSavedNoteID = noteID
         activeDraft = nil
         processingTask = nil
         live.elapsed = 0
@@ -2292,6 +2339,18 @@ final class MeetingCoordinator: ObservableObject {
 
     static let stalledTrackGap: TimeInterval = 300
 
+    /// Updates only the fast signals, for scripted previews that animate a
+    /// meeting in progress without re-publishing its phase on every tick.
+    func setPreviewSignals(
+        audioLevel: Double,
+        elapsed: TimeInterval,
+        liveTranscript: LiveTranscriptState? = nil
+    ) {
+        live.audioLevel = audioLevel
+        live.elapsed = elapsed
+        if let liveTranscript { live.liveTranscript = liveTranscript }
+    }
+
     func setPreviewState(
         phase: MeetingPhase,
         elapsed: TimeInterval,
@@ -2300,9 +2359,11 @@ final class MeetingCoordinator: ObservableObject {
         panelMode: MeetingPanelMode? = nil,
         liveInsights: MeetingInsights? = nil,
         liveNotes: String? = nil,
-        isPaused: Bool = false
+        isPaused: Bool = false,
+        liveMoments: [MeetingMoment]? = nil
     ) {
         self.phase = phase
+        if let liveMoments { self.liveMoments = liveMoments }
         live.elapsed = elapsed
         live.liveTranscript = liveTranscript
         live.audioLevel = audioLevel
