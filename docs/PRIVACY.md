@@ -218,6 +218,34 @@ Mail hands it to the system's compose window for the user to review and send.
 Share uses the macOS share menu, so the destination is always one the user
 chooses.
 
+## Speaker separation
+
+Nook includes an on-device speaker separation engine (issue #28) that finds
+who spoke when in a saved recording, so remote passages can later be labelled
+*Speaker 1*, *Speaker 2*, and so on. It is not yet connected to notes or the
+interface; this section describes the engine's data handling so the
+integration inherits it.
+
+- **Where it runs.** On this Mac, through FluidAudio's offline pipeline on
+  Core ML (Neural Engine where available, otherwise the CPU). Audio never
+  leaves the machine.
+- **Models.** The Core ML models ship inside the application bundle. They
+  are fetched when Nook is *built*, from one pinned revision and checked
+  against pinned SHA-256 checksums; a build without them fails. The app never
+  downloads a model: it loads the bundled files directly, and FluidAudio's
+  model hub is switched to offline mode before the library is first used, so
+  any download path would fail instead of reaching the network.
+- **What it reads.** Only the audio file it is handed. It is designed to run
+  on the remote-only system-audio track, so the user's own microphone
+  passages stay **You** and are never attributed to someone else.
+- **What it writes.** While it runs, the audio is converted to 16 kHz mono in
+  a private temporary file (owner-only permissions) that is unlinked as soon as
+  it is memory-mapped, so no converted copy outlives the analysis even if Nook
+  quits. The result is a list of time ranges with speaker numbers, returned to
+  the caller. Voice embeddings (voiceprints) exist only in memory during one
+  analysis and are never written to disk or kept between meetings.
+- **Permissions.** None beyond those already used for recording.
+
 ## The command-line assistant bridge (opt-in)
 
 Note actions can optionally run through a Claude Code or Codex CLI already
@@ -606,6 +634,12 @@ Official updates are protected with HTTPS, a signed appcast, EdDSA archive
 signatures, Apple Developer ID signing, and notarization.
 
 Links to the project website or GitHub open only when a user activates them.
+
+Building Nook from source downloads the speaker separation models from
+Hugging Face (`Scripts/fetch-diarization-models.sh`). That is a build-time
+request made by the developer's machine or CI, at a pinned revision with
+checksum verification, and it carries no user data. The built app makes no
+request for models.
 
 ## Logs and diagnostics
 

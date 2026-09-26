@@ -21,6 +21,12 @@ packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     exactVersion: "2.9.5"
+  # On-device speaker separation (issue #28). Apache-2.0. Its Core ML models
+  # are not fetched by the package: Scripts/fetch-diarization-models.sh pins
+  # and verifies them at build time, and the app bundles them.
+  FluidAudio:
+    url: https://github.com/FluidInference/FluidAudio
+    exactVersion: "0.17.4"
 targets:
   Nook:
     type: application
@@ -39,9 +45,30 @@ targets:
         buildPhase: resources
       - path: TRADEMARKS.md
         buildPhase: resources
+      # A folder reference, so the generated project is identical whether or
+      # not the models have been fetched yet. They are gitignored and verified
+      # by the pre-build check below.
+      - path: ThirdParty/SpeakerDiarizationModels
+        type: folder
+        buildPhase: resources
+        optional: true
     dependencies:
       - package: Sparkle
         product: Sparkle
+      - package: FluidAudio
+        product: FluidAudio
+    preBuildScripts:
+      # Speaker separation must never silently disappear from a build, the
+      # way live conversion once did (AGENTS.md rule 2). The app cannot fetch
+      # its models at runtime, so a build without them fails here instead.
+      - name: Verify speaker diarization models
+        basedOnDependencyAnalysis: false
+        showEnvVars: false
+        script: |
+          if ! "${SRCROOT}/Scripts/fetch-diarization-models.sh" --check; then
+            echo "error: Speaker diarization models are missing or changed. Run Scripts/fetch-diarization-models.sh once, then build again."
+            exit 1
+          fi
     info:
       path: Nook/Resources/Info.plist
       properties:
@@ -110,6 +137,8 @@ targets:
     dependencies:
       - package: Sparkle
         product: Sparkle
+      - package: FluidAudio
+        product: FluidAudio
     settings:
       base:
         PRODUCT_NAME: NookSnapshot

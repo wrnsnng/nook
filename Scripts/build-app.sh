@@ -34,6 +34,11 @@ if command -v xcodegen >/dev/null 2>&1; then
   xcodegen generate
 fi
 
+# Speaker separation models are fetched at build time, pinned and verified,
+# and bundled. The app never downloads them, and the Nook target refuses to
+# build without them.
+"$SCRIPT_DIR/fetch-diarization-models.sh"
+
 xcodebuild \
   -project Nook.xcodeproj \
   -scheme Nook \

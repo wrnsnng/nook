@@ -51,6 +51,15 @@ xcodegen generate
 git diff --exit-code -- Nook.xcodeproj
 ```
 
+Every build needs the speaker separation models, which are fetched at build
+time rather than committed. `./Scripts/fetch-diarization-models.sh` downloads
+them from one pinned Hugging Face revision and verifies each file's SHA-256;
+the Nook target's pre-build check fails the build if they are missing or
+altered. `Scripts/build-app.sh` and both workflows run the fetch before
+building, and `Scripts/verify-release-app.sh` re-verifies the copy inside the
+app before notarization. To update the models, change the revision and every
+checksum in the script together, in a reviewed change.
+
 Contributor builds use `com.localfirst.nook.dev` and `NOOK_OFFICIAL_BUILD=NO`.
 That separates macOS privacy grants from the distributed app and disables the
 production updater. Only the maintainer artifact workflow and release tooling
@@ -80,12 +89,13 @@ disabled-updater marker.
 maintainer. It has read-only repository permissions and no release secrets. It:
 
 1. selects stable Xcode 26;
-2. downloads XcodeGen 2.45.4 and checks the pinned SHA-256;
+2. downloads XcodeGen 2.45.4 and checks the pinned SHA-256, then fetches and
+   verifies the pinned speaker separation models;
 3. tests with `NOOK_OFFICIAL_BUILD=YES` and
    `PRODUCT_BUNDLE_IDENTIFIER=com.localfirst.nook`;
 4. builds an unsigned universal app with the same explicit settings;
-5. verifies both architectures, SDK, official bundle identity, and official
-   build marker; and
+5. verifies both architectures, SDK, official bundle identity, official
+   build marker, and the bundled speaker separation models; and
 6. uploads the app plus a SHA-256 file for one day.
 
 The artifact is not an official release. Dispatch the workflow at the reviewed
