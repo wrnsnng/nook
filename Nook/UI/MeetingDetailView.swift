@@ -147,7 +147,6 @@ struct MeetingDetailView: View {
 
             VStack(spacing: 0) {
                 documentHeader
-                SoftDivider()
                 savedSummaryStatus
 
                 ZStack {
@@ -284,7 +283,7 @@ struct MeetingDetailView: View {
     private var documentHeader: some View {
         VStack(alignment: .leading, spacing: 22) {
             ViewThatFits(in: .horizontal) {
-                HStack(alignment: .bottom, spacing: 28) {
+                HStack(alignment: .center, spacing: 16) {
                     titleBlock
                     Spacer(minLength: 24)
                     DetailTabBar(
@@ -308,8 +307,8 @@ struct MeetingDetailView: View {
             }
         }
         .padding(.horizontal, 42)
-        .padding(.top, 32)
-        .padding(.bottom, 24)
+        .padding(.top, 28)
+        .padding(.bottom, 12)
     }
 
     private var detailActions: some View {
@@ -1818,45 +1817,31 @@ private struct DetailTabBar: View {
         self.showsTranscript = showsTranscript
     }
 
+    /// The system segmented control, as Finder and Xcode use for switching
+    /// views of one document. It brings native keyboard, VoiceOver and
+    /// Increased Contrast behaviour that the hand-drawn underline tabs lacked.
     var body: some View {
-        HStack(spacing: 0) {
+        Picker("View", selection: animatedSelection) {
             ForEach(DetailTab.allCases.filter { tab in
                 showsTranscript || tab != .transcript
             }) { tab in
-                Button {
-                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
-                        selection = tab
-                    }
-                } label: {
-                    Label(tab.rawValue, systemImage: tab.symbol)
-                        .font(NookType.control)
-                        .padding(.horizontal, 12)
-                        .frame(height: 32)
-                        .foregroundStyle(
-                            selection == tab
-                                ? Color(nsColor: .labelColor)
-                                : Color(nsColor: .secondaryLabelColor)
-                        )
-                        .overlay(alignment: .bottom) {
-                            Rectangle()
-                                .fill(
-                                    selection == tab
-                                        ? NookPalette.accent
-                                        : Color.clear
-                                )
-                                .frame(height: 2)
-                        }
-                }
-                .buttonStyle(.plain)
-                .contentShape(Rectangle())
-                .accessibilityAddTraits(selection == tab ? .isSelected : [])
+                Text(tab.rawValue).tag(tab)
             }
         }
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(.primary.opacity(0.08))
-                .frame(height: 0.5)
-        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
+    }
+
+    private var animatedSelection: Binding<DetailTab> {
+        Binding(
+            get: { selection },
+            set: { tab in
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
+                    selection = tab
+                }
+            }
+        )
     }
 }
 

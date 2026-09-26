@@ -103,18 +103,11 @@ enum NookPalette {
         dark: NSColor(red: 0.53, green: 0.70, blue: 0.91, alpha: 1)
     )
 
-    static let canvasTop = adaptive(
-        light: NSColor(red: 0.982, green: 0.980, blue: 0.974, alpha: 1),
-        dark: NSColor(red: 0.112, green: 0.114, blue: 0.120, alpha: 1)
-    )
-    static let canvasBottom = adaptive(
-        light: NSColor(red: 0.958, green: 0.958, blue: 0.952, alpha: 1),
-        dark: NSColor(red: 0.080, green: 0.082, blue: 0.087, alpha: 1)
-    )
-    static let paper = adaptive(
-        light: NSColor(red: 0.995, green: 0.993, blue: 0.986, alpha: 1),
-        dark: NSColor(red: 0.122, green: 0.124, blue: 0.130, alpha: 1)
-    )
+    /// Surfaces are the system's own, so Nook sits in the same material as
+    /// Notes and Mail and follows every appearance and contrast setting.
+    static let canvasTop = Color(nsColor: .textBackgroundColor)
+    static let canvasBottom = Color(nsColor: .textBackgroundColor)
+    static let paper = Color(nsColor: .controlBackgroundColor)
 
     static let success = adaptive(
         light: NSColor(red: 0.12, green: 0.50, blue: 0.24, alpha: 1),
@@ -158,7 +151,7 @@ enum NookType {
     /// The default SF design: rounded read as a toy next to native chrome.
     static let title = Font.title.weight(.bold)
     static let largeTitle = Font.largeTitle.weight(.bold)
-    static let editorialSummary = Font.system(.title3, design: .serif)
+    static let editorialSummary = Font.title3
     static let code = Font.caption.monospaced()
 }
 
