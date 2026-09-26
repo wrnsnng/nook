@@ -159,6 +159,9 @@ final class MeetingCoordinator: ObservableObject {
     /// How far the final summary has got through a long transcript, while it
     /// is being condensed in parts.
     @Published private(set) var summaryProgress: SummaryProgress?
+    /// The note the last successful recording created or joined, so the
+    /// panel's saved state can open that note rather than the Library.
+    @Published private(set) var lastSavedNoteID: MeetingNote.ID?
     /// The meeting currently being recorded or processed, named by the
     /// identifier its recording files carry.
     ///
@@ -1307,7 +1310,8 @@ final class MeetingCoordinator: ObservableObject {
                 )
                 completeSuccessfulProcessing(
                     cleanupFailures: cleanupFailures,
-                    title: saved.title
+                    title: saved.title,
+                    noteID: saved.id
                 )
                 return
             }
@@ -1338,7 +1342,8 @@ final class MeetingCoordinator: ObservableObject {
 
             completeSuccessfulProcessing(
                 cleanupFailures: cleanupFailures,
-                title: saved.title
+                title: saved.title,
+                noteID: saved.id
             )
         } catch {
             if Task.isCancelled || processingCancellationRequested {
@@ -1510,7 +1515,8 @@ final class MeetingCoordinator: ObservableObject {
             )
             completeSuccessfulProcessing(
                 cleanupFailures: [],
-                title: saved.title
+                title: saved.title,
+                noteID: saved.id
             )
             return true
         } catch {
@@ -1558,8 +1564,10 @@ final class MeetingCoordinator: ObservableObject {
     /// created a note or joined one.
     private func completeSuccessfulProcessing(
         cleanupFailures: [URL],
-        title: String
+        title: String,
+        noteID: MeetingNote.ID
     ) {
+        lastSavedNoteID = noteID
         activeDraft = nil
         processingTask = nil
         live.elapsed = 0

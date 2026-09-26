@@ -537,6 +537,17 @@ struct MarkdownCodecTests {
         }
     }
 
+    /// A line typed into the notch's shelf becomes its own bullet in My
+    /// notes, whatever the notes already end with, and blank input adds
+    /// nothing.
+    @Test
+    func aQuickNoteLineJoinsMyNotesAsItsOwnBullet() {
+        #expect(LiveNoteLine.appending("  Ask Ana  ", to: "") == "- Ask Ana")
+        #expect(LiveNoteLine.appending("Ask Ana", to: "Budget first") == "Budget first\n- Ask Ana")
+        #expect(LiveNoteLine.appending("Ask Ana", to: "- Budget\n") == "- Budget\n- Ask Ana")
+        #expect(LiveNoteLine.appending("   ", to: "Budget first") == nil)
+    }
+
     @Test
     func hiddenRecordingKeepsARecoverableCameraEdgeIndicator() {
         let size = NotchPanelMetrics.bodySize(

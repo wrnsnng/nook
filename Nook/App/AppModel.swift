@@ -402,6 +402,13 @@ final class AppModel: ObservableObject {
         NSApp.setActivationPolicy(.accessory)
     }
 
+    /// Closes the floating notes window and shows My notes in the notch
+    /// again, with the same words.
+    func returnLiveNotesToPanel() {
+        closeLiveNotes()
+        meeting.selectPanelMode(.notes)
+    }
+
     private func closeLiveNotes() {
         // The view that owns the floating window receives this synchronously,
         // which avoids SwiftUI scene reconciliation keeping a stale editor

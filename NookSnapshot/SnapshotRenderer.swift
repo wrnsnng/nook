@@ -22,7 +22,7 @@ struct SnapshotRenderer {
         let isLiveFollowFixture = ["live-follow-light", "live-follow-dark"].contains(mode)
         let staticPanelModes: Set<String> = [
             "panel-compact-idle", "panel-compact-flagged", "panel-compact-hover",
-            "panel-hidden-recording", "panel-hidden-paused"
+            "panel-compact-note", "panel-hidden-recording", "panel-hidden-paused"
         ]
         let isNotchDemo = mode == "notch-demo"
         let isAssistantFixture = mode.hasPrefix("quick-note-assistant-")
@@ -883,7 +883,7 @@ struct SnapshotRenderer {
                     .transaction { $0.disablesAnimations = true }
             )
         case "notch", "external-panel", "notch-demo",
-             "panel-compact-idle", "panel-compact-flagged", "panel-compact-hover",
+             "panel-compact-idle", "panel-compact-flagged", "panel-compact-hover", "panel-compact-note",
              "panel-hidden-recording", "panel-hidden-paused",
              "summary-light", "summary-dark",
              "notes-light", "notes-dark",
@@ -898,7 +898,7 @@ struct SnapshotRenderer {
             // a housing this size. `external-panel` keeps a plain top edge.
             geometry.topInset = mode == "external-panel" ? 24 : 32
             geometry.cameraHousingWidth = mode == "external-panel" ? 0 : 184
-            geometry.isHovering = mode == "panel-compact-hover"
+            geometry.isHovering = mode == "panel-compact-hover" || mode == "panel-compact-note"
             notchDemoGeometry = geometry
             // The prompt shrinks after it has been on screen a while rather
             // than vanishing, so that second shape needs to be renderable too.
@@ -909,7 +909,10 @@ struct SnapshotRenderer {
             content = AnyView(
                 ZStack(alignment: .top) {
                     NotchPreviewBackground()
-                    NotchPanelView(rendersForSnapshot: !isNotchDemo)
+                    NotchPanelView(
+                        rendersForSnapshot: !isNotchDemo,
+                        showsNoteLine: mode == "panel-compact-note"
+                    )
                         .environmentObject(meeting)
                         .environmentObject(geometry)
                     if mode != "external-panel" {
@@ -962,7 +965,7 @@ struct SnapshotRenderer {
                 )
                 notchDemoGeometry?.revealProgress = 0
             case "panel-compact-idle", "panel-compact-flagged", "panel-compact-hover",
-                 "panel-hidden-recording", "panel-hidden-paused":
+                 "panel-compact-note", "panel-hidden-recording", "panel-hidden-paused":
                 meeting.setPreviewState(
                     phase: .recording(
                         title: "Synthetic panel status review",

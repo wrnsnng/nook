@@ -33,11 +33,19 @@ struct NotchPanelView: View {
     @State private var retainedPhase: MeetingPhase = .idle
     @State private var retainedMode: NotchIslandMode = .idle
     @State private var hoverTask: Task<Void, Never>?
+    /// The shelf is a one-line note field instead of controls.
+    @State private var isComposingNote = false
+    @State private var noteDraft = ""
+    @FocusState private var noteFieldFocused: Bool
+    /// Bumped on each added line, to acknowledge it without a dialog.
+    @State private var addedNoteCount = 0
     @Namespace private var island
     private let rendersForSnapshot: Bool
 
-    init(rendersForSnapshot: Bool = false) {
+    init(rendersForSnapshot: Bool = false, showsNoteLine: Bool = false) {
         self.rendersForSnapshot = rendersForSnapshot
+        _isComposingNote = State(initialValue: showsNoteLine)
+        _noteDraft = State(initialValue: showsNoteLine ? "Ask Ana about the launch checklist" : "")
     }
 
     // MARK: - State
@@ -184,7 +192,9 @@ struct NotchPanelView: View {
         case .recordingCompact, .recordingExpanded:
             .voice(isPaused: meeting.isPaused)
         case .processing:
-            .sweep
+            meeting.summaryProgress.map {
+                .progress(Double($0.part) / Double(max(1, $0.total)))
+            } ?? .sweep
         case .completed:
             .success
         case .failed:
@@ -201,6 +211,7 @@ struct NotchPanelView: View {
     private func hoverChanged(_ hovering: Bool) {
         hoverTask?.cancel()
         guard !rendersForSnapshot else { return }
+        guard hovering || !isComposingNote else { return }
         hoverTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(hovering ? 60 : 340))
             guard !Task.isCancelled else { return }
@@ -290,7 +301,7 @@ struct NotchPanelView: View {
     /// with no sign Nook had ever offered. Both answers stay one click away.
     private func compactDetectedContent(_ detection: DetectedMeeting) -> some View {
         HStack(spacing: 8) {
-            IslandInvitation(size: 22)
+            MeetingAppMark(appName: detection.appName, size: 24)
                 .matchedGeometryEffect(id: "live-mark", in: island)
 
             Button {
@@ -330,7 +341,7 @@ struct NotchPanelView: View {
 
     private func expandedDetectedContent(_ detection: DetectedMeeting) -> some View {
         HStack(spacing: 11) {
-            IslandInvitation(size: 30)
+            MeetingAppMark(appName: detection.appName, size: 30)
                 .matchedGeometryEffect(id: "live-mark", in: island)
 
             VStack(alignment: .leading, spacing: 1) {
@@ -399,6 +410,9 @@ struct NotchPanelView: View {
                     .accessibilityAction(named: isPaused ? "Resume recording" : "Pause recording") {
                         meeting.togglePause()
                     }
+                    .accessibilityAction(named: "Take a note") {
+                        takeNote()
+                    }
                     .accessibilityAction(named: "Flag this moment") {
                         meeting.flagMoment()
                     }
@@ -412,9 +426,17 @@ struct NotchPanelView: View {
                 .frame(height: geometry.topInset)
 
                 if showsControls {
-                    controlShelf
-                        .frame(height: bodySize.height)
-                        .transition(.islandContent(reduceMotion: reduceMotion))
+                    ZStack {
+                        if isComposingNote {
+                            noteLine
+                                .transition(.islandContent(reduceMotion: reduceMotion))
+                        } else {
+                            controlShelf
+                                .transition(.islandContent(reduceMotion: reduceMotion))
+                        }
+                    }
+                    .frame(height: bodySize.height)
+                    .transition(.islandContent(reduceMotion: reduceMotion))
                 }
             }
             .accessibilityElement(children: .contain)
@@ -486,6 +508,13 @@ struct NotchPanelView: View {
                     action: meeting.expandTopPanel
                 )
             )),
+            ShelfControl(id: "note", view: AnyView(
+                IslandControl(
+                    symbol: "square.and.pencil",
+                    label: "Take a note",
+                    action: takeNote
+                )
+            )),
             ShelfControl(id: "pause", view: AnyView(
                 IslandControl(
                     symbol: meeting.isPaused ? "play.fill" : "pause.fill",
@@ -532,6 +561,7 @@ struct NotchPanelView: View {
 
     private func expandedRecordingContent(title: String) -> some View {
         VStack(spacing: 0) {
+            workspaceShortcuts
             expandedRecordingChrome(title: title)
                 .frame(height: geometry.topInset)
                 .padding(.horizontal, 18)
@@ -543,10 +573,7 @@ struct NotchPanelView: View {
                 ) { mode in
                     meeting.selectPanelMode(mode)
                     if mode == .notes {
-                        Task { @MainActor in
-                            await Task.yield()
-                            notesFocusToken += 1
-                        }
+                        requestNotesFocus()
                     }
                 }
 
@@ -570,10 +597,17 @@ struct NotchPanelView: View {
                         )
                     case .notes:
                         if meeting.liveNotesDetached {
-                            DetachedNotesPanel {
-                                guard !rendersForSnapshot else { return }
-                                AppModel.shared.openLiveNotes()
-                            }
+                            DetachedNotesPanel(
+                                bringForward: {
+                                    guard !rendersForSnapshot else { return }
+                                    AppModel.shared.openLiveNotes()
+                                },
+                                bringBack: {
+                                    guard !rendersForSnapshot else { return }
+                                    AppModel.shared.returnLiveNotesToPanel()
+                                    requestNotesFocus()
+                                }
+                            )
                         } else {
                             LiveNotesPanel(
                                 notes: $meeting.liveNotes,
@@ -594,6 +628,25 @@ struct NotchPanelView: View {
             .frame(height: bodySize.height, alignment: .top)
             .animation(morphAnimation, value: meeting.panelMode)
         }
+    }
+
+    /// Keys that work while the panel has focus: Esc takes the workspace down
+    /// a size, and Command-1 to 3 switch views, as tabs do in any Mac app.
+    private var workspaceShortcuts: some View {
+        ZStack {
+            Button("Collapse Top Panel", action: meeting.collapseTopPanel)
+                .keyboardShortcut(.cancelAction)
+            ForEach(Array(MeetingPanelMode.allCases.enumerated()), id: \.element) { index, mode in
+                Button("Show \(mode.label)") {
+                    meeting.selectPanelMode(mode)
+                    if mode == .notes { requestNotesFocus() }
+                }
+                .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command)
+            }
+        }
+        .frame(width: 0, height: 0)
+        .opacity(0)
+        .accessibilityHidden(true)
     }
 
     private func expandedRecordingChrome(title: String) -> some View {
@@ -679,6 +732,106 @@ struct NotchPanelView: View {
         }
     }
 
+    /// Opens My notes with the cursor in it, wherever the notes live: in the
+    /// notch, or brought forward in their own window.
+    private func takeNote() {
+        guard !rendersForSnapshot else { return }
+        if meeting.liveNotesDetached {
+            AppModel.shared.openLiveNotes()
+            return
+        }
+        guard mode == .recordingCompact(showsControls: true) else {
+            meeting.selectPanelMode(.notes)
+            requestNotesFocus()
+            return
+        }
+        // Stay compact: the shelf becomes a note line. The panel takes key
+        // status without activating Nook, so the meeting app stays in front.
+        withAnimation(morphAnimation) {
+            isComposingNote = true
+            geometry.isHovering = true
+        }
+        NSApp.windows
+            .first { $0.identifier?.rawValue == "nook.notchPanel" }?
+            .makeKey()
+        Task { @MainActor in
+            await Task.yield()
+            noteFieldFocused = true
+        }
+    }
+
+    /// One line, straight into My notes. Return adds it and keeps the field
+    /// open for the next; Esc or leaving an empty field puts the controls
+    /// back.
+    private var noteLine: some View {
+        HStack(spacing: 8) {
+            Image(systemName: addedNoteCount == 0 ? "square.and.pencil" : "checkmark")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(NookPalette.accentHighlight)
+                .contentTransition(.symbolEffect(.replace))
+                .frame(width: 18)
+                .accessibilityHidden(true)
+
+            TextField("Note for this meeting", text: $noteDraft, prompt: Text("Jot a note, then press Return"))
+                .textFieldStyle(.plain)
+                .font(.system(size: 12.5))
+                .focused($noteFieldFocused)
+                .onSubmit(addNoteLine)
+                .onExitCommand(perform: endNoteLine)
+                .onChange(of: noteFieldFocused) { _, focused in
+                    if !focused, noteDraft.isEmpty { endNoteLine() }
+                }
+
+            Button {
+                if noteDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    endNoteLine()
+                } else {
+                    addNoteLine()
+                }
+            } label: {
+                Image(systemName: noteDraft.isEmpty ? "xmark" : "return")
+                    .contentTransition(.symbolEffect(.replace))
+            }
+            .buttonStyle(IslandControlButtonStyle(sideLength: 26))
+            .help(noteDraft.isEmpty ? "Done" : "Add to My notes")
+            .accessibilityLabel(noteDraft.isEmpty ? "Done taking notes" : "Add to My notes")
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 34)
+        .background(.white.opacity(0.07), in: Capsule())
+        .padding(.horizontal, 12)
+        .padding(.bottom, 4)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Quick note")
+    }
+
+    private func addNoteLine() {
+        guard let notes = LiveNoteLine.appending(noteDraft, to: meeting.liveNotes) else {
+            endNoteLine()
+            return
+        }
+        meeting.liveNotes = notes
+        noteDraft = ""
+        withAnimation(morphAnimation) { addedNoteCount += 1 }
+    }
+
+    private func endNoteLine() {
+        withAnimation(morphAnimation) {
+            isComposingNote = false
+            addedNoteCount = 0
+            noteDraft = ""
+        }
+        noteFieldFocused = false
+        hoverChanged(false)
+    }
+
+    private func requestNotesFocus() {
+        Task { @MainActor in
+            await Task.yield()
+            notesFocusToken += 1
+        }
+    }
+
     // MARK: After the meeting
 
     private func processingContent(_ step: MeetingPhase.ProcessingStep) -> some View {
@@ -722,8 +875,8 @@ struct NotchPanelView: View {
 
             Spacer()
 
-            Button("Open Library") {
-                openLibrary()
+            Button(meeting.lastSavedNoteID == nil ? "Open Library" : "Open Note") {
+                AppModel.shared.openLibrary(noteID: meeting.lastSavedNoteID)
                 meeting.resetStatus()
             }
             // No defaultAction here: the completed panel never becomes key,
@@ -849,8 +1002,17 @@ struct NotchPanelView: View {
         return detail.isEmpty ? step.displaySentence : detail
     }
 
-    private func openLibrary() {
-        AppModel.shared.openLibrary()
+}
+
+/// How a line typed into the notch joins My notes: as its own Markdown
+/// bullet, never glued to the end of whatever was typed before it.
+enum LiveNoteLine {
+    /// The notes with `line` added, or nil when there is nothing to add.
+    static func appending(_ line: String, to notes: String) -> String? {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let separator = notes.isEmpty || notes.hasSuffix("\n") ? "" : "\n"
+        return notes + separator + "- " + trimmed
     }
 }
 
@@ -1074,6 +1236,9 @@ private struct IslandRimLight: View {
         case invite
         case voice(isPaused: Bool)
         case sweep
+        /// Known progress through a long meeting, filling the rim from the
+        /// left, across the bottom and up the right.
+        case progress(Double)
         case success
         case attention
     }
@@ -1097,6 +1262,12 @@ private struct IslandRimLight: View {
                 VoiceRim(live: live, isPaused: isPaused, rim: rim)
             case .sweep:
                 SweepRim(rim: rim)
+            case .progress(let fraction):
+                rim
+                    .trim(from: 0, to: max(0.02, min(1, fraction)))
+                    .stroke(NookPalette.accentHighlight, style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
+                    .shadow(color: NookPalette.accent.opacity(0.8), radius: 4)
+                    .animation(.smooth(duration: 0.6), value: fraction)
             case .success:
                 FlashRim(rim: rim, color: NookPalette.accent)
             case .attention:
@@ -1284,6 +1455,59 @@ private struct IslandFlagMark: View {
     }
 }
 
+/// The meeting app's own icon inside the invitation ring, so the prompt says
+/// which call at a glance. Falls back to the plain pulse when the app cannot
+/// be found, such as a meeting in a browser tab.
+private struct MeetingAppMark: View {
+    let appName: String
+    let size: CGFloat
+
+    var body: some View {
+        if let icon = Self.icon(for: appName) {
+            ZStack {
+                IslandInvitation(size: size + 10)
+                Image(nsImage: icon)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: size, height: size)
+                    .shadow(color: .black.opacity(0.5), radius: 3, y: 1)
+            }
+            .frame(width: size, height: size)
+            .accessibilityHidden(true)
+        } else {
+            IslandInvitation(size: size)
+        }
+    }
+
+    private static let knownBundles: [String: [String]] = [
+        "teams": ["com.microsoft.teams2", "com.microsoft.teams"],
+        "zoom": ["us.zoom.xos"],
+        "facetime": ["com.apple.FaceTime"],
+        "webex": ["Cisco-Systems.Spark", "com.webex.meetingmanager"],
+        "slack": ["com.tinyspeck.slackmacgap"],
+        "discord": ["com.hnc.Discord"],
+        "around": ["co.teamport.around"],
+    ]
+
+    @MainActor
+    private static func icon(for appName: String) -> NSImage? {
+        let name = appName.lowercased()
+        if let running = NSWorkspace.shared.runningApplications.first(where: {
+            $0.localizedName?.lowercased() == name
+        }), let icon = running.icon {
+            return icon
+        }
+        for (key, bundles) in knownBundles where name.contains(key) {
+            for bundle in bundles {
+                if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle) {
+                    return NSWorkspace.shared.icon(forFile: url.path)
+                }
+            }
+        }
+        return nil
+    }
+}
+
 /// Saved: the circle fills and the tick draws itself in.
 private struct IslandCheckmark: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -1426,10 +1650,10 @@ private struct IslandModePicker: View {
     @Namespace private var picker
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// Every mode, always. Notes used to disappear from the notch while
+    /// they were in their own window, which left no way to take one here.
     private var availableModes: [MeetingPanelMode] {
-        MeetingPanelMode.allCases.filter {
-            !notesDetached || $0 != .notes
-        }
+        MeetingPanelMode.allCases
     }
 
     var body: some View {
@@ -1438,9 +1662,8 @@ private struct IslandModePicker: View {
                 Button {
                     select(mode)
                 } label: {
-                    Label(mode.label, systemImage: mode.symbol)
+                    Text(mode.label)
                         .font(.system(size: 11.5, weight: .semibold))
-                        .labelStyle(.titleAndIcon)
                         .foregroundStyle(
                             selection == mode
                                 ? AnyShapeStyle(.primary)
@@ -1704,36 +1927,37 @@ private struct LiveSummaryPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            // The tab already says Summary. One quiet line says how fresh it
+            // is and offers to refresh; no glyph restates the title.
             HStack(spacing: 8) {
-                Label("Meeting summary", systemImage: "text.alignleft")
-                    .font(NookType.metadata)
-                    .foregroundStyle(.primary)
+                Text(updatedLabel)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .contentTransition(.opacity)
 
                 Spacer()
 
-                if isRefreshing {
-                    ProgressView()
-                        .controlSize(.mini)
-                        .accessibilityLabel("Updating summary")
-                }
-
                 Button(action: refresh) {
                     Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 10, weight: .semibold))
-                        .frame(width: 28, height: 28)
-                        .contentShape(Rectangle())
+                        .rotationEffect(.degrees(isRefreshing ? 360 : 0))
+                        .animation(
+                            isRefreshing
+                                ? .linear(duration: 1).repeatForever(autoreverses: false)
+                                : .default,
+                            value: isRefreshing
+                        )
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
+                .buttonStyle(IslandControlButtonStyle(sideLength: 24))
+                .disabled(isRefreshing)
                 .help("Update summary")
-                .accessibilityLabel("Update meeting summary")
+                .accessibilityLabel(isRefreshing ? "Updating summary" : "Update meeting summary")
             }
 
             if let insights {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(insights.summary)
-                            .font(NookType.bodyEmphasized)
+                            .font(.system(size: 13, weight: .semibold))
                             .lineSpacing(3)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .textSelection(.enabled)
@@ -1747,7 +1971,7 @@ private struct LiveSummaryPanel: View {
                                     .fill(NookPalette.accent)
                                     .frame(width: 4, height: 4)
                                 Text(point)
-                                    .font(NookType.caption)
+                                    .font(.system(size: 12))
                                     .foregroundStyle(.secondary)
                                     .lineLimit(2)
                             }
@@ -1755,22 +1979,15 @@ private struct LiveSummaryPanel: View {
                     }
                 }
                 .scrollIndicators(.hidden)
+                .transition(.opacity)
             } else {
                 HStack(spacing: 10) {
-                    Image(systemName: "text.append")
-                        .foregroundStyle(NookPalette.accent)
+                    IslandWritingMark()
                     LiveSummaryWaitingText(live: live)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .transition(.opacity)
             }
-
-            HStack(spacing: 5) {
-                Image(systemName: "lock.fill")
-                Text(updatedLabel)
-            }
-            .font(NookType.micro)
-            .foregroundStyle(.secondary)
-            .accessibilityElement(children: .combine)
         }
         .frame(maxWidth: .infinity, minHeight: 126, maxHeight: 138)
         .accessibilityElement(children: .contain)
@@ -1780,8 +1997,8 @@ private struct LiveSummaryPanel: View {
     private var updatedLabel: String {
         guard let updatedAt else {
             return insights == nil
-                ? "Generated locally when enough has been said"
-                : "Generated locally · on this Mac"
+                ? "Written on this Mac once enough has been said"
+                : "Written on this Mac"
         }
         return "Updated \(updatedAt.formatted(.relative(presentation: .named))) · on this Mac"
     }
@@ -1798,7 +2015,7 @@ private struct LiveSummaryWaitingText: View {
                 ? "A faithful summary will appear as the conversation develops."
                 : "Finding the shape of the conversation…"
         )
-        .font(NookType.metadata)
+        .font(.system(size: 12, weight: .medium))
         .foregroundStyle(.secondary)
     }
 }
@@ -1810,23 +2027,15 @@ private struct LiveNotesPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            HStack {
-                Label("My notes", systemImage: "pencil.line")
-                    .font(NookType.metadata)
-                    .foregroundStyle(.primary)
-                Spacer()
-                Text("Added to the Markdown when the meeting ends")
-                    .font(NookType.micro)
+            HStack(spacing: 8) {
+                Text("Added to the note when the meeting ends")
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
-
+                Spacer()
                 Button(action: detach) {
                     Image(systemName: "macwindow.on.rectangle")
-                        .font(.system(size: 10, weight: .semibold))
-                        .frame(width: 28, height: 28)
-                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
+                .buttonStyle(IslandControlButtonStyle(sideLength: 24))
                 .help("Open notes in a floating window")
                 .accessibilityLabel("Open notes in a floating window")
             }
@@ -1836,9 +2045,9 @@ private struct LiveNotesPanel: View {
                 placeholder: "Type a thought, a question, or something to remember…",
                 focusToken: focusToken,
                 contentInsets: EdgeInsets(
-                    top: 10,
+                    top: 9,
                     leading: 11,
-                    bottom: 10,
+                    bottom: 9,
                     trailing: 11
                 ),
                 lineSpacing: 3,
@@ -1846,57 +2055,38 @@ private struct LiveNotesPanel: View {
             )
             .frame(minHeight: 120)
             .background(
-                NookPalette.paper,
-                in: RoundedRectangle(
-                    cornerRadius: NookRadius.surface,
-                    style: .continuous
-                )
+                .white.opacity(0.06),
+                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
             )
-            .overlay {
-                RoundedRectangle(
-                    cornerRadius: NookRadius.surface,
-                    style: .continuous
-                )
-                    .stroke(
-                        Color(nsColor: .separatorColor).opacity(0.55),
-                        lineWidth: 0.7
-                    )
-            }
         }
         .frame(maxWidth: .infinity)
     }
 }
 
+/// My notes while it is in its own window. The tab stays, so taking a note
+/// is always one click from the notch: bring the window forward, or put the
+/// notes back here.
 private struct DetachedNotesPanel: View {
     let bringForward: () -> Void
+    let bringBack: () -> Void
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "macwindow.on.rectangle")
-                .font(NookType.bodyEmphasized)
-                .foregroundStyle(NookPalette.accent)
-                .frame(width: 28, height: 28)
-                .background(
-                    NookPalette.accent.opacity(0.10),
-                    in: RoundedRectangle(cornerRadius: 7, style: .continuous)
-                )
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("My notes is floating")
-                    .font(NookType.bodyEmphasized)
-                Text("Keep writing there while Nook shows the meeting here.")
-                    .font(NookType.caption)
+        VStack(spacing: 12) {
+            VStack(spacing: 3) {
+                Text("My notes is in its own window")
+                    .font(.system(size: 13, weight: .semibold))
+                Text("Keep writing there, or bring the notes back into the notch.")
+                    .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
             }
-
-            Spacer()
-
-            Button("Bring Forward", action: bringForward)
-                .buttonStyle(IslandCapsuleButtonStyle())
+            HStack(spacing: 8) {
+                Button("Show Window", action: bringForward)
+                    .buttonStyle(PanelTextButtonStyle())
+                Button("Bring Back Here", action: bringBack)
+                    .buttonStyle(IslandCapsuleButtonStyle())
+            }
         }
         .frame(maxWidth: .infinity, minHeight: 126)
-        .padding(.horizontal, 10)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("My notes is open in a floating window")
     }
@@ -1931,11 +2121,8 @@ private struct NotchCaptionStream: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if lines.isEmpty {
-                HStack(spacing: 9) {
-                    Image(systemName: "ear")
-                        .font(NookType.metadata)
-                        .foregroundStyle(.secondary)
-                        .accessibilityHidden(true)
+                HStack(spacing: 10) {
+                    IslandWritingMark()
                     Text(fallback)
                         .font(NookType.transcriptEmphasized)
                         .foregroundStyle(.secondary)

@@ -147,7 +147,7 @@ enum NotchPanelMetrics {
             // At rest nothing hangs below the menu bar. The shelf is tall
             // enough for 30pt controls, the app's own hit-target floor.
             return showsControls
-                ? CGSize(width: max(ears, 292), height: 50)
+                ? CGSize(width: max(ears, 340), height: 50)
                 : CGSize(width: ears, height: 0)
         case .recordingExpanded(let panelMode):
             return CGSize(width: 680, height: panelMode == .notes ? 212 : 190)
