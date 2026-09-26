@@ -522,6 +522,49 @@ deliberately, since at that point it is the only copy of the conversation;
 this service is what lets Settings turn one into a note or delete it instead
 of it sitting on disk unnoticed.
 
+### App Intents (`Nook/Intents`)
+
+Shortcuts, Siri and Spotlight actions run in the app's own process through
+the AppIntents framework; there is no extension target. Each action calls the
+same coordinator method as its button (`startManualMeeting`, `stopRecording`,
+`togglePause`, `flagMoment`, `requestNoteLine`, `QuickNoteController.present`),
+so permission prompts and consent behave identically. The phase checks and
+reply wording are pure functions (`RecordingIntentRules`, `TakeNoteRoute`,
+`IntentLibrary`, `LibraryAskReply`) so they can be tested without a running
+meeting, and an action that does not apply throws a `NookIntentError` with a
+readable sentence instead of silently doing nothing. Ask Your Library reuses
+`LibraryAnswerService`, and Get Open Action Items reuses
+`OpenActionsController.refresh`, so neither duplicates retrieval or file
+parsing. `MeetingEntity` exposes saved notes by their Markdown UUID with an
+`EntityStringQuery` over titles that uses the library search's own term
+matching. Intent type names are what saved Shortcuts refer to, so the actions
+that predate this folder keep theirs. `NookShortcuts` offers ten App Shortcuts,
+the system maximum.
+
+### `MeetingSpotlightIndexer`
+
+Mirrors saved meetings and quick notes into Core Spotlight under the domain
+`meetings`, keyed by note UUID: title, summary as the description, key points
+and decisions as keywords, and the start date. Digests, unsaved notes and
+copies sharing a UUID are excluded. It observes `MarkdownStore.notes`,
+`isLoading` (a loading library looks empty, so nothing syncs until it settles)
+and the `showMeetingsInSpotlight` default. Changes are coalesced by a single
+worker reading one `AsyncStream`, so a burst of saves costs one sync after a
+two-second quiet period and syncs never overlap. Each sync fingerprints what
+would be indexed per note and diffs it with a record of what Spotlight was
+last sent (`Caches/<bundle-identifier>/Spotlight/indexed-notes.json`), so an
+unchanged library sends nothing at launch, edits to transcripts or My notes
+send nothing, and notes trashed while Nook was closed are removed. With no
+record, it clears its items and rebuilds. Items are sent in batches of 500
+with a distant expiration date, since Spotlight otherwise drops items a month
+after indexing. Turning the setting off deletes every item and the record.
+
+A Spotlight result arrives as a `CSSearchableItemActionType` user activity.
+Both `AppDelegate.application(_:continue:restorationHandler:)` and the library
+scene's `onContinueUserActivity` hand it to `MeetingSpotlightContinuation`,
+which ignores a second delivery of the same activity and opens the note once
+the library has loaded and the window actions are installed.
+
 ## Permissions
 
 Nook may require:

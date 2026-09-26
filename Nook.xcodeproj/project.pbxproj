@@ -15,11 +15,13 @@
 		056265C45BAD40614C341A9C /* NoteCombinerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A751CEC0EB19CB25ED5FEA7 /* NoteCombinerTests.swift */; };
 		062BDF1689A9120A1A905980 /* NoteSessionAppend.swift in Sources */ = {isa = PBXBuildFile; fileRef = F06B2C9B35B6F8E0FEA657EB /* NoteSessionAppend.swift */; };
 		066CC08F840E10897250D445 /* SummaryRegenerationSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94C57AB770295D4ACFFBCA94 /* SummaryRegenerationSession.swift */; };
+		075A8111C770EB610822D936 /* NookShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61371049CA2372241046F38D /* NookShortcuts.swift */; };
 		076A464FDAFB503A10C4BA29 /* DraftRecoveryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEFBEA0A63BF0D6782078339 /* DraftRecoveryView.swift */; };
 		0979ED3B1BD387866381799A /* SummaryItemReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD464614A06EB0D1F6835152 /* SummaryItemReviewView.swift */; };
 		0A33032F282F4E25C69ED2A5 /* MarkdownDraftController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E8AD6D39BBB6970C574F566 /* MarkdownDraftController.swift */; };
 		0ADB67F317BA07AC2DB93C9F /* RecordingRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8161483F1374BD8342076C40 /* RecordingRecovery.swift */; };
 		0C664A5C897DC87CE1B511FA /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AA003E269F1E0F3206F33F2 /* AppDelegate.swift */; };
+		0CD3C79D1089D20FC1D516E6 /* NookIntentSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17166076824600AAE9DA7E8C /* NookIntentSupport.swift */; };
 		0DE20A116EF0802BACEE8BAC /* SpeechAssets.swift in Sources */ = {isa = PBXBuildFile; fileRef = D588A6E65FB7C05B912F3220 /* SpeechAssets.swift */; };
 		0F0FCB50C2E8CEC55F97F0A3 /* LiveTranscriptScrollTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F62A5E26CF01EB47C25258B /* LiveTranscriptScrollTests.swift */; };
 		0F288043EE9CDCF582548A56 /* NoteSessionAppend.swift in Sources */ = {isa = PBXBuildFile; fileRef = F06B2C9B35B6F8E0FEA657EB /* NoteSessionAppend.swift */; };
@@ -46,6 +48,7 @@
 		229A9C81E1DA279AE61F7CFC /* DraftLifecycleAcceptanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BD104EA96D6C1BEE2A19E3C /* DraftLifecycleAcceptanceTests.swift */; };
 		2635A300A9B1DA4D2C540C5C /* PrepBrief.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B53F5A5FD8D01402F7613E2 /* PrepBrief.swift */; };
 		27FB9A4EFDACCDFCA0256BBD /* TextInsertionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B298E8C21A364A8857152A57 /* TextInsertionService.swift */; };
+		2847946CD998F6F9CE56CB96 /* RecordingIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A9FD90AC40A43EB7E5E0674 /* RecordingIntents.swift */; };
 		2975F188D341272B55A0F5C5 /* RecordingRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8161483F1374BD8342076C40 /* RecordingRecovery.swift */; };
 		29B101387245F55526142590 /* AudioInputCheckService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DF4933A199D635F45A02717 /* AudioInputCheckService.swift */; };
 		29C8DD79BE79569FB4C38E73 /* SourceAudioFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6D00A3D4F50F9DE0E903396 /* SourceAudioFiles.swift */; };
@@ -70,11 +73,13 @@
 		3AD7D93450EAE681B1C83618 /* NoteSummarySessions.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4B3205D7F0251E774C6DD73 /* NoteSummarySessions.swift */; };
 		3BC3093CE0799C935F5744FB /* MeetingCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04DB60A1C42F72E177BB9160 /* MeetingCoordinator.swift */; };
 		3D20162A2CCD12C13C89D1BE /* NoteDecodeCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98A52969E7E5881E9991805A /* NoteDecodeCache.swift */; };
+		3F1477550E5095D2291B11DB /* RecordingIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A9FD90AC40A43EB7E5E0674 /* RecordingIntents.swift */; };
 		40855CB715DF347E94DAB82C /* DraftRecoveryController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0C07DDB752E24D8876924F1 /* DraftRecoveryController.swift */; };
 		408E7914D251C42840E49C05 /* QuickNotePadLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DD3BC0B20F3ADD764D42B31 /* QuickNotePadLayoutTests.swift */; };
 		40E8A120A8B3A409F01BCCFA /* MeetingCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04DB60A1C42F72E177BB9160 /* MeetingCoordinator.swift */; };
 		4115C2BF7345E97692845B0F /* ShortcutStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A7DA9CAAF9000EEBF8659B5 /* ShortcutStore.swift */; };
 		426867718A3BE32CF3E90A7C /* DictationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FA4268191B8994F04391D35 /* DictationCoordinator.swift */; };
+		4363FA286A5FE29D8AF45E3E /* SpotlightIndexTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66A303EA4081FFA681CBFDDE /* SpotlightIndexTests.swift */; };
 		4374C287B03A461C71BE2C48 /* MeetingDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1162CB8F3088E4EA4EDAEC43 /* MeetingDetector.swift */; };
 		43C762EC0026234805D02F1F /* QuickNoteWordCountTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2699291FBA42326EC85D6B6 /* QuickNoteWordCountTests.swift */; };
 		4466A37E4B613A0EA146AE14 /* DictationFormatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC23868A31B76A95FC6688E6 /* DictationFormatting.swift */; };
@@ -104,12 +109,14 @@
 		581A5C583F700F10916ACAE1 /* StatusMenuView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77437DEB25AC4ECE82644D22 /* StatusMenuView.swift */; };
 		581DFB4108A73FDF7869679F /* DraftJournalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2486A002753540E9DE6F29B /* DraftJournalTests.swift */; };
 		581F39EAAEF9CBBE8F1ED907 /* AudioPlaybackController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF45BE65468EC8567396A848 /* AudioPlaybackController.swift */; };
+		5879AF267F5494EB9D5B92AE /* MeetingSpotlightIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51487E29D72CA37CD97FCFBB /* MeetingSpotlightIndex.swift */; };
 		58B5D0B1AFDDB83A3829B1F1 /* LiveTranscriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BE43DCDC9893FE96856CD02 /* LiveTranscriptionService.swift */; };
 		59111F450D605F9EE318C6D6 /* PersonalNotesDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = 744F6F3EA5D041A1C1669B43 /* PersonalNotesDraft.swift */; };
 		5937BD5AEFDA720E632C2033 /* QuickNoteController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83933D3879F3DCE359A1FFF2 /* QuickNoteController.swift */; };
 		5952AB977949651A552F6C5A /* DictationSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6271F2989B3F82935AE714D4 /* DictationSettingsTests.swift */; };
 		59C91DBA314CCADDED3CD2DA /* QuickNoteRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31D2D8A6E2804ACE31B82B15 /* QuickNoteRecoveryTests.swift */; };
 		5A3887A5172015D8463B785C /* DraftRecoveryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEFBEA0A63BF0D6782078339 /* DraftRecoveryView.swift */; };
+		5BF02110B888655217E232CA /* AppIntentsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4BBAEE6D83B2865424D7AC7 /* AppIntentsTests.swift */; };
 		5CC0091958B983D15A2D3112 /* PrepBriefTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06DE20F4ABEC5F79E54C49AC /* PrepBriefTests.swift */; };
 		5CE9CD90533D4A30FC258BA4 /* CopyNoticeStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34641B6782FECE372E65CC72 /* CopyNoticeStateTests.swift */; };
 		5DC75A7BFD2240D9EC41E4A9 /* DisfluencyFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64E89E9B358F9219563BE4F9 /* DisfluencyFilterTests.swift */; };
@@ -118,7 +125,6 @@
 		5F021869791C7A6EE1465DA6 /* RecordedSourceTranscription.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26C0476364F0DEE94385D3FA /* RecordedSourceTranscription.swift */; };
 		5F474B9094A2669B13E9FFF9 /* MarkdownCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ECD88CCE2B0C67780F060FB /* MarkdownCodec.swift */; };
 		5FD1FAFFE1BC4B1A91110318 /* CalendarContextService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF72C48729FE4C2965A8A051 /* CalendarContextService.swift */; };
-		60BECAC3A23D0BA1CFA5CE68 /* NookAppIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A382566BB5A6E90AEF09EC0 /* NookAppIntents.swift */; };
 		60DBCFAC7D4E8CA5787F97F7 /* MeetingDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 549867DEC08F499BC4C786C9 /* MeetingDetailView.swift */; };
 		635B7A882012DCAC6E7EB161 /* SummaryRegeneratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AD6A1AE21557C51C678FD67 /* SummaryRegeneratorTests.swift */; };
 		667CA7E27458F5B2649EF81A /* CommandPaletteInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B802DF2B4868AE77C2858C6F /* CommandPaletteInteractionTests.swift */; };
@@ -138,6 +144,7 @@
 		79583555C5F3300FD3FED7F6 /* SpeechAssets.swift in Sources */ = {isa = PBXBuildFile; fileRef = D588A6E65FB7C05B912F3220 /* SpeechAssets.swift */; };
 		79E52D066160901042ECA761 /* LibraryAskView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5AC94822A19FB5A7F9E4E48 /* LibraryAskView.swift */; };
 		7B51ACF84A9F905BABE2FEBF /* NotchPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DAAB582D0BEF7F53894D139 /* NotchPanelView.swift */; };
+		7C3305D1C99EEDD057DA7514 /* LibraryIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD4E56959164657764E65110 /* LibraryIntents.swift */; };
 		7C4E87976F7CD1C7F048A974 /* NookDesignContrastTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4B1FA2927CBDC8D0085DB94 /* NookDesignContrastTests.swift */; };
 		7C5E746BF2743CA0922F157F /* NookDebugLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1A3A12949A21AFC99737BCE /* NookDebugLog.swift */; };
 		7D0C671306BCBDE7FD068974 /* NoteActionOutputGuardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 944A3341E4050AA77D6BF66D /* NoteActionOutputGuardTests.swift */; };
@@ -181,8 +188,8 @@
 		A257A9607A47A76485FBA71D /* ShortcutStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD64CFC3319FBA0B31EE238D /* ShortcutStoreTests.swift */; };
 		A329B0B07D0A9A4F375EEBE3 /* SummaryFallbackCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DE1E602D0F3AF6873715D5B /* SummaryFallbackCard.swift */; };
 		A4A0E1DA0DDA1431733498E3 /* NookApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E12DEFF243E7B4B84A7A135 /* NookApp.swift */; };
+		A52F1C89F93423B507D472AF /* NookIntentSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17166076824600AAE9DA7E8C /* NookIntentSupport.swift */; };
 		A5AF07A4624FC9D9D1BF5FCF /* SummaryFallback.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB4B87277421870DDF113CD0 /* SummaryFallback.swift */; };
-		A7825C444D696A2890C5B3BF /* NookAppIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A382566BB5A6E90AEF09EC0 /* NookAppIntents.swift */; };
 		A7FA2EA66B8F436D849ACAEB /* DictationAudioSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 474FCF7E641790A7A9CF100C /* DictationAudioSource.swift */; };
 		A929C7DC5BE86C5B2FD64851 /* CalendarContextService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF72C48729FE4C2965A8A051 /* CalendarContextService.swift */; };
 		A9BF297BDFB6B6A3544A2461 /* MultiSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C009372948CAC8A07E9237DF /* MultiSessionTests.swift */; };
@@ -203,6 +210,7 @@
 		BB299AF3F815BC341578D321 /* RecordedSourceTranscriptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE0880217A9D586CDE351D62 /* RecordedSourceTranscriptionTests.swift */; };
 		BBF8E36E986242845ED2BE91 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A6655959382556C4DA62D72 /* AppModel.swift */; };
 		BD05F10EEB072CD4455D2E6B /* NoteMergeWorkflow.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA5E31451254424B2F0DE242 /* NoteMergeWorkflow.swift */; };
+		BD54D9D1A56FA9F03A3B7263 /* MeetingEntity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 345A5ADAC4B335020662419E /* MeetingEntity.swift */; };
 		BDB3374E76F36EEB023966C4 /* TranscriptSegment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79E8477180498A6A643E7DE9 /* TranscriptSegment.swift */; };
 		BF63C4E14A40B6BC97D03D3F /* NoteAssistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D6E63AD605382CDFAEBF56E /* NoteAssistant.swift */; };
 		C19CB44D2B44A20B4E60B210 /* TranscriptAssembler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 270D5D58223F982CC9432645 /* TranscriptAssembler.swift */; };
@@ -211,8 +219,10 @@
 		C5BCFA7DBC5D60C27C7DC6F1 /* CalendarContextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12E251538BA47334F24FABAB /* CalendarContextTests.swift */; };
 		C78A280ADF06F6B2BDBE927D /* ShowcaseSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CE7A4727C693BB0BDAED00D /* ShowcaseSnapshotTests.swift */; };
 		C7D3C6932222FBF21BB54279 /* TranscriptAssembler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 270D5D58223F982CC9432645 /* TranscriptAssembler.swift */; };
+		C7D5A725F068EA4F156FDF6F /* NookShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61371049CA2372241046F38D /* NookShortcuts.swift */; };
 		CA7026B6017BD95CA2462540 /* DisfluencyFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8E167FDA42FDF9245D9F9DB /* DisfluencyFilter.swift */; };
 		CB3A8C43D5E3ECA279A9ED73 /* GlobalShortcutMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B4C6FF938B446CFCD19A0E1 /* GlobalShortcutMonitor.swift */; };
+		CB74479DB913B29B8935256C /* MeetingEntity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 345A5ADAC4B335020662419E /* MeetingEntity.swift */; };
 		CCE8A9613C43FB2B556DB63B /* LibraryAskLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DE3748D1A2901327482C68C /* LibraryAskLifecycleTests.swift */; };
 		CD744CE8E5C70BA1F8B32FCF /* LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DEAE8AD6B91E1D69E8EDA41 /* LibraryView.swift */; };
 		D0BC4ED50E5BB943FFFC00C4 /* DictationIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90BED486BAA050AE7FC31A5A /* DictationIndicator.swift */; };
@@ -236,6 +246,7 @@
 		E33D95127838E735C246E15E /* LibrarySearchController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0216CD1F9BF8CBA79B99EF44 /* LibrarySearchController.swift */; };
 		E366B7E96410E6528C2EE330 /* DisfluencyFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8E167FDA42FDF9245D9F9DB /* DisfluencyFilter.swift */; };
 		E3873161E0BB564FC8D0B61B /* MeetingDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1162CB8F3088E4EA4EDAEC43 /* MeetingDetector.swift */; };
+		E49477C00487CA7CF5E93130 /* LibraryIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD4E56959164657764E65110 /* LibraryIntents.swift */; };
 		E4BA42603B4DC3A198E386D7 /* FloatingNotesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D5C59EC69ED9C02DCECCCA7 /* FloatingNotesView.swift */; };
 		E4EE9FA5EAED6AADB0868C37 /* LiveShelfControlContrastTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22CA3A6A50DE95BA52DC36C1 /* LiveShelfControlContrastTests.swift */; };
 		E569DCFC678E964F97D82050 /* SourceAudioRecordingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0922EE9985AB5B0FA0B9F10 /* SourceAudioRecordingTests.swift */; };
@@ -261,6 +272,7 @@
 		F5C9C5924B843FF595C97A7C /* AudioExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = D190DD1E42E7B8A2C319B54D /* AudioExtractor.swift */; };
 		F676B007ED75C1514074F6C4 /* LibraryNoteIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBA3FDFBE322620ADC99D071 /* LibraryNoteIdentity.swift */; };
 		F693562399008C28C9ABE3E0 /* CommandPaletteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9895DFC913D1E5471937874 /* CommandPaletteView.swift */; };
+		F710EEB7284A2E199212EBA6 /* MeetingSpotlightIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51487E29D72CA37CD97FCFBB /* MeetingSpotlightIndex.swift */; };
 		F80645C0AE9AE1C9AA19C513 /* QuickNoteController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83933D3879F3DCE359A1FFF2 /* QuickNoteController.swift */; };
 		F8E2128CCD1CDA8A676FB36D /* NookDebugLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1A3A12949A21AFC99737BCE /* NookDebugLog.swift */; };
 		FA06C76476FA8A7773A75E2B /* NookWindowBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 851C3C409ACA6E327A1C5D68 /* NookWindowBridge.swift */; };
@@ -301,6 +313,7 @@
 		16F5EDF25A914ABDFB71A45A /* SummaryItemReview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SummaryItemReview.swift; sourceTree = "<group>"; };
 		170212C508F45D65AB1B9513 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		170AC8D348CA33A2E6B5F43D /* VoiceCorrectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceCorrectionTests.swift; sourceTree = "<group>"; };
+		17166076824600AAE9DA7E8C /* NookIntentSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookIntentSupport.swift; sourceTree = "<group>"; };
 		18E597E1AE2B79758C53B7CD /* QuickNoteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickNoteView.swift; sourceTree = "<group>"; };
 		1AD6A1AE21557C51C678FD67 /* SummaryRegeneratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SummaryRegeneratorTests.swift; sourceTree = "<group>"; };
 		1B53F5A5FD8D01402F7613E2 /* PrepBrief.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrepBrief.swift; sourceTree = "<group>"; };
@@ -322,6 +335,7 @@
 		2DF398889F508D66FA99EB2C /* THIRD_PARTY_NOTICES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = THIRD_PARTY_NOTICES.md; sourceTree = "<group>"; };
 		2F62A5E26CF01EB47C25258B /* LiveTranscriptScrollTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTranscriptScrollTests.swift; sourceTree = "<group>"; };
 		31D2D8A6E2804ACE31B82B15 /* QuickNoteRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickNoteRecoveryTests.swift; sourceTree = "<group>"; };
+		345A5ADAC4B335020662419E /* MeetingEntity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingEntity.swift; sourceTree = "<group>"; };
 		34641B6782FECE372E65CC72 /* CopyNoticeStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopyNoticeStateTests.swift; sourceTree = "<group>"; };
 		384E9679B3514F8DDE9074DB /* AudioInputCheckTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioInputCheckTests.swift; sourceTree = "<group>"; };
 		3AA003E269F1E0F3206F33F2 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
@@ -338,6 +352,7 @@
 		4FA4268191B8994F04391D35 /* DictationCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationCoordinator.swift; sourceTree = "<group>"; };
 		500496FCB58D7DA215396EBF /* LibrarySearchControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibrarySearchControllerTests.swift; sourceTree = "<group>"; };
 		5008A93BBFF4EE8348B18580 /* DictationStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationStyle.swift; sourceTree = "<group>"; };
+		51487E29D72CA37CD97FCFBB /* MeetingSpotlightIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSpotlightIndex.swift; sourceTree = "<group>"; };
 		514C551D7708742A88A31C90 /* TRADEMARKS.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = TRADEMARKS.md; sourceTree = "<group>"; };
 		51AB1BC7F2F3CFF20801DD9E /* LICENSE */ = {isa = PBXFileReference; path = LICENSE; sourceTree = "<group>"; };
 		547E1F6CDA57368C896DAC6E /* ReminderExportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReminderExportTests.swift; sourceTree = "<group>"; };
@@ -346,10 +361,12 @@
 		59D2221174557F3F8D1A8318 /* NoteMergeWorkflowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteMergeWorkflowTests.swift; sourceTree = "<group>"; };
 		5BE43DCDC9893FE96856CD02 /* LiveTranscriptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTranscriptionService.swift; sourceTree = "<group>"; };
 		5F8A6C107764BC04031A459F /* NookIconSource-Lagoon.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "NookIconSource-Lagoon.png"; sourceTree = "<group>"; };
+		61371049CA2372241046F38D /* NookShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookShortcuts.swift; sourceTree = "<group>"; };
 		6271F2989B3F82935AE714D4 /* DictationSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationSettingsTests.swift; sourceTree = "<group>"; };
 		6413CBEA22E028864F7F1E53 /* SummaryRegenerationSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SummaryRegenerationSessionTests.swift; sourceTree = "<group>"; };
 		64E89E9B358F9219563BE4F9 /* DisfluencyFilterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisfluencyFilterTests.swift; sourceTree = "<group>"; };
 		6650863FD1A62C75FAF5CBBC /* SourceAudioRecording.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceAudioRecording.swift; sourceTree = "<group>"; };
+		66A303EA4081FFA681CBFDDE /* SpotlightIndexTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpotlightIndexTests.swift; sourceTree = "<group>"; };
 		69EEF566A22CAC8C8A35BD84 /* RecordingRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingRecoveryTests.swift; sourceTree = "<group>"; };
 		6A3FB7F59FFAEBB639390737 /* OpenActionsController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenActionsController.swift; sourceTree = "<group>"; };
 		6A751CEC0EB19CB25ED5FEA7 /* NoteCombinerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteCombinerTests.swift; sourceTree = "<group>"; };
@@ -377,7 +394,7 @@
 		8472D687C88E2ABF8BDF9FA5 /* DictationOutputGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationOutputGuard.swift; sourceTree = "<group>"; };
 		851C3C409ACA6E327A1C5D68 /* NookWindowBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookWindowBridge.swift; sourceTree = "<group>"; };
 		8559C0730D47F553693962B4 /* LibraryAnswerService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryAnswerService.swift; sourceTree = "<group>"; };
-		8A382566BB5A6E90AEF09EC0 /* NookAppIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookAppIntents.swift; sourceTree = "<group>"; };
+		8A9FD90AC40A43EB7E5E0674 /* RecordingIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingIntents.swift; sourceTree = "<group>"; };
 		8C84A0C854A07B9D569D1A1E /* LibraryAnswerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryAnswerTests.swift; sourceTree = "<group>"; };
 		909D2C9060AAA9A88209979F /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		90BED486BAA050AE7FC31A5A /* DictationIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationIndicator.swift; sourceTree = "<group>"; };
@@ -396,6 +413,7 @@
 		A0DB2D3960EC60C56DABFC05 /* Sparkle-LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Sparkle-LICENSE.txt"; sourceTree = "<group>"; };
 		A1D475EC3AA2409833E22E3A /* NotesEditorSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotesEditorSnapshotTests.swift; sourceTree = "<group>"; };
 		A2486A002753540E9DE6F29B /* DraftJournalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftJournalTests.swift; sourceTree = "<group>"; };
+		A4BBAEE6D83B2865424D7AC7 /* AppIntentsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIntentsTests.swift; sourceTree = "<group>"; };
 		A5A578D8161F9E1C6510C143 /* StorageInventoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageInventoryTests.swift; sourceTree = "<group>"; };
 		A5FB7038DAEC937AE02B4567 /* SummaryItemReviewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SummaryItemReviewTests.swift; sourceTree = "<group>"; };
 		A65E7030AE78888193D9643D /* SummaryQuestionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SummaryQuestionsTests.swift; sourceTree = "<group>"; };
@@ -423,6 +441,7 @@
 		C710DCF39272E4901FF787C9 /* NookPresence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookPresence.swift; sourceTree = "<group>"; };
 		C798B7121A65925D6161CA7E /* LiveSegmentMergerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveSegmentMergerTests.swift; sourceTree = "<group>"; };
 		CA5E31451254424B2F0DE242 /* NoteMergeWorkflow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteMergeWorkflow.swift; sourceTree = "<group>"; };
+		CD4E56959164657764E65110 /* LibraryIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryIntents.swift; sourceTree = "<group>"; };
 		CD5B0E46E24639E41F925E2B /* VoiceCorrection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceCorrection.swift; sourceTree = "<group>"; };
 		CD921CC11A139E1721BD0361 /* NookTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NookTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CE0257E326F8CB6F9CC6CCB4 /* NookUpdateController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookUpdateController.swift; sourceTree = "<group>"; };
@@ -499,6 +518,7 @@
 				04DB60A1C42F72E177BB9160 /* MeetingCoordinator.swift */,
 				1162CB8F3088E4EA4EDAEC43 /* MeetingDetector.swift */,
 				82F5D4466C034B90191F6217 /* MeetingNotificationService.swift */,
+				51487E29D72CA37CD97FCFBB /* MeetingSpotlightIndex.swift */,
 				1CB7EEE82F44BFE07A7B3DA5 /* MomentHotKeyController.swift */,
 				E1A3A12949A21AFC99737BCE /* NookDebugLog.swift */,
 				CE0257E326F8CB6F9CC6CCB4 /* NookUpdateController.swift */,
@@ -574,7 +594,6 @@
 				3AA003E269F1E0F3206F33F2 /* AppDelegate.swift */,
 				0A6655959382556C4DA62D72 /* AppModel.swift */,
 				1E12DEFF243E7B4B84A7A135 /* NookApp.swift */,
-				8A382566BB5A6E90AEF09EC0 /* NookAppIntents.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -592,6 +611,7 @@
 			children = (
 				3FC775FBE2FA5D57184584DC /* Nook.entitlements */,
 				429B79DE7CC19572CA1356C5 /* App */,
+				F8504E2C6927F33475A3405B /* Intents */,
 				BBB99A018BE6FFC153198D19 /* Models */,
 				3B0328E73DB78F0B95AD9373 /* Resources */,
 				0BB6FA2B1EAFA56051E5EB3F /* Services */,
@@ -660,6 +680,7 @@
 			isa = PBXGroup;
 			children = (
 				EE92030AF76969EF99136D12 /* ActionItemDueDateTests.swift */,
+				A4BBAEE6D83B2865424D7AC7 /* AppIntentsTests.swift */,
 				14C472ABEEA7C70B6F18C7BD /* AudioExtractionTests.swift */,
 				384E9679B3514F8DDE9074DB /* AudioInputCheckTests.swift */,
 				BB584873860EFC08BB4979E8 /* AudioPlaybackTests.swift */,
@@ -715,6 +736,7 @@
 				7CE7A4727C693BB0BDAED00D /* ShowcaseSnapshotTests.swift */,
 				D0922EE9985AB5B0FA0B9F10 /* SourceAudioRecordingTests.swift */,
 				109A234757DF010C3ABD7735 /* SpokenNoteTests.swift */,
+				66A303EA4081FFA681CBFDDE /* SpotlightIndexTests.swift */,
 				A5A578D8161F9E1C6510C143 /* StorageInventoryTests.swift */,
 				430920457C65A721C0ECAC22 /* SummaryFallbackTests.swift */,
 				A5FB7038DAEC937AE02B4567 /* SummaryItemReviewTests.swift */,
@@ -770,6 +792,18 @@
 				CD921CC11A139E1721BD0361 /* NookTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		F8504E2C6927F33475A3405B /* Intents */ = {
+			isa = PBXGroup;
+			children = (
+				CD4E56959164657764E65110 /* LibraryIntents.swift */,
+				345A5ADAC4B335020662419E /* MeetingEntity.swift */,
+				17166076824600AAE9DA7E8C /* NookIntentSupport.swift */,
+				61371049CA2372241046F38D /* NookShortcuts.swift */,
+				8A9FD90AC40A43EB7E5E0674 /* RecordingIntents.swift */,
+			);
+			path = Intents;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -927,6 +961,7 @@
 				E03611B9969AE1D8D7D729F0 /* GlobalShortcutMonitor.swift in Sources */,
 				D9D8F446971FBF1ECCE41881 /* LibraryAnswerService.swift in Sources */,
 				035BEA8CD76D6F110A78C696 /* LibraryAskView.swift in Sources */,
+				7C3305D1C99EEDD057DA7514 /* LibraryIntents.swift in Sources */,
 				7D112772095CF2EE9637C448 /* LibraryNoteIdentity.swift in Sources */,
 				B86581F65EEBC9D0E5939666 /* LibrarySearchController.swift in Sources */,
 				CD744CE8E5C70BA1F8B32FCF /* LibraryView.swift in Sources */,
@@ -938,16 +973,19 @@
 				3BC3093CE0799C935F5744FB /* MeetingCoordinator.swift in Sources */,
 				C36F37E61EE2E5D1C665E78C /* MeetingDetailView.swift in Sources */,
 				E3873161E0BB564FC8D0B61B /* MeetingDetector.swift in Sources */,
+				BD54D9D1A56FA9F03A3B7263 /* MeetingEntity.swift in Sources */,
 				F541004C6AAAAB03F765DD59 /* MeetingNote.swift in Sources */,
 				B7B6B177408EB97C3177D25C /* MeetingNotificationService.swift in Sources */,
+				F710EEB7284A2E199212EBA6 /* MeetingSpotlightIndex.swift in Sources */,
 				02CB71D60F10215BDCB0EE1C /* MomentHotKeyController.swift in Sources */,
 				A4A0E1DA0DDA1431733498E3 /* NookApp.swift in Sources */,
-				A7825C444D696A2890C5B3BF /* NookAppIntents.swift in Sources */,
 				F8E2128CCD1CDA8A676FB36D /* NookDebugLog.swift in Sources */,
 				AC0B668F3E59CB3A86210E47 /* NookDesign.swift in Sources */,
+				A52F1C89F93423B507D472AF /* NookIntentSupport.swift in Sources */,
 				E7E699D2D6083507D634A792 /* NookNotesEditor.swift in Sources */,
 				8649F00502AF64153F77952E /* NookPermission.swift in Sources */,
 				FCB8D6CEEC082C7B55C99110 /* NookPresence.swift in Sources */,
+				C7D5A725F068EA4F156FDF6F /* NookShortcuts.swift in Sources */,
 				315744AB436DD64BB694F908 /* NookUpdateController.swift in Sources */,
 				FA06C76476FA8A7773A75E2B /* NookWindowBridge.swift in Sources */,
 				EC74DF63D37AAF8B3FE41484 /* NotchPanelCoordinator.swift in Sources */,
@@ -968,6 +1006,7 @@
 				F80645C0AE9AE1C9AA19C513 /* QuickNoteController.swift in Sources */,
 				33117E5FB38554157F01B4E3 /* QuickNoteView.swift in Sources */,
 				7667B0FE097560D7AE86E3DE /* RecordedSourceTranscription.swift in Sources */,
+				3F1477550E5095D2291B11DB /* RecordingIntents.swift in Sources */,
 				0ADB67F317BA07AC2DB93C9F /* RecordingRecovery.swift in Sources */,
 				B01B73D6C92F79AC5556F004 /* SettingsView.swift in Sources */,
 				15E244E9782298B52E9E6DB6 /* ShortcutRecorderView.swift in Sources */,
@@ -1028,6 +1067,7 @@
 				CB3A8C43D5E3ECA279A9ED73 /* GlobalShortcutMonitor.swift in Sources */,
 				EE326761C19C93A57CB4B7AD /* LibraryAnswerService.swift in Sources */,
 				79E52D066160901042ECA761 /* LibraryAskView.swift in Sources */,
+				E49477C00487CA7CF5E93130 /* LibraryIntents.swift in Sources */,
 				F676B007ED75C1514074F6C4 /* LibraryNoteIdentity.swift in Sources */,
 				E33D95127838E735C246E15E /* LibrarySearchController.swift in Sources */,
 				15185F5438EF0E9DC3095001 /* LibraryView.swift in Sources */,
@@ -1039,15 +1079,18 @@
 				40E8A120A8B3A409F01BCCFA /* MeetingCoordinator.swift in Sources */,
 				60DBCFAC7D4E8CA5787F97F7 /* MeetingDetailView.swift in Sources */,
 				4374C287B03A461C71BE2C48 /* MeetingDetector.swift in Sources */,
+				CB74479DB913B29B8935256C /* MeetingEntity.swift in Sources */,
 				5E743ABBDF9C1C2DCB66EF92 /* MeetingNote.swift in Sources */,
 				9901438495EE438AAF2BFC0D /* MeetingNotificationService.swift in Sources */,
+				5879AF267F5494EB9D5B92AE /* MeetingSpotlightIndex.swift in Sources */,
 				397A5AC1AEB7449BC5DB3A2F /* MomentHotKeyController.swift in Sources */,
-				60BECAC3A23D0BA1CFA5CE68 /* NookAppIntents.swift in Sources */,
 				7C5E746BF2743CA0922F157F /* NookDebugLog.swift in Sources */,
 				1059013167E7B7AFAABCE5BB /* NookDesign.swift in Sources */,
+				0CD3C79D1089D20FC1D516E6 /* NookIntentSupport.swift in Sources */,
 				A9E39DDD390C956A99971EF9 /* NookNotesEditor.swift in Sources */,
 				8EA62FBE67B79A580517A9A7 /* NookPermission.swift in Sources */,
 				B23F0F1F6C00C9746F57E285 /* NookPresence.swift in Sources */,
+				075A8111C770EB610822D936 /* NookShortcuts.swift in Sources */,
 				B6F52256AB772155E126E08F /* NookUpdateController.swift in Sources */,
 				B45967A443E256ED4C3FDD16 /* NookWindowBridge.swift in Sources */,
 				4BAC044221D7DAEB137A2E51 /* NotchPanelCoordinator.swift in Sources */,
@@ -1068,6 +1111,7 @@
 				5937BD5AEFDA720E632C2033 /* QuickNoteController.swift in Sources */,
 				D804D64E5D450C381A292987 /* QuickNoteView.swift in Sources */,
 				5F021869791C7A6EE1465DA6 /* RecordedSourceTranscription.swift in Sources */,
+				2847946CD998F6F9CE56CB96 /* RecordingIntents.swift in Sources */,
 				2975F188D341272B55A0F5C5 /* RecordingRecovery.swift in Sources */,
 				1697FF15C2FE7F3425EAF7A0 /* SettingsView.swift in Sources */,
 				570ABE50DDCC6103608C52F0 /* ShortcutRecorderView.swift in Sources */,
@@ -1102,6 +1146,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				1F00D62D7243C71ADC9C6121 /* ActionItemDueDateTests.swift in Sources */,
+				5BF02110B888655217E232CA /* AppIntentsTests.swift in Sources */,
 				8CAFBCC1860DF72887CC549E /* AudioExtractionTests.swift in Sources */,
 				578E397D8AD39B4AE3AB145A /* AudioInputCheckTests.swift in Sources */,
 				87C4A68E2D4070396043DDFD /* AudioPlaybackTests.swift in Sources */,
@@ -1157,6 +1202,7 @@
 				C78A280ADF06F6B2BDBE927D /* ShowcaseSnapshotTests.swift in Sources */,
 				E569DCFC678E964F97D82050 /* SourceAudioRecordingTests.swift in Sources */,
 				8F9675D805A7E24CA288D4EC /* SpokenNoteTests.swift in Sources */,
+				4363FA286A5FE29D8AF45E3E /* SpotlightIndexTests.swift in Sources */,
 				4C2ED59D5E4608F9BF715A0E /* StorageInventoryTests.swift in Sources */,
 				02790D9D2AEFFBAE58071303 /* SummaryFallbackTests.swift in Sources */,
 				2BE555D5EE88A490AF251533 /* SummaryItemReviewTests.swift in Sources */,

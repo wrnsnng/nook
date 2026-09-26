@@ -59,6 +59,7 @@ final class AppModel: ObservableObject {
     let prep: PrepBriefController
     let recovery: RecordingRecovery
     let audioInputCheck: AudioInputCheckService
+    let spotlight: MeetingSpotlightIndexer
     private let dictationIndicator = DictationIndicatorController()
     private var openLibraryAction: (@MainActor () -> Void)?
     private var openWelcomeAction: (@MainActor () -> Void)?
@@ -113,6 +114,7 @@ final class AppModel: ObservableObject {
         let prep = PrepBriefController(store: store, calendar: calendar)
         self.prep = prep
         self.audioInputCheck = audioInputCheck
+        self.spotlight = MeetingSpotlightIndexer()
         store.onStorageDirectoryWillChange = {
             markdownDraft.libraryWillChange()
             personalNotesDraft.libraryWillChange()
@@ -283,6 +285,10 @@ final class AppModel: ObservableObject {
         }
         .store(in: &cancellables)
 
+        // Follows every library change, including trashed notes and a new
+        // notes folder, and the Settings switch that turns it off.
+        spotlight.observe(store)
+
         detector.start()
     }
 
@@ -330,6 +336,10 @@ final class AppModel: ObservableObject {
         closeLiveNotesAction = closeLiveNotes
         presentLaunchExperience()
     }
+
+    /// Whether the SwiftUI scenes have handed over their window actions.
+    /// Until then `openLibrary` has no window to open.
+    var canPresentWindows: Bool { openLibraryAction != nil }
 
     func openLibrary(noteID: MeetingNote.ID? = nil) {
         promoteToWindowedApp()

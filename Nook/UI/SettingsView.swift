@@ -40,6 +40,7 @@ struct SettingsView: View {
     @State private var accessibilityGranted = TextInsertionService.isTrusted
     @State private var showingRestoreAllDefaultsConfirmation = false
     @AppStorage(NotchPeekPreference.key) private var notchPeekEnabled = true
+    @AppStorage(SpotlightIndexPreference.key) private var spotlightEnabled = true
     /// Nil until the bundle's signature has been read, which happens off the
     /// main thread the first time About is shown.
     @State private var signature: NookCodeSignature?
@@ -157,6 +158,7 @@ struct SettingsView: View {
             }
 
             calendarSection
+            spotlightSection
         }
         .formStyle(.grouped)
     }
@@ -343,6 +345,18 @@ struct SettingsView: View {
             Text(
                 "Read on this Mac only, to name meetings after their event and to mention one shortly before it starts. Events come from every calendar account set up in System Settings, Internet Accounts, including iCloud, Google, and Exchange, so there is nothing to sign in to here. Nook still asks before recording."
             )
+        }
+    }
+
+    /// Spotlight's index is on this Mac, but it is still a second copy of
+    /// titles and summaries outside the notes folder, so it can be removed.
+    private var spotlightSection: some View {
+        Section {
+            Toggle("Show meetings in Spotlight", isOn: $spotlightEnabled)
+        } header: {
+            Text("Spotlight")
+        } footer: {
+            Text("Titles, summaries, key points and decisions from your saved meetings and notes appear in Spotlight and open in the library. Transcripts and My notes are left out. The index stays on this Mac, and turning this off removes everything Nook added to it.")
         }
     }
 

@@ -32,6 +32,11 @@ struct NookApp: App {
                 .environmentObject(shortcuts)
                 .frame(minWidth: 900, minHeight: 580)
                 .background(NookWindowBridge(role: .library))
+                // SwiftUI can route a Spotlight result to the scene rather
+                // than to the app delegate; both paths open the same note once.
+                .onContinueUserActivity(MeetingSpotlightContinuation.activityType) { activity in
+                    MeetingSpotlightContinuation.open(activity)
+                }
         }
         .defaultSize(width: 1_080, height: 680)
         .windowResizability(.contentMinSize)

@@ -72,6 +72,12 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
   words before summary enrichment. Saved notes show background progress,
   non-destructive cancellation and Retry without hiding the transcript or
   current write-up. Unfinished summaries remain retryable after relaunch.
+- Shortcuts and Siri can start, pause, resume and finish a recording, flag a
+  moment, take a note, ask your library, list open action items, read the
+  latest meeting summary and open a chosen meeting. Saved meetings and quick
+  notes appear in Spotlight by title, summary, key points and decisions, and
+  open in the library; the index stays on this Mac and Settings, General turns
+  it off.
 
 ## 1.20.1
 
