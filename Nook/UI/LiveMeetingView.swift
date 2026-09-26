@@ -1161,7 +1161,7 @@ private struct ProcessingRail: View {
     private func normalizedIndex(_ step: MeetingPhase.ProcessingStep) -> Int {
         switch step {
         case .preparing: 0
-        case .refining, .transcribing: 1
+        case .refining, .transcribing, .separatingSpeakers: 1
         case .summarizing: 2
         case .saving: 3
         case .discarding: 0
@@ -1188,7 +1188,7 @@ private struct ProcessingRail: View {
         // an instruction. It used to mix the two, so "Transcript" and "Distill"
         // read as different kinds of label sitting in the same row.
         case .preparing: "Capture"
-        case .refining, .transcribing: "Transcript"
+        case .refining, .transcribing, .separatingSpeakers: "Transcript"
         case .summarizing: "Summary"
         case .saving: "Note"
         case .discarding: "Cleanup"

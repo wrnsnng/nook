@@ -14,6 +14,7 @@ enum MeetingPhase: Equatable, Sendable {
         case preparing = "Gathering the recording"
         case refining = "Refining the transcript"
         case transcribing = "Listening back locally"
+        case separatingSpeakers = "Telling voices apart"
         case summarizing = "Distilling the conversation"
         case saving = "Tucking away your notes"
         case discarding = "Discarding the recording"
@@ -30,6 +31,8 @@ enum MeetingPhase: Equatable, Sendable {
                 "Cleaning up the live captions while preserving what was actually said."
             case .transcribing:
                 "Giving the saved audio a careful second listen, entirely on this Mac."
+            case .separatingSpeakers:
+                "Working out who said what on the meeting side, entirely on this Mac."
             case .summarizing:
                 "Finding the useful shape of the conversation: themes, decisions, and next steps."
             case .saving:
@@ -1320,7 +1323,18 @@ final class MeetingCoordinator: ObservableObject {
                 )
             }
             try Task.checkCancellation()
-            let transcript = TranscriptAssembler.coalesce(rawTranscript)
+            var transcript = TranscriptAssembler.coalesce(rawTranscript)
+
+            // Who said what, while the recording still exists. A new note
+            // only: a joined sitting's voices would be numbered afresh and
+            // collide with names the user already gave that note.
+            if draft.attachedNoteID == nil {
+                phase = .processing(.separatingSpeakers)
+                transcript = await MeetingSpeakerSeparation.labelled(
+                    transcript, recordingURLs: recordingURLs
+                )
+                try Task.checkCancellation()
+            }
 
             // A recording started from an existing note joins that note
             // instead of creating one; everything downstream differs.

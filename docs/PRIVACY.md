@@ -220,11 +220,10 @@ chooses.
 
 ## Speaker separation
 
-Nook includes an on-device speaker separation engine (issue #28) that finds
-who spoke when in a saved recording, so remote passages can later be labelled
-*Speaker 1*, *Speaker 2*, and so on. It is not yet connected to notes or the
-interface; this section describes the engine's data handling so the
-integration inherits it.
+After a new meeting is transcribed, Nook finds who spoke when on the meeting
+side and labels those passages *Speaker 1*, *Speaker 2*, and so on, until the
+user names them in the transcript. Names are written into the note's Markdown
+and nowhere else. Settings, Listening, *Tell speakers apart* turns this off.
 
 - **Where it runs.** On this Mac, through FluidAudio's offline pipeline on
   Core ML (Neural Engine where available, otherwise the CPU). Audio never

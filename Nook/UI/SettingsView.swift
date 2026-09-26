@@ -40,6 +40,7 @@ struct SettingsView: View {
     @State private var accessibilityGranted = TextInsertionService.isTrusted
     @State private var showingRestoreAllDefaultsConfirmation = false
     @AppStorage(NotchPeekPreference.key) private var notchPeekEnabled = true
+    @AppStorage(SpeakerSeparationPreference.key) private var separateSpeakers = true
     @AppStorage(SpotlightIndexPreference.key) private var spotlightEnabled = true
     /// Nil until the bundle's signature has been read, which happens off the
     /// main thread the first time About is shown.
@@ -198,10 +199,11 @@ struct SettingsView: View {
                         Text(name).tag(identifier)
                     }
                 }
+                Toggle("Tell speakers apart", isOn: $separateSpeakers)
             } header: {
                 Text("Transcription")
             } footer: {
-                Text("Recognition runs with Apple’s on-device speech model. You can change the language between meetings.")
+                Text("Recognition runs with Apple’s on-device speech model. You can change the language between meetings. After a meeting, Nook separates the other voices on this Mac and labels them Speaker 1, Speaker 2 until you name them.")
             }
 
             audioInputCheckSection

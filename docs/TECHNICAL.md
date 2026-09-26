@@ -247,8 +247,21 @@ transcription service.
 ### `SpeakerDiarizationService` / `SpeakerAttribution`
 
 The engine for on-device speaker separation (issue #28), in
-`Nook/Services/Speakers/`. It is not yet called by the meeting pipeline; the
-saved-note background session, the transcript model and Markdown will use it.
+`Nook/Services/Speakers/`.
+
+`MeetingSpeakerSeparation.labelled` runs it during processing, after the
+transcript is ready and before the note is first saved, because with audio
+retention off the capture files are removed right after that save. It builds
+one meeting-side file from every system-labelled track of every captured part
+at its part offset (`MeetingSideAudio`), so a voice keeps one number across
+pauses; separates it; attributes system passages by overlap; and writes
+`Speaker N` onto `TranscriptSegment.speaker`. It is best effort: no labelled
+system track, missing models, unreadable audio or any error leaves the
+transcript unchanged, and the note is saved either way. Recordings joined to an
+existing note are not separated, since new numbers would collide with names
+the user already gave that note. `SpeakerNames` renames a speaker everywhere;
+Markdown writes `**Name:**` beside lines and lists names in a `speakers:`
+frontmatter array, and only listed names decode as speakers.
 
 - `SpeakerDiarizationService.diarize(audioURL:)` returns `[SpeakerTurn]`
   (`start`, `end`, 0-based `speaker`, numbered by first appearance). It runs

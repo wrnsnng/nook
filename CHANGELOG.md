@@ -29,6 +29,10 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 - Action items show their owner when the item names one, as in
   `Maya: refine the copy` or `@Maya refine the copy`, in the note and in Open
   actions. The note's wording is not changed.
+- Transcripts tell the other voices in a meeting apart, on this Mac, after the
+  meeting ends: lines are labelled Speaker 1, Speaker 2 until you name them
+  from the transcript, and summaries, search, Ask and copied transcripts use
+  the names. Your own voice stays You. Settings, Listening can turn this off.
 - A new accent colour, lagoon teal, and a new app icon built around the notch.
 - Setup shows what each step is for on a small animated Mac, from a meeting
   being noticed to its note being saved.
