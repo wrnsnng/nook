@@ -23,6 +23,14 @@ if [[ ! -d "$SPARKLE_VERSION_DIR" ]]; then
   exit 66
 fi
 
+# FluidAudio's resource bundle holds only its text-to-speech lexicon, which
+# was harvested from espeak-ng output. Nook never runs text-to-speech and only
+# that code reads the bundle, so it is not shipped. Xcode copies package
+# resource bundles after every custom build phase, so it is removed here, in
+# the one step every distributed build passes through before signing: local
+# builds and the verified stable-workflow artifact alike.
+/bin/rm -rf "$APP_PATH/Contents/Resources/FluidAudio_FluidAudio.bundle"
+
 SIGNING_IDENTITY="${NOOK_SIGNING_IDENTITY:-}"
 if [[ -z "$SIGNING_IDENTITY" ]]; then
   SIGNING_IDENTITY="$(
