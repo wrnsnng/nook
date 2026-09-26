@@ -72,7 +72,6 @@
 		3D20162A2CCD12C13C89D1BE /* NoteDecodeCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98A52969E7E5881E9991805A /* NoteDecodeCache.swift */; };
 		40855CB715DF347E94DAB82C /* DraftRecoveryController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0C07DDB752E24D8876924F1 /* DraftRecoveryController.swift */; };
 		408E7914D251C42840E49C05 /* QuickNotePadLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DD3BC0B20F3ADD764D42B31 /* QuickNotePadLayoutTests.swift */; };
-		40BFD6BCAB1A1E74EC952472 /* NookIconSource-Cobalt.png in Resources */ = {isa = PBXBuildFile; fileRef = 2B35E9D093EB220A65D04B90 /* NookIconSource-Cobalt.png */; };
 		40E8A120A8B3A409F01BCCFA /* MeetingCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04DB60A1C42F72E177BB9160 /* MeetingCoordinator.swift */; };
 		4115C2BF7345E97692845B0F /* ShortcutStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A7DA9CAAF9000EEBF8659B5 /* ShortcutStore.swift */; };
 		426867718A3BE32CF3E90A7C /* DictationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FA4268191B8994F04391D35 /* DictationCoordinator.swift */; };
@@ -158,6 +157,7 @@
 		8CAFBCC1860DF72887CC549E /* AudioExtractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14C472ABEEA7C70B6F18C7BD /* AudioExtractionTests.swift */; };
 		8CE71D1F2B4D4872E9B2FCDF /* SummaryRegenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = E15F65EA6B77F2A746907A35 /* SummaryRegenerator.swift */; };
 		8D65B14D1E3F0D8DB95C455D /* SnapshotRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9724F70AFC1F4B7149AC8E67 /* SnapshotRenderer.swift */; };
+		8DF6890D77C75674523F7CCF /* NookIconSource-Lagoon.png in Resources */ = {isa = PBXBuildFile; fileRef = 5F8A6C107764BC04031A459F /* NookIconSource-Lagoon.png */; };
 		8E93771F48EAE6649FE976CC /* DictationAudioSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 474FCF7E641790A7A9CF100C /* DictationAudioSource.swift */; };
 		8EA62FBE67B79A580517A9A7 /* NookPermission.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A877376CD0320074D3AE2B8 /* NookPermission.swift */; };
 		8F9675D805A7E24CA288D4EC /* SpokenNoteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 109A234757DF010C3ABD7735 /* SpokenNoteTests.swift */; };
@@ -318,7 +318,6 @@
 		270D5D58223F982CC9432645 /* TranscriptAssembler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptAssembler.swift; sourceTree = "<group>"; };
 		2A4476D46DFC63E2744F2D18 /* LiveMeetingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveMeetingView.swift; sourceTree = "<group>"; };
 		2A877376CD0320074D3AE2B8 /* NookPermission.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookPermission.swift; sourceTree = "<group>"; };
-		2B35E9D093EB220A65D04B90 /* NookIconSource-Cobalt.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "NookIconSource-Cobalt.png"; sourceTree = "<group>"; };
 		2B4EC858AE18294670CC43A6 /* NoteCombiner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteCombiner.swift; sourceTree = "<group>"; };
 		2DF398889F508D66FA99EB2C /* THIRD_PARTY_NOTICES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = THIRD_PARTY_NOTICES.md; sourceTree = "<group>"; };
 		2F62A5E26CF01EB47C25258B /* LiveTranscriptScrollTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTranscriptScrollTests.swift; sourceTree = "<group>"; };
@@ -346,6 +345,7 @@
 		5748C0883CEF9E5A16384D44 /* LibraryIdentityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryIdentityTests.swift; sourceTree = "<group>"; };
 		59D2221174557F3F8D1A8318 /* NoteMergeWorkflowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteMergeWorkflowTests.swift; sourceTree = "<group>"; };
 		5BE43DCDC9893FE96856CD02 /* LiveTranscriptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTranscriptionService.swift; sourceTree = "<group>"; };
+		5F8A6C107764BC04031A459F /* NookIconSource-Lagoon.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "NookIconSource-Lagoon.png"; sourceTree = "<group>"; };
 		6271F2989B3F82935AE714D4 /* DictationSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationSettingsTests.swift; sourceTree = "<group>"; };
 		6413CBEA22E028864F7F1E53 /* SummaryRegenerationSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SummaryRegenerationSessionTests.swift; sourceTree = "<group>"; };
 		64E89E9B358F9219563BE4F9 /* DisfluencyFilterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisfluencyFilterTests.swift; sourceTree = "<group>"; };
@@ -611,7 +611,7 @@
 		BAEB21BC46FFBDF51BC5A1BA /* Brand */ = {
 			isa = PBXGroup;
 			children = (
-				2B35E9D093EB220A65D04B90 /* NookIconSource-Cobalt.png */,
+				5F8A6C107764BC04031A459F /* NookIconSource-Lagoon.png */,
 			);
 			path = Brand;
 			sourceTree = "<group>";
@@ -884,7 +884,7 @@
 				2BB3602A4B19FC4C05F0C451 /* Assets.xcassets in Resources */,
 				1756AD3AB5730CCC79B4BB0A /* LICENSE in Resources */,
 				AE80287070CCD5C1D8A5AD65 /* NOTICE in Resources */,
-				40BFD6BCAB1A1E74EC952472 /* NookIconSource-Cobalt.png in Resources */,
+				8DF6890D77C75674523F7CCF /* NookIconSource-Lagoon.png in Resources */,
 				D3A59154965F8B0755A28034 /* Sparkle-LICENSE.txt in Resources */,
 				71A55DEA7A1C41127D4DB5ED /* THIRD_PARTY_NOTICES.md in Resources */,
 				9EC4858331514700DB5195B6 /* TRADEMARKS.md in Resources */,

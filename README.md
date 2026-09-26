@@ -6,7 +6,7 @@ Nook is a native, local-first macOS meeting notebook. It lives in the menu bar,
 captures system audio and your microphone only after you choose to record,
 transcribes and summarizes on-device, and saves a portable Markdown note.
 
-![Nook icon](Nook/Resources/Brand/NookIconSource-Cobalt.png)
+![Nook icon](Nook/Resources/Brand/NookIconSource-Lagoon.png)
 
 ## Highlights
 

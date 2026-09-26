@@ -373,10 +373,10 @@ struct MarkdownCodecTests {
     }
 
     @Test
-    func applicationBundleShipsOnlyTheCobaltBrandIcon() {
+    func applicationBundleShipsOnlyTheLagoonBrandIcon() {
         #expect(
             Bundle.main.url(
-                forResource: "NookIconSource-Cobalt",
+                forResource: "NookIconSource-Lagoon",
                 withExtension: "png"
             ) != nil
         )

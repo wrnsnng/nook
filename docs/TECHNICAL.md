@@ -546,8 +546,8 @@ Detached notes close when recording stops or leaves the recording phase.
 - The camera-attached top panel is always edge-black because the physical bezel
   is its material, independent of app appearance.
 - The current app icon source is
-  `Nook/Resources/Brand/NookIconSource-Cobalt.png`.
-- `AppDelegate` sets the packaged cobalt master explicitly to avoid stale
+  `Nook/Resources/Brand/NookIconSource-Lagoon.png`.
+- `AppDelegate` sets the packaged lagoon master explicitly to avoid stale
   Launch Services/Dock artwork after an update.
 
 ## Tests and audit hooks

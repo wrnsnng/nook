@@ -59,7 +59,7 @@ struct SnapshotRenderer {
             .appendingPathComponent("Nook")
             .appendingPathComponent("Resources")
             .appendingPathComponent("Brand")
-            .appendingPathComponent("NookIconSource-Cobalt.png")
+            .appendingPathComponent("NookIconSource-Lagoon.png")
         if let icon = NSImage(contentsOf: iconURL) {
             app.applicationIconImage = icon
         }

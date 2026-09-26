@@ -472,7 +472,7 @@ struct NookMark: View {
     private static let brandImage: NSImage = {
         if
             let url = Bundle.main.url(
-                forResource: "NookIconSource-Cobalt",
+                forResource: "NookIconSource-Lagoon",
                 withExtension: "png"
             ),
             let image = NSImage(contentsOf: url)

@@ -143,12 +143,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Launch Services may preserve artwork from an older build for a stable
-    /// bundle identifier. Setting the packaged cobalt master explicitly keeps
+    /// bundle identifier. Setting the packaged lagoon master explicitly keeps
     /// the Dock and app switcher in sync immediately after an OTA update.
     private func installApplicationIcon() {
         guard
             let url = Bundle.main.url(
-                forResource: "NookIconSource-Cobalt",
+                forResource: "NookIconSource-Lagoon",
                 withExtension: "png"
             ),
             let image = NSImage(contentsOf: url)
