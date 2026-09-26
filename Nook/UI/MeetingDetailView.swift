@@ -392,7 +392,8 @@ struct MeetingDetailView: View {
                     .font(NookType.title)
                     .tracking(-0.45)
                     .lineLimit(2)
-                    .textSelection(.enabled)
+                    // Not selectable: double-click belongs to rename here, and
+                    // word selection would compete for the same gesture.
                     .onTapGesture(count: 2) {
                         if canRenameTitle { beginTitleEditing() }
                     }

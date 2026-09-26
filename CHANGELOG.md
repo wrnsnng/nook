@@ -6,6 +6,13 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
+- The Library, Settings and setup now use standard macOS controls and layout.
+  Note view switching and actions live in the window toolbar, the sidebar uses
+  system selection and collapsible sections, and each note reads as one
+  document column with a title, headings and body text. Supporting-transcript
+  buttons appear when the pointer is over a line or the button has keyboard
+  focus, and stay available to VoiceOver. Rename a note by double-clicking its
+  title or choosing Rename from the actions menu.
 - New captures preserve microphone/system input labels in a separate local
   audio copy for file transcription and recovery. The original recording
   remains the fallback if the source copy cannot be completed or validated.
