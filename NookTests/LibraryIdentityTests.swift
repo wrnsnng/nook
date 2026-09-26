@@ -56,7 +56,7 @@ struct LibraryIdentityTests {
     func searchingForOneCopyDoesNotIncludeItsSiblingWithTheSameUUID() {
         let notes = copies()
         let hits = LibrarySearchController.matches(query: "Cobalt", notes: notes)
-        let filtered = LibraryNoteGrouping.filter(notes, todayOnly: false, matchingIDs: hits)
+        let filtered = LibraryNoteGrouping.filter(notes, range: .all, matchingIDs: hits)
         #expect(filtered.map(\.libraryIdentity) == [notes[1].libraryIdentity])
         #expect(filtered.first?.summary == "Cobalt belongs to the second file.")
     }
@@ -65,14 +65,14 @@ struct LibraryIdentityTests {
     func aSameTimestampRevisionOrFileMoveRefreshesTheCachedLibraryRows() {
         let notes = copies()
         let now = Date(timeIntervalSince1970: 1_780_000_100)
-        let original = LibraryGroupingCacheKey(notes: notes, matchingIDs: nil, todayOnly: false, now: now)
+        let original = LibraryGroupingCacheKey(notes: notes, matchingIDs: nil, range: .all, now: now)
         var changed = notes
         changed[0].summary = "A newly saved summary."
         changed[0].fileRevision = MeetingNote.contentRevision(Data("new bytes".utf8))
-        #expect(original != LibraryGroupingCacheKey(notes: changed, matchingIDs: nil, todayOnly: false, now: now))
+        #expect(original != LibraryGroupingCacheKey(notes: changed, matchingIDs: nil, range: .all, now: now))
         changed = notes
         changed[0].fileURL = URL(fileURLWithPath: "/synthetic/renamed.md")
-        #expect(original != LibraryGroupingCacheKey(notes: changed, matchingIDs: nil, todayOnly: false, now: now))
+        #expect(original != LibraryGroupingCacheKey(notes: changed, matchingIDs: nil, range: .all, now: now))
     }
 
     @Test

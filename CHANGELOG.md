@@ -11,6 +11,11 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
   denied permissions link to the corresponding macOS Settings pane.
   A stream confirmed stopped by its callback cannot become stuck after a late
   Stop error; other capture still waits for the stop operation to finish.
+- Command-palette note search finds abbreviations and typos across titles,
+  transcripts and structured note content, with exact title matches first.
+  Searching runs off the main actor and ignores cancelled or stale results.
+- Library adds an explicit Yesterday range beside All and Today. Date ranges
+  use calendar days and preserve the editor's Save/Discard/Cancel decision.
 
 ## 1.20.1
 

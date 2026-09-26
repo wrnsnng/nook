@@ -144,6 +144,7 @@
 		92275CBAE58E80B738E15FC6 /* DictationStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5008A93BBFF4EE8348B18580 /* DictationStyle.swift */; };
 		92C46E2C2B942155AE8ABE87 /* LibraryInterfaceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2A46179F16114BCCEF5E967 /* LibraryInterfaceTests.swift */; };
 		92F5B9878E6BD8D5B9ED4C00 /* TranscriptionDeadlineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14381A0FC185A11F30EBB017 /* TranscriptionDeadlineTests.swift */; };
+		94B3BBB5C6C33067C7161820 /* PaletteSearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFDD5EABBDE3245289E51205 /* PaletteSearchTests.swift */; };
 		968CD999D123CDB1AFE5EFDA /* StorageInventory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 921E4C383772F50FAB061AC3 /* StorageInventory.swift */; };
 		9812D6449F2721D201BBFFEA /* CommandLineProcessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D46E637BAAA4A239AA733359 /* CommandLineProcessTests.swift */; };
 		981CB8624F527E16C4BB6B4C /* DictationFormattingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4D5B14FA3AB01500EEB90B3 /* DictationFormattingTests.swift */; };
@@ -409,6 +410,7 @@
 		F16A76A2084A148B53CEA7ED /* NoteActionOutputGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteActionOutputGuard.swift; sourceTree = "<group>"; };
 		F2699291FBA42326EC85D6B6 /* QuickNoteWordCountTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickNoteWordCountTests.swift; sourceTree = "<group>"; };
 		F6F30A2530EE20C39D0E9AD5 /* ShortcutRecorderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutRecorderView.swift; sourceTree = "<group>"; };
+		FFDD5EABBDE3245289E51205 /* PaletteSearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaletteSearchTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -639,6 +641,7 @@
 				59D2221174557F3F8D1A8318 /* NoteMergeWorkflowTests.swift */,
 				A1D475EC3AA2409833E22E3A /* NotesEditorSnapshotTests.swift */,
 				2025F1AA72DD2FBB3058BFEA /* OpenActionsControllerTests.swift */,
+				FFDD5EABBDE3245289E51205 /* PaletteSearchTests.swift */,
 				843B3D27D068E5D01683C0B6 /* PersonalNotesDraftTests.swift */,
 				06DE20F4ABEC5F79E54C49AC /* PrepBriefTests.swift */,
 				40C568E6906587FA1D689E5F /* PrivacyStorageTests.swift */,
@@ -1047,6 +1050,7 @@
 				B6FFB54394F4C495863DAA9D /* NoteMergeWorkflowTests.swift in Sources */,
 				7EBCCD9682890F3CDF71C2F3 /* NotesEditorSnapshotTests.swift in Sources */,
 				76DC00C98A6431094DFE2EC7 /* OpenActionsControllerTests.swift in Sources */,
+				94B3BBB5C6C33067C7161820 /* PaletteSearchTests.swift in Sources */,
 				2C4433CEA6B0B8EF73392F67 /* PersonalNotesDraftTests.swift in Sources */,
 				5CC0091958B983D15A2D3112 /* PrepBriefTests.swift in Sources */,
 				1478E8EB0F7B98D770E0FCF5 /* PrivacyStorageTests.swift in Sources */,
