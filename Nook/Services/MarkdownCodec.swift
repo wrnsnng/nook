@@ -60,6 +60,15 @@ enum MarkdownCodec {
                 "audioStart: \(String(format: "%.1f", note.audioStart))"
             )
         }
+        // The names used beside transcript lines. Listed so a reader can
+        // tell "**Ana:**" from text that happens to start in bold; only notes
+        // whose speakers were separated carry it.
+        let speakers = SpeakerNames.speakers(in: note.transcript)
+        if !speakers.isEmpty,
+           let data = try? JSONEncoder().encode(speakers),
+           let list = String(data: data, encoding: .utf8) {
+            frontmatterLines.append("speakers: \(list)")
+        }
         let frontmatter = (frontmatterLines + ["---"]).joined(separator: "\n")
 
         // A spoken note is a title and then prose, with nothing after it.
@@ -211,8 +220,15 @@ enum MarkdownCodec {
             actionChecklist.filter(\.isChecked).map(\.text)
         ).intersection(actionItems)
         let personalNotes = personalNotesContent(in: blocks)
+        let speakers = (metadata["speakers"]?.data(using: .utf8))
+            .flatMap { try? JSONDecoder().decode([String].self, from: $0) }?
+            .compactMap(SpeakerNames.sanitized) ?? []
         let transcript = TranscriptAssembler.coalesce(
-            transcriptItems(in: body(of: "Transcript", in: blocks), noteID: id)
+            transcriptItems(
+                in: body(of: "Transcript", in: blocks),
+                noteID: id,
+                speakers: speakers
+            )
         )
         // Flagged moments only describe a recording timeline, which spoken
         // notes do not have.
@@ -298,8 +314,8 @@ enum MarkdownCodec {
     /// are exactly the offsets appended material was shifted by.
     private static func transcriptLines(for note: MeetingNote) -> String {
         var lines = note.transcript.map { segment in
-            let speaker = segment.source == .mixed
-                ? "" : "**\(segment.source.label):** "
+            let speaker = segment.source == .mixed && segment.speaker == nil
+                ? "" : "**\(segment.speakerLabel):** "
             return "- **[\(segment.timestamp)]** \(speaker)\(segment.text.trimmingCharacters(in: .whitespacesAndNewlines))"
         }
         guard note.sessions.count > 1 else {
@@ -1053,21 +1069,32 @@ extension MarkdownCodec {
 
     private static func transcriptItems(
         in section: String,
-        noteID: UUID
+        noteID: UUID,
+        speakers: [String] = []
     ) -> [TranscriptSegment] {
-        section.split(separator: "\n").enumerated().compactMap { index, rawLine in
+        // Longest first, so "Ana Silva" is not read as "Ana".
+        let speakerPrefixes = speakers
+            .sorted { $0.count > $1.count }
+            .map { ($0, "**\($0):** ") }
+        return section.split(separator: "\n").enumerated().compactMap { index, rawLine -> TranscriptSegment? in
             let line = rawLine.trimmingCharacters(in: .whitespaces)
             guard line.hasPrefix("- **["), let closing = line.range(of: "]**") else { return nil }
             let stampStart = line.index(line.startIndex, offsetBy: 5)
             let stamp = String(line[stampStart..<closing.lowerBound])
             var text = line[closing.upperBound...].trimmingCharacters(in: .whitespaces)
             let source: TranscriptSegment.Source
+            var speaker: String?
             if text.hasPrefix("**You:** ") {
                 source = .microphone
                 text.removeFirst("**You:** ".count)
             } else if text.hasPrefix("**Meeting:** ") {
                 source = .system
                 text.removeFirst("**Meeting:** ".count)
+            } else if let match = speakerPrefixes.first(where: { text.hasPrefix($0.1) }) {
+                // A separated voice is always on the meeting side.
+                source = .system
+                speaker = match.0
+                text.removeFirst(match.1.count)
             } else {
                 source = .mixed
             }
@@ -1090,7 +1117,8 @@ extension MarkdownCodec {
                 startTime: seconds,
                 duration: 0,
                 text: text,
-                source: source
+                source: source,
+                speaker: speaker
             )
         }
     }

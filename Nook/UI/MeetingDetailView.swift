@@ -107,6 +107,9 @@ struct MeetingDetailView: View {
     @State private var transcriptSourceBadgeIDs: Set<UUID>
     @State private var reviewingSummaryItem: SummaryItemReviewSession?
     @State private var showsFollowUpDraft = false
+    /// The speaker being named, and the name being typed for them.
+    @State private var namingSpeaker: String?
+    @State private var speakerNameDraft = ""
     @State private var lastSummaryReview: SummaryItemReviewSession?
     @State private var reviewSentences: [SummaryReviewItem] = []
     @FocusState private var summaryReviewFocus: String?
@@ -260,6 +263,19 @@ struct MeetingDetailView: View {
         .toolbar { detailToolbar }
         .sheet(isPresented: $showsFollowUpDraft) {
             FollowUpDraftView(note: note)
+        }
+        .alert(
+            "Name \(namingSpeaker ?? "Speaker")",
+            isPresented: Binding(
+                get: { namingSpeaker != nil },
+                set: { if !$0 { namingSpeaker = nil } }
+            )
+        ) {
+            TextField("Name", text: $speakerNameDraft)
+            Button("Cancel", role: .cancel) { namingSpeaker = nil }
+            Button("Save") { saveSpeakerName() }
+        } message: {
+            Text("Every line this person said in this meeting will use the name. It is saved in the note.")
         }
         .sheet(item: $reviewingSummaryItem, onDismiss: returnFromSummaryReview) { session in
             SummaryItemReviewView(session: session)
@@ -1070,7 +1086,7 @@ struct MeetingDetailView: View {
         guard !search.isEmpty else { return note.transcript }
         return note.transcript.filter {
             $0.text.localizedCaseInsensitiveContains(search)
-                || $0.source.label.localizedCaseInsensitiveContains(search)
+                || $0.speakerLabel.localizedCaseInsensitiveContains(search)
         }
     }
 
@@ -1186,6 +1202,7 @@ struct MeetingDetailView: View {
         let audioURL = keptAudioURL
         return VStack(spacing: 0) {
             transcriptSearchBar
+            speakersBar
 
             // Search filters passages, not the recording. Keep its transport
             // and failures reachable even when no passage matches.
@@ -1225,7 +1242,8 @@ struct MeetingDetailView: View {
                                     playAction: playAction(
                                         for: segment,
                                         audioURL: audioURL
-                                    )
+                                    ),
+                                    nameSpeaker: beginNamingSpeaker
                                 )
                                 .id(segment.id)
                             }
@@ -1642,6 +1660,66 @@ struct MeetingDetailView: View {
         }
     }
 
+    /// Separated speakers, as buttons to name them. Shown only on notes whose
+    /// meeting side was separated; naming one updates every line they said.
+    @ViewBuilder
+    private var speakersBar: some View {
+        let speakers = SpeakerNames.speakers(in: note.transcript)
+        if !speakers.isEmpty {
+            HStack(spacing: 8) {
+                Text("Speakers")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                ForEach(speakers, id: \.self) { speaker in
+                    Button {
+                        beginNamingSpeaker(speaker)
+                    } label: {
+                        Label(speaker, systemImage: "person.fill")
+                    }
+                    .controlSize(.small)
+                    .help(SpeakerNames.isPlaceholder(speaker) ? "Name this speaker" : "Rename this speaker")
+                }
+                Spacer(minLength: 0)
+            }
+            .nookReadableColumn()
+            .padding(.bottom, 8)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Speakers")
+        }
+    }
+
+    private func beginNamingSpeaker(_ speaker: String) {
+        speakerNameDraft = SpeakerNames.isPlaceholder(speaker) ? "" : speaker
+        namingSpeaker = speaker
+    }
+
+    private func saveSpeakerName() {
+        guard let speaker = namingSpeaker else { return }
+        namingSpeaker = nil
+        // Same rule as renaming the title: never rewrite the file under an
+        // unsaved Markdown draft.
+        guard canRenameTitle else {
+            showCopyNotice(DetailRenamePolicy.markdownDraftBlockedMessage, severity: .info)
+            return
+        }
+        switch SpeakerNames.rename(speaker, to: speakerNameDraft, in: note.transcript) {
+        case .invalidName:
+            showCopyNotice("Choose a name other than You or Meeting", severity: .failure)
+        case .nameInUse:
+            showCopyNotice("Another speaker already has that name", severity: .failure)
+        case .renamed(let transcript):
+            var updated = note
+            updated.transcript = transcript
+            do {
+                let saved = try store.save(updated)
+                markdownDraft.refresh(for: saved, store: store)
+                showCopyNotice("Speaker named")
+            } catch {
+                showCopyNotice("The name couldn’t be saved", severity: .failure)
+            }
+        }
+    }
+
     private func saveMarkdown() {
         do {
             try markdownDraft.save(note: note, store: store)
@@ -1723,7 +1801,7 @@ struct MeetingDetailView: View {
 
     private func copyTranscript() {
         let transcript = note.transcript.map {
-            "[\($0.timestamp)] \($0.source.label): \($0.text)"
+            "[\($0.timestamp)] \($0.speakerLabel): \($0.text)"
         }.joined(separator: "\n\n")
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(transcript, forType: .string)
@@ -1852,12 +1930,25 @@ private struct TranscriptRow: View {
     var isPlaying = false
     /// Present only when kept audio exists; tapping plays this line.
     var playAction: (() -> Void)?
+    /// Present when this line has a separated speaker the user can name.
+    var nameSpeaker: ((String) -> Void)?
 
     var body: some View {
         HStack(alignment: .top, spacing: 18) {
             VStack(alignment: .trailing, spacing: 7) {
                 if showsSourceBadge {
-                    SourceBadge(source: segment.source)
+                    if let speaker = segment.speaker, let nameSpeaker {
+                        Button { nameSpeaker(speaker) } label: {
+                            SourceBadge(source: segment.source, speaker: speaker)
+                        }
+                        .buttonStyle(.plain)
+                        .help(SpeakerNames.isPlaceholder(speaker) ? "Name this speaker" : "Rename this speaker")
+                        .accessibilityLabel("\(speaker). Name this speaker")
+                    } else {
+                        // The row's own label already says who spoke.
+                        SourceBadge(source: segment.source, speaker: segment.speaker)
+                            .accessibilityHidden(true)
+                    }
                 } else {
                     Color.clear
                         .frame(height: 16)
@@ -1868,16 +1959,16 @@ private struct TranscriptRow: View {
                     // a monospaced face made each stamp read as code.
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
             }
             .frame(width: 94, alignment: .trailing)
-            .accessibilityHidden(true)
 
             Text(segment.text)
                 .font(NookType.transcript)
                 .lineSpacing(5)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityLabel("\(segment.source.label): \(segment.text)")
+                .accessibilityLabel("\(segment.speakerLabel), \(segment.timestamp): \(segment.text)")
                 .accessibilityValue(segment.timestamp)
 
             if isFlagged {
@@ -2217,7 +2308,7 @@ enum TranscriptBadgeGroupingPolicy {
             let previousEnd = previous.startTime + max(0, previous.duration)
             let gap = segment.startTime - previousEnd
             let meaningfulGap = !startsAfterPrevious || gap > maximumAdjacentGap
-            if segment.source != previous.source
+            if segment.source != previous.source || segment.speaker != previous.speaker
                 || meaningfulGap
                 || crossesSessionBoundary
             {

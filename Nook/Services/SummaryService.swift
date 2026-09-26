@@ -1293,7 +1293,7 @@ actor SummaryService {
 
     static func promptText(for transcript: [TranscriptSegment]) -> String {
         transcript.map {
-            "[\($0.timestamp)] \($0.source.label): \(Self.masked($0.text))"
+            "[\($0.timestamp)] \($0.speakerLabel): \(Self.masked($0.text))"
         }.joined(separator: "\n")
     }
 

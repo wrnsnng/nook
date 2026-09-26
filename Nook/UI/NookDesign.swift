@@ -502,14 +502,16 @@ struct NookMark: View {
 struct SourceBadge: View {
     let source: TranscriptSegment.Source
     var compact = false
+    /// A separated speaker's name, shown in place of the source label.
+    var speaker: String? = nil
 
     var body: some View {
-        Label(source.label, systemImage: source.symbol)
+        Label(speaker ?? source.label, systemImage: speaker == nil ? source.symbol : "person.fill")
             .labelStyle(.titleAndIcon)
             .font((compact ? Font.caption2 : Font.caption).weight(.medium))
             .foregroundStyle(.secondary)
             .symbolRenderingMode(.monochrome)
-            .accessibilityLabel(source.label)
+            .accessibilityLabel(speaker ?? source.label)
     }
 }
 

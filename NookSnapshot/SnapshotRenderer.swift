@@ -359,6 +359,22 @@ struct SnapshotRenderer {
             )
         case _ where mode.hasPrefix("detail"):
             var detailNote = roundTripped
+            if mode.contains("speakers") {
+                // Alternate the meeting side between two voices and name one,
+                // as separation and a user's naming would leave it.
+                var index = 0
+                var assignments: [UUID: Int] = [:]
+                for segment in detailNote.transcript where segment.source != .microphone {
+                    assignments[segment.id] = index % 2
+                    index += 1
+                }
+                detailNote.transcript = SpeakerNames.apply(assignments, to: detailNote.transcript)
+                if case .renamed(let named) = SpeakerNames.rename(
+                    "Speaker 1", to: "Ana", in: detailNote.transcript
+                ) {
+                    detailNote.transcript = named
+                }
+            }
             if mode.contains("fallback") {
                 detailNote.summary = SummaryService.fallbackInsights(
                     transcript: detailNote.transcript, fallbackTitle: detailNote.title
