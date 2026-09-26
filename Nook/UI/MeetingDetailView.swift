@@ -24,35 +24,31 @@ struct SummaryRegenerationProgressCard: View {
     let onCancel: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// A status line, as Mail and Music report background work: a small
+    /// spinner, what is happening, and a way to stop it. No card around it.
     var body: some View {
-        HStack(spacing: 14) {
-            NookPresence(state: .thinking, size: 30)
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(RegenerationCopy.headline(for: stage))
-                    .font(NookType.bodyEmphasized)
+                    .font(.headline)
                 Text(RegenerationCopy.detail(for: stage))
-                    .font(NookType.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
+                    .monospacedDigit()
                     .contentTransition(reduceMotion ? .identity : .numericText())
             }
             .accessibilityElement(children: .combine)
             Spacer(minLength: 0)
-            Button("Cancel", action: onCancel)
-                .buttonStyle(.bordered)
+            Button("Cancel Summary", action: onCancel)
+                .controlSize(.small)
                 .accessibilityLabel("Cancel summary regeneration")
-                .help("Keep the current summary and stop accepting this result.")
+                .help("Keep the saved transcript and notes, and stop accepting this summary result.")
         }
-        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            NookPalette.accent.opacity(0.07),
-            in: RoundedRectangle(cornerRadius: NookRadius.surface, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: NookRadius.surface, style: .continuous)
-                .stroke(NookPalette.accent.opacity(0.16), lineWidth: 0.7)
-        }
         .accessibilityElement(children: .contain)
     }
 }
@@ -64,6 +60,7 @@ struct MeetingDetailView: View {
     @EnvironmentObject private var shortcuts: ShortcutStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let note: MeetingNote
+    private let keepsSummaryOnNavigation: Bool
 
     @State private var tab: DetailTab = .notes
     @State private var transcriptSearch = ""
@@ -108,13 +105,25 @@ struct MeetingDetailView: View {
     /// badge. Rows whose badge is hidden still name their source through the
     /// row's accessibility label below.
     @State private var transcriptSourceBadgeIDs: Set<UUID>
+    @State private var reviewingSummaryItem: SummaryItemReviewSession?
+    @State private var showsFollowUpDraft = false
+    /// The speaker being named, and the name being typed for them.
+    @State private var namingSpeaker: String?
+    @State private var speakerNameDraft = ""
+    @State private var lastSummaryReview: SummaryItemReviewSession?
+    @State private var reviewSentences: [SummaryReviewItem] = []
+    @FocusState private var summaryReviewFocus: String?
+    @AccessibilityFocusState private var summaryReviewAccessibilityFocus: String?
 
     init(
         note: MeetingNote,
         initialTab: DetailTab = .notes,
-        initialTranscriptSearch: String = ""
+        initialTranscriptSearch: String = "",
+        summarySession: SummaryRegenerationSession? = nil
     ) {
         self.note = note
+        keepsSummaryOnNavigation = summarySession != nil
+        _regeneration = StateObject(wrappedValue: summarySession ?? SummaryRegenerationSession())
         let startingTab = note.kind == .spoken
             && note.transcript.isEmpty
             && initialTab == .transcript
@@ -138,7 +147,7 @@ struct MeetingDetailView: View {
 
             VStack(spacing: 0) {
                 documentHeader
-                SoftDivider()
+                savedSummaryStatus
 
                 ZStack {
                     switch tab {
@@ -161,6 +170,7 @@ struct MeetingDetailView: View {
             }
         }
         .onAppear {
+            reviewSentences = SummaryReviewItem.sentences(in: note.summary)
             markdownDraft.prepare(for: note, store: store)
             personalNotes.prepare(for: note, store: store)
             markdownCharacterCount = markdownDraft.rawMarkdown.count
@@ -175,6 +185,7 @@ struct MeetingDetailView: View {
             markdownCharacterCount = markdown.count
         }
         .onChange(of: note) { _, newValue in
+            reviewSentences = SummaryReviewItem.sentences(in: newValue.summary)
             contentWordCount = newValue.detailContentWordCount
             transcriptSourceBadgeIDs = TranscriptBadgeGroupingPolicy.visibleBadgeIDs(
                 in: Self.filteredTranscript(
@@ -204,9 +215,15 @@ struct MeetingDetailView: View {
         }
         .onChange(of: store.storageGeneration) { _, _ in
             regeneration.cancel()
+            reviewingSummaryItem?.cancel()
+            reviewingSummaryItem = nil
+            lastSummaryReview = nil
         }
         .onChange(of: note.libraryIdentity) { _, _ in
             regeneration.cancel()
+            reviewingSummaryItem?.cancel()
+            reviewingSummaryItem = nil
+            lastSummaryReview = nil
         }
         .onChange(of: regeneration.completion?.id) { _, _ in
             if let completion = regeneration.completion {
@@ -234,7 +251,8 @@ struct MeetingDetailView: View {
         // Backstop for navigation that races focus loss: the view keeps its
         // own note, so committing here always writes the right file.
         .onDisappear {
-            regeneration.cancel()
+            reviewingSummaryItem?.cancel()
+            if !keepsSummaryOnNavigation { regeneration.cancel() }
             saveTitle()
             savePersonalNotes()
         }
@@ -242,6 +260,26 @@ struct MeetingDetailView: View {
             reduceMotion ? nil : .easeOut(duration: 0.24),
             value: tab
         )
+        .toolbar { detailToolbar }
+        .sheet(isPresented: $showsFollowUpDraft) {
+            FollowUpDraftView(note: note)
+        }
+        .alert(
+            "Name \(namingSpeaker ?? "Speaker")",
+            isPresented: Binding(
+                get: { namingSpeaker != nil },
+                set: { if !$0 { namingSpeaker = nil } }
+            )
+        ) {
+            TextField("Name", text: $speakerNameDraft)
+            Button("Cancel", role: .cancel) { namingSpeaker = nil }
+            Button("Save") { saveSpeakerName() }
+        } message: {
+            Text("Every line this person said in this meeting will use the name. It is saved in the note.")
+        }
+        .sheet(item: $reviewingSummaryItem, onDismiss: returnFromSummaryReview) { session in
+            SummaryItemReviewView(session: session)
+        }
     }
 
     private var tabTransition: AnyTransition {
@@ -259,39 +297,71 @@ struct MeetingDetailView: View {
         note.kind != .spoken || !note.transcript.isEmpty
     }
 
+    /// Title and metadata only. The view switcher and actions live in the
+    /// window toolbar, where every Mac document window keeps them.
     private var documentHeader: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .bottom, spacing: 28) {
-                    titleBlock
-                    Spacer(minLength: 24)
-                    DetailTabBar(
-                        selection: $tab,
-                        showsTranscript: showsTranscriptTab
-                    )
-                    detailActions
-                }
+        titleBlock
+            .nookReadableColumn()
+            .padding(.top, 28)
+            .padding(.bottom, 4)
+    }
 
-                VStack(alignment: .leading, spacing: 18) {
-                    titleBlock
-                    HStack {
-                        DetailTabBar(
-                            selection: $tab,
-                            showsTranscript: showsTranscriptTab
-                        )
-                        Spacer()
-                        detailActions
-                    }
+    @ToolbarContentBuilder
+    private var detailToolbar: some ToolbarContent {
+        ToolbarItem(placement: .principal) {
+            DetailTabBar(selection: $tab, showsTranscript: showsTranscriptTab)
+        }
+        ToolbarItem(placement: .automatic) {
+            // The note itself: a portable Markdown file that opens anywhere.
+            if let fileURL = note.fileURL {
+                ShareLink(item: fileURL, preview: SharePreview(note.title)) {
+                    Label("Share", systemImage: "square.and.arrow.up")
                 }
+                .help("Share this note")
             }
         }
-        .padding(.horizontal, 42)
-        .padding(.top, 32)
-        .padding(.bottom, 24)
+        ToolbarItem(placement: .automatic) {
+            detailActions
+        }
     }
 
     private var detailActions: some View {
         Menu {
+            Button {
+                beginTitleEditing()
+            } label: {
+                Label("Rename…", systemImage: "pencil")
+            }
+            .disabled(!canRenameTitle || isEditingTitle)
+            .help(titleRenameHelp)
+
+            Divider()
+
+            if note.kind != .digest {
+                Button {
+                    showsFollowUpDraft = true
+                } label: {
+                    Label("Draft Follow-up…", systemImage: "envelope")
+                }
+                .help("Write a recap of this meeting to review and send yourself")
+            }
+
+            ShareLink(
+                item: FollowUpDraft.make(from: note, format: .chat).body,
+                subject: Text(note.title),
+                preview: SharePreview(note.title)
+            ) {
+                Label("Share Summary…", systemImage: "text.bubble")
+            }
+
+            if let fileURL = note.fileURL {
+                ShareLink(item: fileURL, preview: SharePreview(note.title)) {
+                    Label("Share Markdown File…", systemImage: "doc.text")
+                }
+            }
+
+            Divider()
+
             Button {
                 copyMarkdown()
             } label: {
@@ -340,14 +410,9 @@ struct MeetingDetailView: View {
                 RecordIntoNoteMenuItem(note: note)
             }
         } label: {
-            Image(systemName: "ellipsis")
-                .font(NookType.control)
-                .frame(width: 28, height: 28)
-                .contentShape(Rectangle())
+            Label(detailActionsLabel, systemImage: "ellipsis.circle")
         }
-        .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
-        .fixedSize()
         .help(detailActionsLabel)
         .accessibilityLabel(detailActionsLabel)
     }
@@ -374,73 +439,55 @@ struct MeetingDetailView: View {
                     )
                     .accessibilityAddTraits(.isHeader)
             } else {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(note.title)
-                        .font(NookType.title)
-                        .tracking(-0.45)
-                        .lineLimit(2)
-                        .textSelection(.enabled)
-                        .accessibilityLabel("\(titleLabel): \(note.title)")
-                        .accessibilityHint(
-                            titleReadOnlyHint
-                        )
-                        .accessibilityAddTraits(.isHeader)
-
-                    Button {
-                        beginTitleEditing()
-                    } label: {
-                        Image(systemName: "pencil")
-                            .font(.system(size: 12, weight: .semibold))
-                            .frame(width: 28, height: 28)
-                            .contentShape(Rectangle())
+                // Renamed the way Finder and Voice Memos rename: double-click
+                // the name, or choose Rename from the actions menu. A pencil
+                // beside every title was chrome for a rare action.
+                Text(note.title)
+                    .font(NookType.title)
+                    .tracking(-0.45)
+                    .lineLimit(2)
+                    // Not selectable: double-click belongs to rename here, and
+                    // word selection would compete for the same gesture.
+                    .onTapGesture(count: 2) {
+                        if canRenameTitle { beginTitleEditing() }
                     }
-                    .buttonStyle(.borderless)
-                    .disabled(!canRenameTitle)
-                    .help(titleRenameHelp)
-                    .accessibilityLabel(renameLabel)
-                    .accessibilityHint(titleRenameHelp)
-                }
+                    .help(canRenameTitle ? "Double-click to rename" : titleRenameHelp)
+                    .accessibilityLabel("\(titleLabel): \(note.title)")
+                    .accessibilityHint(titleReadOnlyHint)
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityAction(named: renameLabel) {
+                        if canRenameTitle { beginTitleEditing() }
+                    }
             }
 
             detailMetadata
         }
     }
 
+    /// One quiet line with middle dots, the way Photos and Music write
+    /// details, rather than a row of separately spaced labels.
     private var detailMetadata: some View {
-        HStack(spacing: 15) {
-            if note.kind == .spoken {
-                NookMetadataLabel(
-                    title: "Spoken note",
-                    symbol: "waveform.badge.mic",
-                    tint: NookPalette.accent
-                )
-                NookMetadataLabel(
-                    title: "Created "
-                        + note.startedAt.formatted(
-                            date: .abbreviated,
-                            time: .shortened
-                        ),
-                    symbol: "calendar"
-                )
-            } else {
-                NookMetadataLabel(
-                    title: note.startedAt.formatted(
-                        date: .abbreviated,
-                        time: .shortened
-                    ),
-                    symbol: "calendar"
-                )
-                NookMetadataLabel(title: note.durationLabel, symbol: "clock")
-                if !note.sourceApp.isEmpty {
-                    NookMetadataLabel(title: note.sourceApp, symbol: "macbook")
-                }
-            }
+        Text(metadataParts.joined(separator: " · "))
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .monospacedDigit()
+            .lineLimit(1)
+    }
 
-            NookMetadataLabel(
-                title: "\(contentWordCount) words",
-                symbol: "text.word.spacing"
+    private var metadataParts: [String] {
+        var parts: [String] = []
+        if note.kind == .spoken {
+            parts.append("Spoken note")
+            parts.append(
+                "Created " + note.startedAt.formatted(date: .abbreviated, time: .shortened)
             )
+        } else {
+            parts.append(note.startedAt.formatted(date: .abbreviated, time: .shortened))
+            parts.append(note.durationLabel)
+            if !note.sourceApp.isEmpty { parts.append(note.sourceApp) }
         }
+        parts.append("\(contentWordCount) words")
+        return parts
     }
 
     private var titleLabel: String {
@@ -489,7 +536,7 @@ struct MeetingDetailView: View {
     private var notesView: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 38) {
-                if hasPrimaryContent {
+                if hasPrimaryContent || (note.kind == .meeting && !note.transcript.isEmpty) {
                     summarySection
                 }
 
@@ -515,9 +562,10 @@ struct MeetingDetailView: View {
                                         .font(NookType.transcript)
                                         .lineSpacing(4)
                                         .textSelection(.enabled)
+                                    summaryReviewButton(.list(.keyPoint, index: index, in: note))
                                 }
-                                .accessibilityElement(children: .combine)
-                                .accessibilityLabel("Key point \(index + 1): \(item)")
+                                .accessibilityElement(children: .contain)
+                                .modifier(PublishesRowHover())
                             }
                         }
                     }
@@ -530,7 +578,7 @@ struct MeetingDetailView: View {
                         tint: NookPalette.accent
                     ) {
                         VStack(alignment: .leading, spacing: 16) {
-                            ForEach(Array(note.decisions.enumerated()), id: \.offset) { _, decision in
+                            ForEach(Array(note.decisions.enumerated()), id: \.offset) { index, decision in
                                 HStack(alignment: .top, spacing: 13) {
                                     // Not a tick in a circle. That is exactly
                                     // the action-item control one section
@@ -538,18 +586,19 @@ struct MeetingDetailView: View {
                                     // somebody had already completed.
                                     Image(systemName: "arrow.turn.down.right")
                                         .font(NookType.caption.weight(.semibold))
-                                        .foregroundStyle(NookPalette.accent)
+                                        .foregroundStyle(.secondary)
                                         .frame(width: 20, height: 20)
                                         .accessibilityHidden(true)
                                     Text(decision)
-                                        .font(NookType.transcriptEmphasized)
+                                        .font(NookType.transcript)
                                         .lineSpacing(4)
                                         .textSelection(.enabled)
                                         .frame(maxWidth: .infinity, alignment: .leading)
+                                    summaryReviewButton(.list(.decision, index: index, in: note))
                                 }
                                 .padding(.vertical, 2)
-                                .accessibilityElement(children: .ignore)
-                                .accessibilityLabel("Decision: \(decision)")
+                                .accessibilityElement(children: .contain)
+                                .modifier(PublishesRowHover())
                             }
                         }
                     }
@@ -559,13 +608,32 @@ struct MeetingDetailView: View {
                     actionItemsSection
                 }
 
+                if note.kind == .meeting, !note.openQuestions.isEmpty {
+                    EditorialSection(title: "Open questions", symbol: "questionmark.bubble",
+                                     tint: NookPalette.accent) {
+                        VStack(alignment: .leading, spacing: 16) {
+                            ForEach(Array(note.openQuestions.enumerated()), id: \.offset) { index, question in
+                                HStack(alignment: .top) {
+                                    Text(question)
+                                        .font(NookType.transcript)
+                                        .textSelection(.enabled)
+                                        .accessibilityLabel("Open question \(index + 1): \(question)")
+                                    Spacer(minLength: 0)
+                                    summaryReviewButton(.list(.question, index: index, in: note))
+                                }
+                                .modifier(PublishesRowHover())
+                            }
+                        }
+                    }
+                }
+
                 if note.kind != .spoken,
                    checklistLines.isEmpty,
                    note.keyPoints.isEmpty,
                    note.decisions.isEmpty,
                    note.actionItems.isEmpty {
                     Label(
-                        "This conversation didn’t produce any explicit decisions or action items.",
+                        SummaryFallback.emptyStructuredMessage(provenance: note.summaryProvenance, pending: note.summaryPending),
                         systemImage: "leaf"
                     )
                     .font(NookType.body)
@@ -573,10 +641,8 @@ struct MeetingDetailView: View {
                     .padding(.top, -16)
                 }
             }
-            .padding(.horizontal, 48)
-            .padding(.vertical, 42)
-            .frame(maxWidth: 820, alignment: .leading)
-            .frame(maxWidth: .infinity)
+            .padding(.vertical, 28)
+            .nookReadableColumn()
         }
     }
 
@@ -613,10 +679,11 @@ struct MeetingDetailView: View {
                                 systemName: line.isChecked
                                     ? "checkmark.circle.fill" : "circle"
                             )
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(.system(size: 15))
                             .foregroundStyle(
                                 line.isChecked
-                                    ? NookPalette.success : NookPalette.accent
+                                    ? AnyShapeStyle(NookPalette.accent)
+                                    : AnyShapeStyle(.secondary)
                             )
                             // The glyph stays small; the frame is the hit target.
                             .frame(width: 30, height: 30)
@@ -629,24 +696,42 @@ struct MeetingDetailView: View {
                             "\(line.isChecked ? "Reopen" : "Complete"): \(line.displayText)"
                         )
 
-                        Text(line.displayText)
-                            .font(NookType.transcript)
-                            .lineSpacing(4)
-                            .strikethrough(line.isChecked)
-                            .foregroundStyle(
-                                line.isChecked ? .secondary : Color(nsColor: .labelColor)
-                            )
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        let parsed = ActionItemOwner.parse(line.displayText)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(parsed.displayTask)
+                                .font(NookType.transcript)
+                                .lineSpacing(4)
+                                .strikethrough(line.isChecked)
+                                .foregroundStyle(
+                                    line.isChecked ? .secondary : Color(nsColor: .labelColor)
+                                )
+                                .textSelection(.enabled)
+                            // The owner, read from the item's own wording.
+                            if let owner = parsed.owner {
+                                Label(owner, systemImage: "person.fill")
+                                    .font(.caption.weight(.medium))
+                                    .foregroundStyle(.secondary)
+                                    .labelStyle(.titleAndIcon)
+                                    .accessibilityLabel("Owner: \(owner)")
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
                         if let dueDate = line.dueDate {
                             Text("Due \(dueDate.formatted(.dateTime.month().day()))")
                                 .font(NookType.caption.weight(.medium))
                                 .foregroundStyle(.secondary)
                         }
+                        // File line indices can differ from decoded list indices
+                        // for hand-edited Markdown. Never target a different item.
+                        if note.actionItems.indices.contains(line.index),
+                           note.actionItems[line.index].utf8.elementsEqual(line.text.utf8) {
+                            summaryReviewButton(.list(.action, index: line.index, in: note))
+                        }
                     }
                     .padding(.vertical, 8)
                     .accessibilityElement(children: .contain)
+                    .modifier(PublishesRowHover())
 
                     if index < checklistLines.count - 1 {
                         Divider()
@@ -762,10 +847,10 @@ struct MeetingDetailView: View {
                         set: { personalNotesFocused = $0 }
                     ),
                     contentInsets: EdgeInsets(
-                        top: 9,
-                        leading: 9,
-                        bottom: 9,
-                        trailing: 9
+                        top: 4,
+                        leading: 0,
+                        bottom: 4,
+                        trailing: 0
                     ),
                     lineSpacing: 5
                 )
@@ -773,10 +858,12 @@ struct MeetingDetailView: View {
                 .accessibilityHint(
                     "Saved into the My notes section of this meeting’s Markdown file"
                 )
-                .frame(minHeight: 118)
+                .frame(minHeight: 44)
 
-                SoftDivider()
-
+                // Nothing to report most of the time, so nothing is drawn.
+                // Status and Save appear with an unsaved edit or a result.
+                if markdownDraft.hasChanges || personalNotes.hasChanges
+                    || personalNotes.statusMessage != nil {
                 HStack(spacing: 10) {
                     if markdownDraft.hasChanges {
                         Label(
@@ -802,10 +889,6 @@ struct MeetingDetailView: View {
                         Text("Saves when you click away")
                             .font(NookType.caption)
                             .foregroundStyle(.secondary)
-                    } else {
-                        Text("Stored locally in this Markdown file")
-                            .font(NookType.caption)
-                            .foregroundStyle(.secondary)
                     }
 
                     Spacer()
@@ -815,7 +898,7 @@ struct MeetingDetailView: View {
                     // an autosaving field with no way to ask is a promise you
                     // cannot check. It confirms rather than being the only
                     // path, so forgetting it costs nothing.
-                    Button("Save notes") {
+                    Button("Save Notes") {
                         savePersonalNotes()
                     }
                     .disabled(
@@ -828,26 +911,11 @@ struct MeetingDetailView: View {
                             .eventModifiers
                     )
                 }
-                .padding(.horizontal, 14)
-                .frame(minHeight: 42)
+                .controlSize(.small)
+                .frame(minHeight: 32)
+                }
             }
-            .background(
-                NookPalette.paper,
-                in: RoundedRectangle(
-                    cornerRadius: NookRadius.surface,
-                    style: .continuous
-                )
-            )
-            .overlay {
-                RoundedRectangle(
-                    cornerRadius: NookRadius.surface,
-                    style: .continuous
-                )
-                    .stroke(
-                        Color(nsColor: .separatorColor).opacity(0.52),
-                        lineWidth: 0.7
-                    )
-            }
+            // No card: like Notes, the page itself is the writing surface.
         }
     }
 
@@ -886,24 +954,49 @@ struct MeetingDetailView: View {
 
     private var summarySection: some View {
         VStack(alignment: .leading, spacing: 16) {
-            NookSectionLabel(
-                title: note.kind == .spoken ? "Spoken words" : "The gist",
-                symbol: note.kind == .spoken
-                    ? "waveform" : "text.alignleft",
-                tint: NookPalette.accent
-            )
+            HStack(alignment: .firstTextBaseline) {
+                NookSectionLabel(
+                    title: note.kind == .spoken ? "Spoken words"
+                        : note.summaryProvenance != nil ? "Fallback write-up" : "The gist",
+                    symbol: note.kind == .spoken
+                        ? "waveform" : "text.alignleft",
+                    tint: NookPalette.accent
+                )
+                .focusable()
+                // The heading is only where focus returns after a review
+                // closes. A ring around it on every open read as a bug.
+                .focusEffectDisabled()
+                .focused($summaryReviewFocus, equals: "summary-section")
+                .accessibilityFocused($summaryReviewAccessibilityFocus, equals: "summary-section")
 
-            if isRegenerating {
-                regenerationStatusCard
-            } else {
-                summaryProse
+                Spacer(minLength: 12)
+
+                if SummaryRegenerator.isAvailable(for: note) {
+                    SummaryRecipeControl(
+                        recipe: Binding(get: { note.summaryRecipe }, set: { selectSummaryRecipe($0) }),
+                        isEnabled: !markdownDraft.hasChanges && !isRegenerating,
+                        regenerate: regenerateSummary
+                    )
+                }
             }
+            summaryProse
         }
     }
 
     @ViewBuilder
     private var summaryProse: some View {
-        if summaryParagraphs.count < 2 {
+        if note.kind == .meeting, !reviewSentences.isEmpty {
+            VStack(alignment: .leading, spacing: 14) {
+                ForEach(reviewSentences) { item in
+                    HStack(alignment: .top, spacing: 12) {
+                        summaryParagraphText(item.text)
+                        summaryReviewButton(item)
+                    }
+                    .accessibilityElement(children: .contain)
+                    .modifier(PublishesRowHover())
+                }
+            }
+        } else if summaryParagraphs.count < 2 {
             summaryParagraphText(summaryParagraphs.first ?? displaySummary)
         } else {
             VStack(alignment: .leading, spacing: 14) {
@@ -925,11 +1018,61 @@ struct MeetingDetailView: View {
         Text(paragraph)
             .font(
                 note.kind == .spoken
-                    ? NookType.spoken : NookType.editorialSummary
+                    ? NookType.spoken
+                    : note.summaryProvenance != nil ? NookType.transcript : NookType.editorialSummary
             )
             .lineSpacing(7)
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func summaryReviewButton(_ item: SummaryReviewItem?) -> some View {
+        if note.kind == .meeting, !note.transcript.isEmpty, let item, item.isCurrent(in: note) {
+            Button { beginSummaryReview(item) } label: {
+                Image(systemName: "text.quote")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 26, height: 26)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .modifier(RevealedOnRowHover(isFocused: summaryReviewFocus == item.id))
+            .accessibilityLabel("Show supporting transcript for \(item.label): \(item.text)")
+            .help("Review transcript support or correct this item")
+            .disabled(markdownDraft.hasChanges || isRegenerating || isEditingTitle)
+            .focused($summaryReviewFocus, equals: item.id)
+            .accessibilityFocused($summaryReviewAccessibilityFocus, equals: item.id)
+        }
+    }
+
+    private func beginSummaryReview(_ item: SummaryReviewItem) {
+        guard !markdownDraft.hasChanges, !isRegenerating, !isEditingTitle else { return }
+        do {
+            if personalNotes.noteID == note.id, personalNotes.hasExactChanges {
+                _ = try personalNotes.save(note: note, store: store)
+            }
+            guard let current = store.uniqueNote(id: note.id),
+                  current.libraryIdentity == note.libraryIdentity, item.isCurrent(in: current) else {
+                throw SummaryReviewError.changed
+            }
+            let session = SummaryItemReviewSession(note: current, item: item, generation: store.storageGeneration)
+            lastSummaryReview = session
+            summaryReviewFocus = nil
+            summaryReviewAccessibilityFocus = nil
+            reviewingSummaryItem = session
+        } catch { showCopyNotice(error.localizedDescription, severity: .failure) }
+    }
+
+    private func returnFromSummaryReview() {
+        guard let session = lastSummaryReview else { return }
+        session.cancel()
+        // After removal the same index belongs to a different item. Return to
+        // the section, never pretend that different item was the origin.
+        let target = session.returnFocusID(in: note)
+        summaryReviewFocus = target
+        summaryReviewAccessibilityFocus = target
+        lastSummaryReview = nil
     }
 
     private var filteredTranscript: [TranscriptSegment] {
@@ -943,7 +1086,7 @@ struct MeetingDetailView: View {
         guard !search.isEmpty else { return note.transcript }
         return note.transcript.filter {
             $0.text.localizedCaseInsensitiveContains(search)
-                || $0.source.label.localizedCaseInsensitiveContains(search)
+                || $0.speakerLabel.localizedCaseInsensitiveContains(search)
         }
     }
 
@@ -1059,7 +1202,7 @@ struct MeetingDetailView: View {
         let audioURL = keptAudioURL
         return VStack(spacing: 0) {
             transcriptSearchBar
-            SoftDivider()
+            speakersBar
 
             // Search filters passages, not the recording. Keep its transport
             // and failures reachable even when no passage matches.
@@ -1074,10 +1217,8 @@ struct MeetingDetailView: View {
                             .padding(.bottom, 12)
                     }
                 }
-                .padding(.horizontal, 44)
                 .padding(.top, 16)
-                .frame(maxWidth: 880)
-                .frame(maxWidth: .infinity)
+                .nookReadableColumn()
             }
 
             if segments.isEmpty {
@@ -1101,16 +1242,15 @@ struct MeetingDetailView: View {
                                     playAction: playAction(
                                         for: segment,
                                         audioURL: audioURL
-                                    )
+                                    ),
+                                    nameSpeaker: beginNamingSpeaker
                                 )
                                 .id(segment.id)
                             }
                         }
-                        .padding(.horizontal, 44)
-                        .padding(.top, audioURL == nil ? 16 : 0)
+                        .padding(.top, audioURL == nil ? 8 : 0)
                         .padding(.bottom, 16)
-                        .frame(maxWidth: 880)
-                        .frame(maxWidth: .infinity)
+                        .nookReadableColumn()
                     }
                     .onChange(of: requestedMomentOffset, initial: true) { _, newValue in
                         guard let offset = newValue,
@@ -1142,31 +1282,9 @@ struct MeetingDetailView: View {
 
     private var transcriptSearchBar: some View {
         HStack(spacing: 12) {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                TextField("Find in transcript", text: $transcriptSearch)
-                    .textFieldStyle(.plain)
-                if !transcriptSearch.isEmpty {
-                    Button {
-                        transcriptSearch = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 24, height: 24)
-                    .contentShape(Rectangle())
-                    .accessibilityLabel("Clear transcript search")
-                }
-            }
-            .padding(.horizontal, 12)
-            .frame(height: 32)
-            .background(
-                .primary.opacity(0.055),
-                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
-            )
-            .frame(maxWidth: 360)
+            NativeSearchField(prompt: "Find in transcript", text: $transcriptSearch)
+                .accessibilityLabel("Find in transcript")
+                .frame(maxWidth: 360)
 
             // Only a search has a result count. With an empty field the line
             // read as a progress indicator through the transcript, which it
@@ -1184,13 +1302,13 @@ struct MeetingDetailView: View {
                 copyTranscript()
             } label: {
                 Label(
-                    copyNotice.current?.message == "Transcript copied" ? "Copied" : "Copy transcript",
+                    copyNotice.current?.message == "Transcript copied" ? "Copied" : "Copy Transcript",
                     systemImage: copyNotice.current?.message == "Transcript copied" ? "checkmark" : "doc.on.doc"
                 )
             }
             .buttonStyle(.borderless)
         }
-        .padding(.horizontal, 38)
+        .nookReadableColumn()
         .padding(.vertical, 12)
     }
 
@@ -1198,43 +1316,42 @@ struct MeetingDetailView: View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 12) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Plain Markdown source")
-                            .font(NookType.control)
-                        Text(note.fileURL?.lastPathComponent ?? "Unsaved note")
-                            .font(NookType.code)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
+                    // The tab already says Markdown; the file and its size
+                    // are the only facts worth a line.
+                    Text("\(note.fileURL?.lastPathComponent ?? "Unsaved note") · \(markdownCharacterCount) characters")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .contentTransition(.numericText())
 
                     Spacer()
 
-                    Text("\(markdownCharacterCount) characters")
-                        .font(NookType.micro.weight(.medium))
-                        .foregroundStyle(.secondary)
-                        .contentTransition(.numericText())
-
+                    // Revert and Save appear once there is an edit to act on.
+                    // They keep their place so the line does not jump, and
+                    // Save keeps Command-S.
                     Button("Revert") {
                         markdownDraft.discardChanges()
                     }
-                    .buttonStyle(NookButtonStyle())
+                    .buttonStyle(.bordered)
                     .disabled(!hasMarkdownChanges)
+                    .opacity(hasMarkdownChanges ? 1 : 0)
+                    .accessibilityHidden(!hasMarkdownChanges)
 
                     Button("Save") {
                         saveMarkdown()
                     }
-                    .buttonStyle(
-                        NookButtonStyle(
-                            tint: NookPalette.accent,
-                            isProminent: true
-                        )
-                    )
+                    .buttonStyle(.borderedProminent)
                     .disabled(!hasMarkdownChanges)
+                    .opacity(hasMarkdownChanges ? 1 : 0)
+                    .accessibilityHidden(!hasMarkdownChanges)
                     .keyboardShortcut(
                         shortcuts.binding(for: .saveNote).keyEquivalent,
                         modifiers: shortcuts.binding(for: .saveNote).eventModifiers
                     )
                 }
+                .controlSize(.small)
 
                 // The recovery instruction must not compete with the filename,
                 // counter, and Save controls for a narrow window's last space.
@@ -1252,10 +1369,8 @@ struct MeetingDetailView: View {
                     )))
                 }
             }
-            .padding(.horizontal, 28)
-            .padding(.vertical, 13)
-
-            SoftDivider()
+            .nookReadableColumn()
+            .padding(.vertical, 8)
 
             // Source is still prose to read. Full-pane lines ran past 200
             // characters on a wide window, which no one tracks by eye, so the
@@ -1267,17 +1382,13 @@ struct MeetingDetailView: View {
                 .font(NookType.code)
                 .lineSpacing(3)
                 .scrollContentBackground(.hidden)
-                .padding(.horizontal, 28)
-                .padding(.vertical, 20)
-                .frame(maxWidth: Self.markdownColumnWidth)
-                .frame(maxWidth: .infinity)
-                .background(Color(nsColor: .textBackgroundColor).opacity(0.66))
+                // The text view insets its first glyph by its line fragment
+                // padding; pull it back onto the column edge.
+                .padding(.horizontal, -5)
+                .padding(.bottom, 12)
+                .nookReadableColumn()
         }
     }
-
-    /// Roughly a hundred monospaced characters at `NookType.code`, plus the
-    /// editor's own horizontal padding.
-    private static let markdownColumnWidth: CGFloat = 716
 
     private var hasMarkdownChanges: Bool {
         markdownDraft.noteID == note.id && markdownDraft.hasChanges
@@ -1318,6 +1429,29 @@ struct MeetingDetailView: View {
     /// For every meeting whose write-up lost the model lottery: Apple
     /// Intelligence was off, busy, or declined, and the note saved with only
     /// transcript highlights. The failure named a cause; this is the remedy.
+    private func selectSummaryRecipe(_ recipe: SummaryRecipe) {
+        guard !markdownDraft.hasChanges, !isRegenerating,
+              recipe != note.summaryRecipe else { return }
+        do {
+            if personalNotes.noteID == note.id, personalNotes.hasExactChanges {
+                _ = try personalNotes.save(note: note, store: store)
+            }
+            guard var current = store.uniqueNote(id: note.id),
+                  current.libraryIdentity == note.libraryIdentity else {
+                showCopyNotice("This note is no longer in the library.", severity: .failure)
+                return
+            }
+            current.summaryRecipe = recipe
+            let saved = try store.save(current)
+            if markdownDraft.libraryIdentity == saved.libraryIdentity {
+                markdownDraft.refresh(for: saved, store: store)
+            }
+            showCopyNotice("Recipe saved. Regenerate Summary to apply it.")
+        } catch {
+            showCopyNotice("The recipe could not be saved. Your summary was kept.", severity: .failure)
+        }
+    }
+
     private func regenerateSummary() {
         guard SummaryRegenerator.isAvailable(for: note),
               !markdownDraft.hasChanges,
@@ -1351,21 +1485,62 @@ struct MeetingDetailView: View {
         let store = store
         regeneration.start(
             note: current,
-            library: {
-                .init(directoryURL: store.storageURL, generation: store.storageGeneration, notes: store.notes)
+            purpose: .forRetry(of: current),
+            library: { [weak store] in
+                guard let store else {
+                    return .init(directoryURL: URL(fileURLWithPath: "/"), generation: -1, notes: [])
+                }
+                return .init(directoryURL: store.storageURL, generation: store.storageGeneration, notes: store.notes)
             },
-            commit: { try store.save($0) }
+            commit: { [weak store] updated in
+                guard let store else { throw CancellationError() }
+                return try store.save(updated)
+            }
         )
     }
 
     private var isRegenerating: Bool { regeneration.isRunning }
 
-    /// The gist prose steps aside while the write-up runs; the lists below
-    /// stay, so what the user had remains readable until the new one lands.
+    /// The status sits above every tab rather than replacing the saved words.
+    /// Reading, exporting, and editing remain available during enrichment.
     @ViewBuilder
-    private var regenerationStatusCard: some View {
+    private var savedSummaryStatus: some View {
+        if note.kind == .meeting, let provenance = note.summaryProvenance {
+            SummaryFallbackCard(
+                provenance: provenance, isRunning: isRegenerating,
+                canRetry: SummaryRegenerator.isAvailable(for: note) && !markdownDraft.hasChanges,
+                retry: regenerateSummary
+            )
+            .nookReadableColumn()
+            .padding(.vertical, 8)
+        }
         if let stage = regeneration.stage {
             SummaryRegenerationProgressCard(stage: stage, onCancel: regeneration.cancel)
+                .nookReadableColumn()
+                .padding(.vertical, 8)
+        } else if SummaryRegenerator.isAvailable(for: note),
+                  let message = regeneration.statusMessage(
+                    summaryPending: note.summaryPending != nil && note.summaryProvenance == nil
+                  ) {
+            HStack(alignment: .top, spacing: 12) {
+                // The existing notice component bounds very long filesystem
+                // errors and makes their complete wording scrollable. A failed
+                // save must not push Retry or the document out of the window.
+                CopyConfirmationBanner(message: message, severity: .info, emphasizesMessage: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if note.summaryProvenance == nil {
+                    Button("Retry Summary", action: regenerateSummary)
+                        .buttonStyle(.bordered)
+                        .fixedSize()
+                        .disabled(markdownDraft.hasChanges)
+                        .help(markdownDraft.hasChanges
+                            ? "Save or revert Markdown edits before retrying"
+                            : "Summarize the saved transcript on this Mac")
+                }
+            }
+            .nookReadableColumn()
+            .padding(.vertical, 8)
+            .accessibilityElement(children: .contain)
         }
     }
 
@@ -1485,6 +1660,66 @@ struct MeetingDetailView: View {
         }
     }
 
+    /// Separated speakers, as buttons to name them. Shown only on notes whose
+    /// meeting side was separated; naming one updates every line they said.
+    @ViewBuilder
+    private var speakersBar: some View {
+        let speakers = SpeakerNames.speakers(in: note.transcript)
+        if !speakers.isEmpty {
+            HStack(spacing: 8) {
+                Text("Speakers")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                ForEach(speakers, id: \.self) { speaker in
+                    Button {
+                        beginNamingSpeaker(speaker)
+                    } label: {
+                        Label(speaker, systemImage: "person.fill")
+                    }
+                    .controlSize(.small)
+                    .help(SpeakerNames.isPlaceholder(speaker) ? "Name this speaker" : "Rename this speaker")
+                }
+                Spacer(minLength: 0)
+            }
+            .nookReadableColumn()
+            .padding(.bottom, 8)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Speakers")
+        }
+    }
+
+    private func beginNamingSpeaker(_ speaker: String) {
+        speakerNameDraft = SpeakerNames.isPlaceholder(speaker) ? "" : speaker
+        namingSpeaker = speaker
+    }
+
+    private func saveSpeakerName() {
+        guard let speaker = namingSpeaker else { return }
+        namingSpeaker = nil
+        // Same rule as renaming the title: never rewrite the file under an
+        // unsaved Markdown draft.
+        guard canRenameTitle else {
+            showCopyNotice(DetailRenamePolicy.markdownDraftBlockedMessage, severity: .info)
+            return
+        }
+        switch SpeakerNames.rename(speaker, to: speakerNameDraft, in: note.transcript) {
+        case .invalidName:
+            showCopyNotice("Choose a name other than You or Meeting", severity: .failure)
+        case .nameInUse:
+            showCopyNotice("Another speaker already has that name", severity: .failure)
+        case .renamed(let transcript):
+            var updated = note
+            updated.transcript = transcript
+            do {
+                let saved = try store.save(updated)
+                markdownDraft.refresh(for: saved, store: store)
+                showCopyNotice("Speaker named")
+            } catch {
+                showCopyNotice("The name couldn’t be saved", severity: .failure)
+            }
+        }
+    }
+
     private func saveMarkdown() {
         do {
             try markdownDraft.save(note: note, store: store)
@@ -1566,7 +1801,7 @@ struct MeetingDetailView: View {
 
     private func copyTranscript() {
         let transcript = note.transcript.map {
-            "[\($0.timestamp)] \($0.source.label): \($0.text)"
+            "[\($0.timestamp)] \($0.speakerLabel): \($0.text)"
         }.joined(separator: "\n\n")
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(transcript, forType: .string)
@@ -1610,7 +1845,7 @@ private struct RecordIntoNoteMenuItem: View {
         Button {
             meeting.continueRecording(into: note)
         } label: {
-            Label("Record into this note", systemImage: "record.circle")
+            Label("Record into This Note", systemImage: "record.circle")
         }
         .disabled(!canRecordIntoThisNote)
         .help(
@@ -1642,45 +1877,31 @@ private struct DetailTabBar: View {
         self.showsTranscript = showsTranscript
     }
 
+    /// The system segmented control, as Finder and Xcode use for switching
+    /// views of one document. It brings native keyboard, VoiceOver and
+    /// Increased Contrast behaviour that the hand-drawn underline tabs lacked.
     var body: some View {
-        HStack(spacing: 0) {
+        Picker("View", selection: animatedSelection) {
             ForEach(DetailTab.allCases.filter { tab in
                 showsTranscript || tab != .transcript
             }) { tab in
-                Button {
-                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
-                        selection = tab
-                    }
-                } label: {
-                    Label(tab.rawValue, systemImage: tab.symbol)
-                        .font(NookType.control)
-                        .padding(.horizontal, 12)
-                        .frame(height: 32)
-                        .foregroundStyle(
-                            selection == tab
-                                ? Color(nsColor: .labelColor)
-                                : Color(nsColor: .secondaryLabelColor)
-                        )
-                        .overlay(alignment: .bottom) {
-                            Rectangle()
-                                .fill(
-                                    selection == tab
-                                        ? NookPalette.accent
-                                        : Color.clear
-                                )
-                                .frame(height: 2)
-                        }
-                }
-                .buttonStyle(.plain)
-                .contentShape(Rectangle())
-                .accessibilityAddTraits(selection == tab ? .isSelected : [])
+                Text(tab.rawValue).tag(tab)
             }
         }
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(.primary.opacity(0.08))
-                .frame(height: 0.5)
-        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
+    }
+
+    private var animatedSelection: Binding<DetailTab> {
+        Binding(
+            get: { selection },
+            set: { tab in
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
+                    selection = tab
+                }
+            }
+        )
     }
 }
 
@@ -1709,30 +1930,45 @@ private struct TranscriptRow: View {
     var isPlaying = false
     /// Present only when kept audio exists; tapping plays this line.
     var playAction: (() -> Void)?
+    /// Present when this line has a separated speaker the user can name.
+    var nameSpeaker: ((String) -> Void)?
 
     var body: some View {
         HStack(alignment: .top, spacing: 18) {
             VStack(alignment: .trailing, spacing: 7) {
                 if showsSourceBadge {
-                    SourceBadge(source: segment.source)
+                    if let speaker = segment.speaker, let nameSpeaker {
+                        Button { nameSpeaker(speaker) } label: {
+                            SourceBadge(source: segment.source, speaker: speaker)
+                        }
+                        .buttonStyle(.plain)
+                        .help(SpeakerNames.isPlaceholder(speaker) ? "Name this speaker" : "Rename this speaker")
+                        .accessibilityLabel("\(speaker). Name this speaker")
+                    } else {
+                        // The row's own label already says who spoke.
+                        SourceBadge(source: segment.source, speaker: segment.speaker)
+                            .accessibilityHidden(true)
+                    }
                 } else {
                     Color.clear
                         .frame(height: 16)
                         .accessibilityHidden(true)
                 }
                 Text(segment.timestamp)
-                    .font(.system(size: 10, design: .monospaced))
+                    // SF with fixed-width digits, as Voice Memos writes times;
+                    // a monospaced face made each stamp read as code.
+                    .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
             }
             .frame(width: 94, alignment: .trailing)
-            .accessibilityHidden(true)
 
             Text(segment.text)
                 .font(NookType.transcript)
                 .lineSpacing(5)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityLabel("\(segment.source.label): \(segment.text)")
+                .accessibilityLabel("\(segment.speakerLabel), \(segment.timestamp): \(segment.text)")
                 .accessibilityValue(segment.timestamp)
 
             if isFlagged {
@@ -2072,7 +2308,7 @@ enum TranscriptBadgeGroupingPolicy {
             let previousEnd = previous.startTime + max(0, previous.duration)
             let gap = segment.startTime - previousEnd
             let meaningfulGap = !startsAfterPrevious || gap > maximumAdjacentGap
-            if segment.source != previous.source
+            if segment.source != previous.source || segment.speaker != previous.speaker
                 || meaningfulGap
                 || crossesSessionBoundary
             {
@@ -2114,5 +2350,69 @@ private extension MeetingNote {
             source = transcript.map(\.text).joined(separator: " ")
         }
         return source.split(whereSeparator: \.isWhitespace).count
+    }
+}
+
+/// The system search field, with its own clear button, focus ring and
+/// Increased Contrast treatment. SwiftUI's `.searchable` is already taken by
+/// the sidebar in this window, so the AppKit control is used directly.
+struct NativeSearchField: NSViewRepresentable {
+    let prompt: String
+    @Binding var text: String
+
+    func makeNSView(context: Context) -> NSSearchField {
+        let field = NSSearchField()
+        field.placeholderString = prompt
+        field.sendsSearchStringImmediately = true
+        field.delegate = context.coordinator
+        return field
+    }
+
+    func updateNSView(_ field: NSSearchField, context: Context) {
+        if field.stringValue != text { field.stringValue = text }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
+
+    final class Coordinator: NSObject, NSSearchFieldDelegate {
+        let text: Binding<String>
+        init(text: Binding<String>) { self.text = text }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSSearchField else { return }
+            text.wrappedValue = field.stringValue
+        }
+    }
+}
+
+extension EnvironmentValues {
+    /// Whether the pointer is over the summary row that contains a view.
+    @Entry var summaryRowIsHovered = false
+}
+
+/// Tracks the pointer over one summary row for the evidence button inside it.
+private struct PublishesRowHover: ViewModifier {
+    @State private var isHovered = false
+
+    func body(content: Content) -> some View {
+        content
+            .contentShape(Rectangle())
+            .onHover { isHovered = $0 }
+            .environment(\.summaryRowIsHovered, isHovered)
+    }
+}
+
+/// Per-row actions appear on hover, as Reminders' info button does. Opacity
+/// alone hides them, so they stay in the accessibility tree and in the key
+/// view loop, and they show whenever they hold keyboard focus.
+private struct RevealedOnRowHover: ViewModifier {
+    let isFocused: Bool
+    @Environment(\.summaryRowIsHovered) private var isHovered
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isHovered || isFocused ? 1 : 0)
+            .animation(reduceMotion ? nil : NookMotion.quick, value: isHovered)
     }
 }

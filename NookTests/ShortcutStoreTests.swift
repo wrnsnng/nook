@@ -56,6 +56,15 @@ struct ShortcutStoreTests {
         #expect(NookShortcutID.quickNoteDiscard.section == .quickNote)
     }
 
+    /// Taking a note has to work from inside the meeting app, so it is
+    /// global like flagging, and lives with the recording shortcuts.
+    @Test
+    func takingANoteIsAGlobalRecordingShortcut() {
+        #expect(NookShortcutID.takeNote.isGlobal)
+        #expect(NookShortcutID.takeNote.section == .recording)
+        #expect(NookShortcutID.takeNote.defaultShortcut.displayString == "⌥⌘N")
+    }
+
     /// Two actions shipped on one combination would fight out of the box.
     @Test
     func shippedDefaultsAreAllDifferent() {

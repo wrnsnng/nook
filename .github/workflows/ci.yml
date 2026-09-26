@@ -47,8 +47,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version='2.45.4'
-          expected_sha='090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc86bc170bdbef'
+          version='2.46.0'
+          expected_sha='4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806'
           archive="$RUNNER_TEMP/xcodegen-$version.zip"
           install_root="$RUNNER_TEMP/xcodegen-$version"
           curl --fail --location --proto '=https' --tlsv1.2 \
@@ -66,16 +66,34 @@ jobs:
           xcodegen generate
           git diff --exit-code -- Nook.xcodeproj
 
+      # Build-time only. The Nook target refuses to build without these
+      # pinned, checksum-verified models, and the app never downloads them.
+      - name: Fetch pinned speaker diarization models
+        run: ./Scripts/fetch-diarization-models.sh
+
       - name: Test release tooling
         run: python3 -m unittest discover -s Scripts/Tests
 
       - name: Test contributor configuration
+        shell: bash
         run: |
+          # Keep the original failure while exposing Swift Testing assertions
+          # that xcodebuild -quiet otherwise reduces to a test method name.
+          test_result="$RUNNER_TEMP/NookContributorTests.xcresult"
+          report_test_failure() {
+            local test_status=$?
+            if [ "$test_status" -ne 0 ] && [ -d "$test_result" ]; then
+              xcrun xcresulttool get test-results summary --path "$test_result" --compact || true
+            fi
+            exit "$test_status"
+          }
+          trap report_test_failure EXIT
           xcodebuild test -quiet \
             -project Nook.xcodeproj \
             -scheme Nook \
             -destination 'platform=macOS' \
             -derivedDataPath .build/ContributorDerivedData \
+            -resultBundlePath "$test_result" \
             CODE_SIGNING_ALLOWED=NO
 
       - name: Build contributor configuration
@@ -95,3 +113,4 @@ jobs:
           info="$app/Contents/Info.plist"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info")" = 'com.localfirst.nook.dev'
           test "$(/usr/libexec/PlistBuddy -c 'Print :NookOfficialBuild' "$info")" = 'NO'
+          ./Scripts/fetch-diarization-models.sh --check "$app/Contents/Resources/SpeakerDiarizationModels"

@@ -1,7 +1,8 @@
 import AppKit
 import Carbon.HIToolbox
 
-/// The system-wide "flag this moment" hotkey, active only while recording.
+/// A system-wide meeting hotkey (flag this moment, take a note), active only
+/// while recording.
 ///
 /// Carbon's `RegisterEventHotKey` for the same reasons dictation uses it: the
 /// keystroke is consumed globally, works in any app, and needs no
@@ -9,7 +10,10 @@ import Carbon.HIToolbox
 /// rebind in Settings takes effect here without restarting anything.
 @MainActor
 final class MomentHotKeyController {
-    var onFlag: (() -> Void)?
+    var onPress: (() -> Void)?
+    /// Which of Nook's hotkeys this is. Every handler on the application
+    /// target sees every hotkey press, so each one answers only its own.
+    nonisolated let identifier: UInt32
 
     private var hotKeyRef: EventHotKeyRef?
     private var eventHandler: EventHandlerRef?
@@ -19,8 +23,9 @@ final class MomentHotKeyController {
     /// can refuse one combination; a later valid rebind must still retry.
     private var isActive = false
 
-    init(shortcut: RecordedShortcut) {
+    init(shortcut: RecordedShortcut, identifier: UInt32 = 1) {
         self.shortcut = shortcut
+        self.identifier = identifier
     }
 
     /// Swaps the registered combination, keeping the registration alive when
@@ -49,7 +54,7 @@ final class MomentHotKeyController {
 
         let eventID = EventHotKeyID(
             signature: Self.signature,
-            id: 1
+            id: identifier
         )
         let status = RegisterEventHotKey(
             shortcut.keyCode,
@@ -82,13 +87,35 @@ final class MomentHotKeyController {
             eventClass: OSType(kEventClassKeyboard),
             eventKind: UInt32(kEventHotKeyPressed)
         )
-        let callback: EventHandlerUPP = { _, _, userData in
-            guard let userData else { return noErr }
+        let callback: EventHandlerUPP = { _, event, userData in
+            guard let userData, let event else {
+                return OSStatus(eventNotHandledErr)
+            }
             let controller = Unmanaged<MomentHotKeyController>
                 .fromOpaque(userData)
                 .takeUnretainedValue()
+            // Every handler installed on the application target sees every
+            // hotkey. Before a second one existed this answered all of them;
+            // a note shortcut would also have flagged a moment.
+            var pressed = EventHotKeyID()
+            let status = GetEventParameter(
+                event,
+                EventParamName(kEventParamDirectObject),
+                EventParamType(typeEventHotKeyID),
+                nil,
+                MemoryLayout<EventHotKeyID>.size,
+                nil,
+                &pressed
+            )
+            guard
+                status == noErr,
+                pressed.signature == 0x6E6B666C,
+                pressed.id == controller.identifier
+            else {
+                return OSStatus(eventNotHandledErr)
+            }
             MainActor.assumeIsolated {
-                controller.onFlag?()
+                controller.onPress?()
             }
             return noErr
         }

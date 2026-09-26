@@ -18,15 +18,24 @@ Contributor builds require no release credentials and use the development
 bundle identity with automatic updates disabled.
 
 1. Use macOS 26 and stable Xcode 26.
-2. Install XcodeGen 2.45.4.
-3. Regenerate the committed project and verify it is unchanged:
+2. Install XcodeGen 2.46.0.
+3. Fetch the speaker separation models once. They are downloaded at a pinned
+   revision, checked against pinned SHA-256 checksums and bundled into the app,
+   but never committed. The Nook target refuses to build without them, and
+   running the script again does nothing when they are already present:
+
+   ```sh
+   ./Scripts/fetch-diarization-models.sh
+   ```
+
+4. Regenerate the committed project and verify it is unchanged:
 
    ```sh
    xcodegen generate
    git diff --exit-code -- Nook.xcodeproj
    ```
 
-4. Run the tests:
+5. Run the tests:
 
    ```sh
    xcodebuild test -quiet \

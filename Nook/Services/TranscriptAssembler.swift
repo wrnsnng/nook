@@ -34,7 +34,8 @@ enum TranscriptAssembler {
             // Saved transcript lines often have different speakers or are
             // already farther apart than a paragraph can merge. Reject those
             // pairs before scanning both passages to count every word.
-            guard current.source == next.source, gap <= maximumGap else {
+            guard current.source == next.source, current.speaker == next.speaker,
+                  gap <= maximumGap else {
                 result.append(next.cleaned)
                 return
             }
@@ -63,7 +64,8 @@ enum TranscriptAssembler {
                 startTime: current.startTime,
                 duration: max(current.duration, nextEnd - current.startTime),
                 text: joinedText,
-                source: current.source
+                source: current.source,
+                speaker: current.speaker
             )
         }
     }
@@ -85,13 +87,15 @@ enum NoteContentSanitizer {
                 "no decisions",
                 "no action items",
                 "no key points",
+                "no open questions",
                 "not discussed",
                 "not specified",
             ]
             guard !value.isEmpty,
                   !placeholderPhrases.contains(normalized),
                   !normalized.hasPrefix("no decisions were"),
-                  !normalized.hasPrefix("no action items were")
+                  !normalized.hasPrefix("no action items were"),
+                  !normalized.hasPrefix("no open questions were")
             else {
                 return nil
             }
@@ -112,7 +116,8 @@ extension TranscriptSegment {
             text: text
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression),
-            source: source
+            source: source,
+            speaker: speaker
         )
     }
 }

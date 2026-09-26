@@ -6,6 +6,7 @@ if (( $# != 1 )); then
   exit 64
 fi
 
+SCRIPT_DIR="${0:A:h}"
 APP_PATH="$1"
 INFO_PLIST="$APP_PATH/Contents/Info.plist"
 SPARKLE_FRAMEWORK="$APP_PATH/Contents/Frameworks/Sparkle.framework"
@@ -96,6 +97,16 @@ SPARKLE_VERSION=$(read_plist_value "$SPARKLE_INFO_PLIST" CFBundleShortVersionStr
 [[ -f "$TRADEMARK_POLICY_PATH" ]] || fail "TRADEMARKS.md is not bundled."
 /usr/bin/grep -Fq "Sparkle $EXPECTED_SPARKLE_VERSION" "$NOTICES_PATH" \
   || fail "the bundled notices do not identify Sparkle $EXPECTED_SPARKLE_VERSION."
+/usr/bin/grep -Fq "FluidAudio" "$NOTICES_PATH" \
+  || fail "the bundled notices do not credit FluidAudio."
+/usr/bin/grep -Fq "CC BY 4.0" "$NOTICES_PATH" \
+  || fail "the bundled notices do not attribute the speaker diarization models."
+"$SCRIPT_DIR/fetch-diarization-models.sh" --check "$APP_PATH/Contents/Resources/SpeakerDiarizationModels" \
+  || fail "the bundled speaker diarization models are missing or differ from the pinned files."
+[[ ! -e "$APP_PATH/Contents/Resources/FluidAudio_FluidAudio.bundle" ]] \
+  || fail "FluidAudio's unused text-to-speech lexicon is bundled."
+/usr/bin/strings "$APP_PATH/Contents/MacOS/Nook" | /usr/bin/grep -Fq "NemoTextProcessing engine not linked" \
+  || fail "FluidAudio's text normalizer is linked; the FluidAudio package must have no traits."
 SPARKLE_LICENSE_SHA256=$(
   /usr/bin/shasum -a 256 "$SPARKLE_LICENSE_PATH" | /usr/bin/awk '{print $1}'
 )
@@ -173,4 +184,4 @@ for code_path in "${NESTED_CODE[@]}"; do
   assert_no_entitlement "$code_path" com.apple.security.get-task-allow
 done
 
-echo "Verified official release identity, Sparkle $SPARKLE_VERSION, bundled licenses and notices, and least-privilege entitlements."
+echo "Verified official release identity, Sparkle $SPARKLE_VERSION, bundled licenses and notices, pinned speaker diarization models, and least-privilege entitlements."

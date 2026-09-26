@@ -9,7 +9,7 @@ struct SnapshotRenderer {
         guard (2...4).contains(arguments.count),
               arguments.count < 4 || arguments[3] == "--interactive" else {
             FileHandle.standardError.write(
-                Data("Usage: NookSnapshot <output.png> [library|library-light|library-compact|welcome-light|welcome-dark|welcome-permission-light|welcome-permission-dark|welcome-ready-light|welcome-ready-dark|welcome-microphone-light|welcome-microphone-dark|welcome-speech-light|welcome-speech-dark|welcome-calendar-light|welcome-calendar-dark|welcome-dictation-light|welcome-dictation-dark|detail-transcript-light|detail-transcript-dark|detail-transcript-partial-light|detail-transcript-partial-dark|detail-transcript-no-matches-light|detail-transcript-no-matches-dark|detail-markdown-light|detail-markdown-dark|detail-markdown-conflict-light|detail-markdown-conflict-dark|detail-notes-light|detail-notes-dark|copy-failure-long-light|copy-failure-long-dark|copy-failure-pathological-light|copy-failure-pathological-dark|settings-about-light|settings-about-dark|settings-general-light|settings-general-dark|settings-listening-light|settings-listening-dark|settings-dictation-light|settings-dictation-dark|settings-assistant-unavailable-light|settings-assistant-unavailable-dark|settings-keyboard-light|settings-keyboard-dark|settings-privacy-light|settings-privacy-dark|settings-updates-light|settings-updates-dark|storage-light|storage-dark|storage-long-light|storage-long-dark|quick-note-light|quick-note-dark|quick-note-filled-light|quick-note-filled-dark|quick-note-codex-light|quick-note-codex-dark|quick-note-conflict-light|quick-note-conflict-dark|quick-note-conflict-codex-light|quick-note-conflict-codex-dark|quick-note-assistant-unavailable-light|quick-note-assistant-unavailable-dark|quick-note-assistant-running-light|quick-note-assistant-running-dark|quick-note-assistant-stopping-light|quick-note-assistant-stopping-dark|quick-note-filing-copy-retained-light|quick-note-filing-copy-retained-dark|draft-recovery-light|draft-recovery-dark|draft-recovery-minimum-light|draft-recovery-long-light|draft-recovery-invalid-light|draft-recovery-stale-light|draft-recovery-unavailable-light|recovery-section-light|recovery-section-dark|recovery-section-minimum-light|recovery-section-failure-light|recovery-section-failure-dark|recovery-section-library-light|library-draft-recovery-light|library-draft-recovery-dark|prep-light|prep-dark|ask-light|ask-dark|ask-answer-light|ask-answer-dark|ask-refusal-light|ask-refusal-dark|ask-long-light|ask-long-dark|ask-long-question-light|ask-long-question-dark|palette-light|palette-dark|floating-notes-light|floating-notes-dark|library-recording-light|library-recording-dark|live-follow-light|live-follow-dark|live|notch|external-panel|panel-compact-idle|panel-compact-flagged|panel-hidden-recording|panel-hidden-paused|summary-light|summary-dark|summary-regeneration-light|summary-regeneration-dark|notes-light|notes-dark|detected-light|detected-dark|detected-compact-light|detected-compact-dark|processing-light|processing-dark|completed-light|completed-dark|failure-light|failure-dark] [--interactive]\n".utf8)
+                Data("Usage: NookSnapshot <output.png> [library|library-light|library-compact|welcome-light|welcome-dark|welcome-permission-light|welcome-permission-dark|welcome-ready-light|welcome-ready-dark|welcome-microphone-light|welcome-microphone-dark|welcome-speech-light|welcome-speech-dark|welcome-calendar-light|welcome-calendar-dark|welcome-dictation-light|welcome-dictation-dark|detail-transcript-light|detail-transcript-dark|detail-transcript-partial-light|detail-transcript-partial-dark|detail-transcript-no-matches-light|detail-transcript-no-matches-dark|detail-markdown-light|detail-markdown-dark|detail-markdown-conflict-light|detail-markdown-conflict-dark|detail-summary-pending-light|detail-summary-pending-dark|detail-summary-running-light|detail-summary-running-dark|detail-notes-light|detail-notes-dark|copy-failure-long-light|copy-failure-long-dark|copy-failure-pathological-light|copy-failure-pathological-dark|settings-about-light|settings-about-dark|settings-general-light|settings-general-dark|settings-listening-light|settings-listening-dark|settings-dictation-light|settings-dictation-dark|settings-assistant-unavailable-light|settings-assistant-unavailable-dark|settings-keyboard-light|settings-keyboard-dark|settings-privacy-light|settings-privacy-dark|settings-updates-light|settings-updates-dark|storage-light|storage-dark|storage-long-light|storage-long-dark|quick-note-light|quick-note-dark|quick-note-filled-light|quick-note-filled-dark|quick-note-codex-light|quick-note-codex-dark|quick-note-conflict-light|quick-note-conflict-dark|quick-note-conflict-codex-light|quick-note-conflict-codex-dark|quick-note-assistant-unavailable-light|quick-note-assistant-unavailable-dark|quick-note-assistant-running-light|quick-note-assistant-running-dark|quick-note-assistant-stopping-light|quick-note-assistant-stopping-dark|quick-note-voice-conflict-codex-light|quick-note-voice-conflict-codex-dark|quick-note-voice-scratch-light|quick-note-voice-scratch-dark|quick-note-voice-item-light|quick-note-voice-item-dark|quick-note-voice-stale-light|quick-note-voice-stale-dark|quick-note-filing-light|quick-note-filing-dark|quick-note-filing-copy-retained-light|quick-note-filing-copy-retained-dark|draft-recovery-light|draft-recovery-dark|draft-recovery-minimum-light|draft-recovery-long-light|draft-recovery-invalid-light|draft-recovery-stale-light|draft-recovery-unavailable-light|recovery-section-light|recovery-section-dark|recovery-section-minimum-light|recovery-section-failure-light|recovery-section-failure-dark|recovery-section-library-light|library-draft-recovery-light|library-draft-recovery-dark|prep-light|prep-dark|ask-light|ask-dark|ask-answer-light|ask-answer-dark|ask-refusal-light|ask-refusal-dark|ask-long-light|ask-long-dark|ask-long-question-light|ask-long-question-dark|palette-light|palette-dark|floating-notes-light|floating-notes-dark|library-recording-light|library-recording-dark|live-follow-light|live-follow-dark|live|notch|external-panel|panel-compact-idle|panel-compact-flagged|panel-hidden-recording|panel-hidden-paused|summary-light|summary-dark|summary-regeneration-light|summary-regeneration-dark|notes-light|notes-dark|detected-light|detected-dark|detected-compact-light|detected-compact-dark|processing-light|processing-dark|completed-light|completed-dark|failure-light|failure-dark] [--interactive]\n".utf8)
             )
             Foundation.exit(64)
         }
@@ -21,9 +21,10 @@ struct SnapshotRenderer {
         ].contains(mode)
         let isLiveFollowFixture = ["live-follow-light", "live-follow-dark"].contains(mode)
         let staticPanelModes: Set<String> = [
-            "panel-compact-idle", "panel-compact-flagged",
-            "panel-hidden-recording", "panel-hidden-paused"
+            "panel-compact-idle", "panel-compact-flagged", "panel-compact-hover",
+            "panel-compact-note", "panel-hidden-recording", "panel-hidden-paused"
         ]
+        let isNotchDemo = mode == "notch-demo"
         let isAssistantFixture = mode.hasPrefix("quick-note-assistant-")
             || mode.hasPrefix("settings-assistant-")
         let isAssistantUnavailable = isAssistantFixture && mode.contains("unavailable")
@@ -47,7 +48,9 @@ struct SnapshotRenderer {
             : .dark
 
         let app = NSApplication.shared
-        app.setActivationPolicy(isInteractive ? .regular : .prohibited)
+        let wantsWindow = isInteractive
+            || ProcessInfo.processInfo.environment["NOOK_SNAPSHOT_WINDOWED"] == "1"
+        app.setActivationPolicy(wantsWindow ? .regular : .prohibited)
 
         let workspace = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -56,7 +59,7 @@ struct SnapshotRenderer {
             .appendingPathComponent("Nook")
             .appendingPathComponent("Resources")
             .appendingPathComponent("Brand")
-            .appendingPathComponent("NookIconSource-Cobalt.png")
+            .appendingPathComponent("NookIconSource-Lagoon.png")
         if let icon = NSImage(contentsOf: iconURL) {
             app.applicationIconImage = icon
         }
@@ -311,8 +314,10 @@ struct SnapshotRenderer {
         )
         let canvasSize: CGSize
         let content: AnyView
+        var notchDemoGeometry: NotchPanelGeometry?
         var validateConflictFixture: (@MainActor () throws -> Void)?
         var validateFilingFixture: (@MainActor () throws -> Void)?
+        var validateSummaryReviewFixture: (@MainActor () throws -> Void)?
         switch mode {
         case "copy-failure-long-light", "copy-failure-long-dark",
              "copy-failure-pathological-light", "copy-failure-pathological-dark":
@@ -337,7 +342,7 @@ struct SnapshotRenderer {
                 .transaction { $0.disablesAnimations = true }
             )
         case _ where mode.hasPrefix("welcome"):
-            canvasSize = CGSize(width: 680, height: 560)
+            canvasSize = CGSize(width: 700, height: 680)
             let welcomeStep: WelcomeStep
             if mode.contains("permission") || mode.contains("screen") { welcomeStep = .screenRecording }
             else if mode.contains("ready") { welcomeStep = .ready }
@@ -354,6 +359,62 @@ struct SnapshotRenderer {
             )
         case _ where mode.hasPrefix("detail"):
             var detailNote = roundTripped
+            if mode.contains("speakers") {
+                // Alternate the meeting side between two voices and name one,
+                // as separation and a user's naming would leave it.
+                var index = 0
+                var assignments: [UUID: Int] = [:]
+                for segment in detailNote.transcript where segment.source != .microphone {
+                    assignments[segment.id] = index % 2
+                    index += 1
+                }
+                detailNote.transcript = SpeakerNames.apply(assignments, to: detailNote.transcript)
+                if case .renamed(let named) = SpeakerNames.rename(
+                    "Speaker 1", to: "Ana", in: detailNote.transcript
+                ) {
+                    detailNote.transcript = named
+                }
+            }
+            if mode.contains("fallback") {
+                detailNote.summary = SummaryService.fallbackInsights(
+                    transcript: detailNote.transcript, fallbackTitle: detailNote.title
+                ).summary
+                detailNote.summaryPending = .initial
+                detailNote.summaryProvenance = .transcriptHighlights
+                detailNote.keyPoints = []
+                detailNote.decisions = []
+                detailNote.actionItems = []
+                if mode.contains("extraction") {
+                    detailNote.summary = SummaryFallback.partialExtractionNotice
+                    detailNote.summaryProvenance = .partialExtraction
+                    detailNote.keyPoints = ["A synthetic retained point from the earlier pass."]
+                }
+                detailNote = try store.save(detailNote)
+            }
+            if mode.contains("summary-questions") {
+                detailNote.title = "Synthetic rollout review"
+                detailNote.summaryRecipe = .standup
+                detailNote.summary = "The release plan is ready for review. The team still needs to confirm its launch budget."
+                detailNote.keyPoints = []
+                detailNote.decisions = []
+                detailNote.actionItems = []
+                detailNote.openQuestions = ["The launch budget is still unclear.", "We still need to determine who will review the accessibility results."]
+                detailNote.personalNotes = "Keep the original meeting transcript as the source of truth."
+                detailNote = try store.save(detailNote)
+            }
+            var summarySession: SummaryRegenerationSession?
+            if mode.contains("summary-pending") || mode.contains("summary-running") || mode.contains("fallback-running") {
+                detailNote.summaryPending = .initial
+                detailNote = try store.save(detailNote)
+                if mode.contains("summary-running") || mode.contains("fallback-running") {
+                    store.summarySessions.enrich(detailNote, purpose: .initial, store: store, runner: { _, onStage in
+                        await onStage?(.condensing(pass: 2, part: 3, total: 12))
+                        try? await Task.sleep(for: .seconds(30))
+                        return .retained(reason: .modelBusy)
+                    })
+                }
+                summarySession = store.summarySessions.session(for: detailNote)
+            }
             let hasNoMatchingTranscript = mode.contains("no-matches")
             if mode.contains("partial") || hasNoMatchingTranscript {
                 detailNote.audioStart = 14
@@ -366,11 +427,17 @@ struct SnapshotRenderer {
                 ))
             }
             let hasSaveConflict = mode.contains("conflict")
-            canvasSize = hasSaveConflict
-                ? CGSize(width: 900, height: 580)
-                : (hasNoMatchingTranscript
+            if mode.contains("summary-questions") || mode.contains("fallback") {
+                canvasSize = mode.contains("minimum")
                     ? CGSize(width: 560, height: 580)
-                    : CGSize(width: 1_100, height: 700))
+                    : CGSize(width: 820, height: 1_050)
+            } else {
+                canvasSize = hasSaveConflict
+                    ? CGSize(width: 900, height: 580)
+                    : (hasNoMatchingTranscript
+                        ? CGSize(width: 560, height: 580)
+                        : CGSize(width: 1_100, height: 700))
+            }
             let initialTab: DetailTab = mode.contains("transcript")
                 ? .transcript
                 : (mode.contains("markdown") ? .markdown : .notes)
@@ -412,7 +479,8 @@ struct SnapshotRenderer {
                     MeetingDetailView(
                         note: detailNote,
                         initialTab: initialTab,
-                        initialTranscriptSearch: hasNoMatchingTranscript ? "This phrase is absent" : ""
+                        initialTranscriptSearch: hasNoMatchingTranscript ? "This phrase is absent" : "",
+                        summarySession: summarySession
                     )
                     .frame(width: hasSaveConflict ? 595 : canvasSize.width)
                 }
@@ -534,6 +602,7 @@ struct SnapshotRenderer {
         case "quick-note-light", "quick-note-dark", "quick-note-filled-light", "quick-note-filled-dark", "quick-note-codex-light", "quick-note-codex-dark",
              "quick-note-conflict-light", "quick-note-conflict-dark",
              "quick-note-conflict-codex-light", "quick-note-conflict-codex-dark",
+             "quick-note-voice-conflict-codex-light", "quick-note-voice-conflict-codex-dark",
              "quick-note-assistant-unavailable-light", "quick-note-assistant-unavailable-dark",
              "quick-note-assistant-running-light", "quick-note-assistant-running-dark",
              "quick-note-assistant-stopping-light", "quick-note-assistant-stopping-dark",
@@ -547,7 +616,7 @@ struct SnapshotRenderer {
                     quickNote, target: roundTripped, store: store, files: filingFiles
                 )
             } else if mode.contains("conflict") {
-                validateConflictFixture = try prepareQuickNoteConflict(quickNote)
+                validateConflictFixture = try prepareQuickNoteConflict(quickNote, voiceCorrection: mode.contains("voice"))
             } else if mode.hasPrefix("quick-note-filled") || mode.contains("codex") {
                 quickNote.text = "Call Priya about the vendor contract by Thursday.\nShe wants the revised scope before the board meeting.\n\n- [ ] Send the scope doc"
             }
@@ -559,6 +628,107 @@ struct SnapshotRenderer {
                     .environment(\.colorScheme, snapshotColorScheme)
                     .transaction { $0.disablesAnimations = true }
             )
+        case "quick-note-voice-scratch-light", "quick-note-voice-scratch-dark",
+             "quick-note-voice-item-light", "quick-note-voice-item-dark",
+             "quick-note-voice-stale-light", "quick-note-voice-stale-dark":
+            let removesPhrase = mode.contains("scratch")
+            canvasSize = CGSize(width: 520, height: removesPhrase ? 520 : 760)
+            quickNote.text = "Design review\n- [x] Send the revised outline"
+            quickNote.receiveDictation("after the planning call.", inserting: "after the planning call.")
+            let command = removesPhrase ? "Scratch that." : "Change the previous item to send the outline on Friday."
+            quickNote.receiveDictation(command, inserting: command)
+            guard let proposal = quickNote.voiceCorrection else { throw SnapshotError.fixtureValidationFailed }
+            if mode.contains("stale") { quickNote.text += "\nA newer edit." }
+            content = AnyView(
+                VoiceCorrectionView(note: quickNote, proposal: proposal)
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .environment(\.colorScheme, snapshotColorScheme)
+                    .transaction { $0.disablesAnimations = true }
+            )
+        case "quick-note-filing-light", "quick-note-filing-dark":
+            canvasSize = CGSize(width: 508, height: 640)
+            quickNote.text = "A synthetic thought to file after the design review."
+            quickNote.requestFiling()
+            guard let request = quickNote.filingRequest else {
+                throw SnapshotError.fixtureValidationFailed
+            }
+            content = AnyView(
+                QuickNoteFilingView(note: quickNote, request: request)
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .environment(\.colorScheme, snapshotColorScheme)
+                    .transaction { $0.disablesAnimations = true }
+            )
+        case "summary-item-review-light", "summary-item-review-dark",
+             "summary-item-removal-light", "summary-item-removal-dark",
+             "summary-item-stale-light", "summary-item-stale-dark",
+             "summary-item-empty-light", "summary-item-empty-dark":
+            canvasSize = CGSize(width: 600, height: 680)
+            let quote = "We agreed to launch the coastal pilot on Friday."
+            var original = roundTripped
+            original.keyPoints = ["The coastal pilot will launch Monday."]
+            original.transcript = [.init(startTime: 42, duration: 8, text: quote, source: .system)]
+            let saved = try store.save(original)
+            markdownDraft.prepare(for: saved, store: store)
+            personalNotesDraft.prepare(for: saved, store: store)
+            guard let item = SummaryReviewItem.list(.keyPoint, index: 0, in: saved),
+                  let file = saved.fileURL else { throw SnapshotError.fixtureValidationFailed }
+            let empty = mode.contains("empty")
+            let session = SummaryItemReviewSession(note: saved, item: item, generation: store.storageGeneration,
+                ranker: { _, transcript in empty ? [] : SummaryEvidence.passages(in: transcript) },
+                generator: { _ in .init(replacement: quote, quote: quote) })
+            session.load()
+            try waitForSnapshotCondition { !session.isLoading }
+            if mode.contains("removal") {
+                session.previewRemoval()
+            } else if !empty {
+                session.propose(passage: session.passages.first, feedback: "The launch day is wrong.")
+                try waitForSnapshotCondition { !session.isGenerating }
+                guard session.proposal != nil else { throw SnapshotError.fixtureValidationFailed }
+            }
+            if mode.contains("stale") {
+                var changed = saved
+                changed.personalNotes += " A newer synthetic edit."
+                _ = try store.save(changed)
+            }
+            let bytes = try Data(contentsOf: file)
+            validateSummaryReviewFixture = {
+                guard try Data(contentsOf: file) == bytes, session.saved == nil else {
+                    throw SnapshotError.fixtureValidationFailed
+                }
+            }
+            content = AnyView(
+                SummaryItemReviewView(session: session, initialPassageID: session.passages.first?.id,
+                                     initialFeedback: empty ? "" : "The launch day is wrong.")
+                    .environmentObject(store)
+                    .environmentObject(markdownDraft)
+                    .environmentObject(personalNotesDraft)
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .environment(\.colorScheme, snapshotColorScheme)
+                    .transaction { $0.disablesAnimations = true }
+            )
+        case "fallback-card-minimum-light", "fallback-card-minimum-dark":
+            canvasSize = CGSize(width: 300, height: 250)
+            content = AnyView(
+                SummaryFallbackCard(provenance: .transcriptHighlights, isRunning: false, canRetry: true, retry: {})
+                    .padding(12)
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .environment(\.colorScheme, snapshotColorScheme)
+            )
+        case "summary-recipe-minimum-light", "summary-recipe-minimum-dark":
+            canvasSize = CGSize(width: 300, height: 240)
+            content = AnyView(
+                ZStack {
+                    NookAmbientBackground()
+                    SummaryRecipeControl(recipe: .constant(.interview), isEnabled: true, regenerate: {})
+                        .padding(16)
+                }
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .environment(\.colorScheme, snapshotColorScheme)
+            )
         case "summary-regeneration-light", "summary-regeneration-dark":
             canvasSize = CGSize(width: 380, height: 180)
             content = AnyView(
@@ -567,6 +737,15 @@ struct SnapshotRenderer {
                     onCancel: {}
                 )
                     .padding(16)
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .environment(\.colorScheme, snapshotColorScheme)
+                    .transaction { $0.disablesAnimations = true }
+            )
+        case "follow-up-light", "follow-up-dark":
+            canvasSize = CGSize(width: 560, height: 520)
+            content = AnyView(
+                FollowUpDraftView(note: roundTripped)
                     .frame(width: canvasSize.width, height: canvasSize.height)
                     .background(Color(nsColor: .windowBackgroundColor))
                     .environment(\.colorScheme, snapshotColorScheme)
@@ -728,8 +907,8 @@ struct SnapshotRenderer {
                     .environment(\.colorScheme, .dark)
                     .transaction { $0.disablesAnimations = true }
             )
-        case "notch", "external-panel",
-             "panel-compact-idle", "panel-compact-flagged",
+        case "notch", "external-panel", "notch-demo", "notch-flagged", "idle-peek", "idle-upcoming",
+             "panel-compact-idle", "panel-compact-flagged", "panel-compact-hover", "panel-compact-note",
              "panel-hidden-recording", "panel-hidden-paused",
              "summary-light", "summary-dark",
              "notes-light", "notes-dark",
@@ -740,7 +919,19 @@ struct SnapshotRenderer {
              "failure-light", "failure-dark":
             canvasSize = CGSize(width: 980, height: 380)
             let geometry = NotchPanelGeometry()
-            geometry.topInset = mode == "notch" ? 32 : 28
+            // A notched MacBook: the island grows out of, and wraps around,
+            // a housing this size. `external-panel` keeps a plain top edge.
+            geometry.topInset = mode == "external-panel" ? 24 : 32
+            geometry.cameraHousingWidth = mode == "external-panel" ? 0 : 184
+            geometry.isHovering = mode == "panel-compact-hover" || mode == "panel-compact-note"
+            if mode == "idle-upcoming" {
+                geometry.upcomingEvent = NotchUpcomingEvent(
+                    title: "Design review",
+                    startDate: Date().addingTimeInterval(4 * 60 + 20)
+                )
+                geometry.upcomingHasPrep = true
+            }
+            notchDemoGeometry = geometry
             // The prompt shrinks after it has been on screen a while rather
             // than vanishing, so that second shape needs to be renderable too.
             geometry.detectionPromptIsCompact = mode.hasPrefix("detected-compact")
@@ -750,16 +941,19 @@ struct SnapshotRenderer {
             content = AnyView(
                 ZStack(alignment: .top) {
                     NotchPreviewBackground()
-                    NotchPanelView(rendersForSnapshot: true)
+                    NotchPanelView(
+                        rendersForSnapshot: !isNotchDemo,
+                        showsNoteLine: mode == "panel-compact-note"
+                    )
                         .environmentObject(meeting)
                         .environmentObject(geometry)
-                    if mode == "notch" {
+                    if mode != "external-panel" {
                         SimulatedCameraHousing()
                     }
                 }
                 .frame(width: canvasSize.width, height: canvasSize.height)
                 .environment(\.colorScheme, panelColorScheme)
-                .transaction { $0.disablesAnimations = true }
+                .transaction { $0.disablesAnimations = !isNotchDemo }
             )
         default:
             canvasSize = mode == "library-compact"
@@ -787,12 +981,42 @@ struct SnapshotRenderer {
             )
         }
 
-        let notchModes: Set<String> = ["notch","external-panel","summary-light","summary-dark","notes-light","notes-dark","detected-light","detected-dark","detected-compact-light","detected-compact-dark","processing-light","processing-dark","completed-light","completed-dark","failure-light","failure-dark","live"]
+        let notchModes: Set<String> = ["notch","external-panel","notch-demo","notch-flagged","idle-peek","idle-upcoming","summary-light","summary-dark","notes-light","notes-dark","detected-light","detected-dark","detected-compact-light","detected-compact-dark","processing-light","processing-dark","completed-light","completed-dark","failure-light","failure-dark","live"]
         if notchModes.contains(mode) || staticPanelModes.contains(mode) {
             meeting.showLiveCaptions = mode != "external-panel" && !staticPanelModes.contains(mode)
             switch mode {
-            case "panel-compact-idle", "panel-compact-flagged",
-                 "panel-hidden-recording", "panel-hidden-paused":
+            case "idle-peek", "idle-upcoming":
+                meeting.setPreviewState(
+                    phase: .idle,
+                    elapsed: 0,
+                    liveTranscript: .empty,
+                    audioLevel: 0
+                )
+            case "notch-flagged":
+                meeting.setPreviewState(
+                    phase: .recording(
+                        title: "Nook design weekly",
+                        startedAt: Date().addingTimeInterval(-13 * 60 - 42)
+                    ),
+                    elapsed: 13 * 60 + 42,
+                    liveTranscript: transcriptState,
+                    audioLevel: 0.64,
+                    panelMode: .transcript,
+                    liveMoments: [MeetingMoment(offset: 44)]
+                )
+            case "notch-demo":
+                meeting.showLiveCaptions = false
+                meeting.setPreviewState(
+                    phase: .detected(
+                        DetectedMeeting(appName: "Teams", windowTitle: "Design review")
+                    ),
+                    elapsed: 0,
+                    liveTranscript: .empty,
+                    audioLevel: 0
+                )
+                notchDemoGeometry?.revealProgress = 0
+            case "panel-compact-idle", "panel-compact-flagged", "panel-compact-hover",
+                 "panel-compact-note", "panel-hidden-recording", "panel-hidden-paused":
                 meeting.setPreviewState(
                     phase: .recording(
                         title: "Synthetic panel status review",
@@ -910,14 +1134,21 @@ struct SnapshotRenderer {
             rootView: content.environmentObject(shortcuts)
         )
         hostingView.frame = NSRect(origin: .zero, size: canvasSize)
-        let isLightAppearance = mode == "library-light"
-            || mode.hasSuffix("-light")
+        let isNotchSurface = notchDemoGeometry != nil
+        let isLightAppearance = !isNotchSurface
+            && (mode == "library-light" || mode.hasSuffix("-light"))
         let appearance: NSAppearance.Name = isLightAppearance ? .aqua : .darkAqua
         hostingView.appearance = NSAppearance(named: appearance)
 
-        let window = NSWindow(
+        // NOOK_SNAPSHOT_WINDOWED=1 captures a real on-screen window, so the
+        // toolbar, titlebar and sidebar materials appear. Offscreen caching
+        // draws the sidebar blank and has no toolbar at all.
+        let isWindowed = ProcessInfo.processInfo.environment["NOOK_SNAPSHOT_WINDOWED"] == "1"
+        let window = (isWindowed ? SnapshotKeyWindow.self : NSWindow.self).init(
             contentRect: hostingView.frame,
-            styleMask: isInteractive ? [.titled, .closable, .resizable] : [.borderless],
+            styleMask: isInteractive || isWindowed
+                ? [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+                : [.borderless],
             backing: .buffered,
             defer: false
         )
@@ -928,11 +1159,42 @@ struct SnapshotRenderer {
         window.contentView = hostingView
         window.layoutIfNeeded()
         hostingView.layoutSubtreeIfNeeded()
+        if isWindowed {
+            window.toolbarStyle = .unified
+            window.center()
+            window.makeKeyAndOrderFront(nil)
+            app.activate(ignoringOtherApps: true)
+            RunLoop.current.run(until: Date().addingTimeInterval(2.0))
+            // Launched through `open` so macOS grants activation, this
+            // process has no Screen Recording permission of its own. It
+            // publishes the window number and holds the window still while
+            // the calling shell captures it.
+            if let contentView = window.contentView, let screen = NSScreen.screens.first {
+                let rect = window.convertToScreen(contentView.frame)
+                print(
+                    "NOOK_SNAPSHOT_RECT \(Int(rect.minX)),\(Int(screen.frame.maxY - rect.maxY)),"
+                        + "\(Int(rect.width)),\(Int(rect.height))"
+                )
+            }
+            print("NOOK_SNAPSHOT_WINDOW \(window.windowNumber)")
+            fflush(stdout)
+            if isNotchDemo, let demoGeometry = notchDemoGeometry {
+                NotchDemoScript.start(meeting: meeting, geometry: demoGeometry)
+            }
+            let hold = ProcessInfo.processInfo.environment["NOOK_SNAPSHOT_HOLD"].flatMap(Double.init)
+            RunLoop.current.run(
+                until: Date().addingTimeInterval(
+                    hold ?? (isNotchDemo ? NotchDemoScript.duration + 1 : 3.0)
+                )
+            )
+            Foundation.exit(0)
+        }
         RunLoop.current.run(until: Date().addingTimeInterval(1.2))
         // View preparation and asynchronous store reloads must not replace
         // the refused draft or clear its actual controller error before capture.
         try validateConflictFixture?()
         try validateFilingFixture?()
+        try validateSummaryReviewFixture?()
         if staticPanelModes.contains(mode) {
             let expectsFlag = mode == "panel-compact-flagged"
             guard meeting.phase.isRecording,
@@ -1057,15 +1319,19 @@ struct SnapshotRenderer {
 
     @MainActor
     private static func prepareQuickNoteConflict(
-        _ controller: QuickNoteController
+        _ controller: QuickNoteController, voiceCorrection: Bool = false
     ) throws -> (@MainActor () throws -> Void) {
         controller.text = "Synthetic planning note. Keep the review checklist beside the source."
         guard let saved = controller.saveIfNeeded(), let file = saved.fileURL else {
             throw SnapshotError.fixtureValidationFailed
         }
         let original = try Data(contentsOf: file)
-        let localEdit = controller.text + "\n\nThese additional words are still held in the pad."
-        controller.text = localEdit
+        controller.text += "\n\nThese additional words are still held in the pad."
+        if voiceCorrection {
+            controller.receiveDictation("One more thought.", inserting: "One more thought.")
+            controller.receiveDictation("Scratch that.", inserting: "Scratch that.")
+        }
+        let localEdit = controller.text
         var externalEdit = original
         externalEdit.append(Data("\n\nSynthetic external edit: another writer changed this file.\n".utf8))
         try externalEdit.write(to: file, options: .atomic)
@@ -1075,6 +1341,7 @@ struct SnapshotRenderer {
                   controller.text.utf8.elementsEqual(localEdit.utf8),
                   controller.message?.hasSuffix(MarkdownStoreError.fileChangedElsewhere.localizedDescription) == true,
                   !controller.isWorking, !controller.isContinuous,
+                  !voiceCorrection || controller.voiceCorrection != nil,
                   try Data(contentsOf: file) == externalEdit else {
                 throw SnapshotError.fixtureValidationFailed
             }
@@ -1100,7 +1367,7 @@ struct SnapshotRenderer {
         controller.onDismissRequested = { dismissalRequests += 1 }
         let existing = target.personalNotes.trimmingCharacters(in: .whitespacesAndNewlines)
         let expected = existing.isEmpty ? words : "\(existing)\n\n\(words)"
-        controller.fileIntoMeeting(target)
+        controller.fileIntoNote(target)
         let retainedSource = try Data(contentsOf: sourceFile)
         let filedTarget = try Data(contentsOf: targetFile)
         guard let decodedSource = MarkdownCodec.decode(String(decoding: retainedSource, as: UTF8.self)),
@@ -1728,5 +1995,123 @@ struct SnapshotCalendarProvider: CalendarEventProviding {
     func requestAccess() async -> Bool { true }
     func events(between start: Date, end: Date) -> [CalendarMeetingEvent] {
         [CalendarMeetingEvent(title: "Research synthesis", attendeeCount: 4, startDate: Date().addingTimeInterval(5 * 60))]
+    }
+}
+
+/// A capture launched from a terminal cannot take activation from it, so the
+/// window would render in its inactive state: grey traffic lights, dimmed
+/// sidebar and selection. Reporting key and main status draws what a person
+/// sees in the window they are using.
+private final class SnapshotKeyWindow: NSWindow {
+    override var isKeyWindow: Bool { true }
+    override var isMainWindow: Bool { true }
+}
+
+/// A scripted meeting for recording the notch's motion: prompt, recording,
+/// the control shelf, a flagged moment, live captions, writing notes, saved,
+/// and folding away. Synthetic words only; nothing is captured.
+@MainActor
+private enum NotchDemoScript {
+    static let duration: TimeInterval = 25
+
+    private static let lines: [(TimeInterval, TranscriptSegment.Source, String)] = [
+        (0, .system, "Let's start with the onboarding numbers from last week."),
+        (1, .microphone, "Completion is up, mostly from the shorter permission step."),
+        (2, .system, "Great. Can we ship the new prompt to everyone on Friday?"),
+        (3, .microphone, "Yes, if the notch animation review goes well tomorrow."),
+    ]
+
+    static func start(meeting: MeetingCoordinator, geometry: NotchPanelGeometry) {
+        Task { @MainActor in
+            let started = Date()
+            func at(_ seconds: TimeInterval) async {
+                let wait = seconds - Date().timeIntervalSince(started)
+                if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+            }
+            var recordingStartedAt: Date?
+            var transcript = LiveTranscriptState()
+            let meter = Task { @MainActor in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .milliseconds(80))
+                    guard let recordingStartedAt else { continue }
+                    let time = Date().timeIntervalSince(recordingStartedAt)
+                    let syllables = abs(sin(time * 7.1)) * abs(sin(time * 2.3 + 0.7))
+                    let phrase = sin(time * 0.9) > -0.55 ? 1.0 : 0.15
+                    meeting.setPreviewSignals(
+                        audioLevel: min(1, 0.08 + syllables * 0.62 * phrase),
+                        elapsed: 11 * 60 + 52 + time,
+                        liveTranscript: transcript
+                    )
+                }
+            }
+
+            await at(0.3)
+            withAnimation(NookMotion.morph) { geometry.revealProgress = 1 }
+
+            await at(2.8)
+            meeting.setPreviewState(
+                phase: .recording(title: "Design review", startedAt: .now),
+                elapsed: 11 * 60 + 52,
+                liveTranscript: .empty,
+                audioLevel: 0.2
+            )
+            recordingStartedAt = Date()
+
+            await at(5.2)
+            withAnimation(NookMotion.morph) { geometry.isHovering = true }
+            await at(6.8)
+            meeting.flagMoment()
+            await at(8.8)
+            withAnimation(NookMotion.morph) { geometry.isHovering = false }
+
+            await at(10.0)
+            meeting.showLiveCaptions = true
+            for (index, line) in lines.enumerated() {
+                await at(11.0 + Double(index) * 1.3)
+                let words = line.2.split(separator: " ")
+                let half = words.prefix(words.count / 2).joined(separator: " ")
+                if line.1 == .microphone {
+                    transcript.microphonePartial = half
+                } else {
+                    transcript.meetingPartial = half
+                }
+                transcript.latestSource = line.1
+                transcript.revision += 1
+                try? await Task.sleep(for: .milliseconds(520))
+                transcript.meetingPartial = ""
+                transcript.microphonePartial = ""
+                transcript.segments.append(
+                    TranscriptSegment(
+                        startTime: TimeInterval(line.0 * 6),
+                        duration: 5,
+                        text: line.2,
+                        source: line.1
+                    )
+                )
+                transcript.revision += 1
+            }
+
+            await at(16.6)
+            meeting.showLiveCaptions = false
+            await at(17.8)
+            recordingStartedAt = nil
+            meter.cancel()
+            meeting.setPreviewState(
+                phase: .processing(.summarizing),
+                elapsed: 12 * 60 + 9,
+                liveTranscript: transcript,
+                audioLevel: 0
+            )
+            await at(20.8)
+            meeting.setPreviewState(
+                phase: .completed("Design review"),
+                elapsed: 12 * 60 + 9,
+                liveTranscript: .empty,
+                audioLevel: 0
+            )
+            await at(23.4)
+            geometry.isTucking = true
+            withAnimation(NookMotion.tuck) { geometry.revealProgress = 0 }
+        }
     }
 }

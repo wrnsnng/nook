@@ -26,24 +26,68 @@ extension LibraryLeaveGuard {
     }
 }
 
+/// Calendar-day ranges, not 24-hour windows. Yesterday can be 23 or 25 hours
+/// across daylight-saving changes; all filtering uses the same reference day.
+enum LibraryDateRange: CaseIterable, Equatable {
+    case all
+    case today
+    case yesterday
+
+    var title: String {
+        switch self {
+        case .all: "All"
+        case .today: "Today"
+        case .yesterday: "Yesterday"
+        }
+    }
+
+    func contains(
+        _ date: Date,
+        relativeTo referenceDate: Date,
+        calendar: Calendar
+    ) -> Bool {
+        switch self {
+        case .all:
+            return true
+        case .today:
+            return calendar.isDate(date, inSameDayAs: referenceDate)
+        case .yesterday:
+            guard let previous = calendar.date(byAdding: .day, value: -1, to: referenceDate)
+            else { return false }
+            return calendar.isDate(date, inSameDayAs: previous)
+        }
+    }
+
+    func emptyMessage(hasSearch: Bool) -> String {
+        switch (self, hasSearch) {
+        case (.all, false): "No notes"
+        case (.all, true): "No matching notes"
+        case (.today, false): "No notes today"
+        case (.today, true): "No matching notes today"
+        case (.yesterday, false): "No notes yesterday"
+        case (.yesterday, true): "No matching notes yesterday"
+        }
+    }
+}
+
 /// A scope change must not hide the editor before its leave decision settles.
 /// Keeping the old range until confirmation makes Cancel a true no-op.
 struct LibraryScopeState: Equatable {
-    private(set) var todayOnly = false
-    private(set) var pendingTodayOnly: Bool?
+    private(set) var range: LibraryDateRange = .all
+    private(set) var pendingRange: LibraryDateRange?
 
-    mutating func request(_ value: Bool, needsConfirmation: Bool) {
+    mutating func request(_ value: LibraryDateRange, needsConfirmation: Bool) {
         if needsConfirmation {
-            pendingTodayOnly = value
+            pendingRange = value
         } else {
-            todayOnly = value
-            pendingTodayOnly = nil
+            range = value
+            pendingRange = nil
         }
     }
 
     mutating func settle(confirmed: Bool) {
-        if confirmed, let pendingTodayOnly { todayOnly = pendingTodayOnly }
-        pendingTodayOnly = nil
+        if confirmed, let pendingRange { range = pendingRange }
+        pendingRange = nil
     }
 
     static func visibleSelection(
@@ -60,7 +104,7 @@ struct LibraryScopeState: Equatable {
 enum LibraryPlaceholderState: Equatable {
     case loading
     case loadFailure
-    case emptyToday
+    case emptyDay(LibraryDateRange)
     case noSearchMatches
     case emptyLibrary
     case noSelection
@@ -68,14 +112,14 @@ enum LibraryPlaceholderState: Equatable {
     static func choose(
         isLoading: Bool,
         hasNotes: Bool,
-        todayOnly: Bool,
+        range: LibraryDateRange,
         hasVisibleNotes: Bool,
         hasSearch: Bool,
         hasLoadError: Bool
     ) -> Self {
         if isLoading { return .loading }
         if !hasNotes, hasLoadError { return .loadFailure }
-        if todayOnly, !hasVisibleNotes { return .emptyToday }
+        if range != .all, !hasVisibleNotes { return .emptyDay(range) }
         if hasSearch, !hasVisibleNotes { return .noSearchMatches }
         return hasNotes ? .noSelection : .emptyLibrary
     }
@@ -118,19 +162,19 @@ extension MeetingPhase {
     }
 }
 
-/// The sidebar's filtering (search, today-only) and day-bucketing, pulled out
+/// The sidebar's filtering (search, date range) and day-bucketing, pulled out
 /// of the view so both halves can be pinned with tests and cached without
 /// rendering anything.
 enum LibraryNoteGrouping {
     static func filter(
         _ notes: [MeetingNote],
-        todayOnly: Bool,
+        range: LibraryDateRange,
         matchingIDs: Set<LibraryNoteIdentity>?,
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        referenceDate: Date = Date()
     ) -> [MeetingNote] {
-        var result = notes
-        if todayOnly {
-            result = result.filter { calendar.isDateInToday($0.startedAt) }
+        let result = notes.filter {
+            range.contains($0.startedAt, relativeTo: referenceDate, calendar: calendar)
         }
         guard let matchingIDs else { return result }
         return result.filter { matchingIDs.contains($0.libraryIdentity) }
@@ -164,10 +208,10 @@ enum LibraryNoteGrouping {
         referenceDate: Date,
         calendar: Calendar
     ) -> String {
-        if calendar.isDateInToday(date) {
+        if calendar.isDate(date, inSameDayAs: referenceDate) {
             return "Today"
         }
-        if calendar.isDateInYesterday(date) {
+        if LibraryDateRange.yesterday.contains(date, relativeTo: referenceDate, calendar: calendar) {
             return "Yesterday"
         }
         if let currentWeek = calendar.dateInterval(
@@ -214,20 +258,20 @@ struct LibraryGroupingCacheKey: Equatable {
     let noteCount: Int
     let notesFingerprint: Int
     let matchingIDs: Set<LibraryNoteIdentity>?
-    let todayOnly: Bool
+    let range: LibraryDateRange
     let day: Date
 
     init(
         notes: [MeetingNote],
         matchingIDs: Set<LibraryNoteIdentity>?,
-        todayOnly: Bool,
+        range: LibraryDateRange,
         now: Date = Date(),
         calendar: Calendar = .current
     ) {
         self.noteCount = notes.count
         self.notesFingerprint = Self.fingerprint(of: notes)
         self.matchingIDs = matchingIDs
-        self.todayOnly = todayOnly
+        self.range = range
         self.day = calendar.startOfDay(for: now)
     }
 
@@ -263,14 +307,14 @@ enum LibrarySidebarPolicy {
 
     static func emptySearchMessage(
         query: String,
-        todayOnly: Bool,
+        range: LibraryDateRange,
         isLoading: Bool,
         isSearching: Bool,
         hasVisibleNotes: Bool
     ) -> String? {
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               !isLoading, !isSearching, !hasVisibleNotes else { return nil }
-        return todayOnly ? "No matching notes today" : "No matching notes"
+        return range.emptyMessage(hasSearch: true)
     }
 
     static func visibleOpenActions(
@@ -345,9 +389,9 @@ struct LibraryView: View {
     /// The note awaiting Trash confirmation.
     @State private var notePendingDeletion: MeetingNote?
     @State private var commandPalette = CommandPalettePresentation()
-    /// Sidebar scope: the whole library or just today's capture.
+    /// Sidebar scope: the whole library, today's capture, or yesterday.
     @State private var scope = LibraryScopeState()
-    private var todayOnly: Bool { scope.todayOnly }
+    private var range: LibraryDateRange { scope.range }
     /// Mirrors `meeting.phase`, kept current by `MeetingPhaseObserver`. See
     /// that type for why this view reads a plain, rarely-changing `@State`
     /// value here rather than holding the coordinator itself.
@@ -399,7 +443,7 @@ struct LibraryView: View {
         LibraryGroupingCacheKey(
             notes: store.notes,
             matchingIDs: searchController.matchingIDs,
-            todayOnly: todayOnly
+            range: range
         )
     }
 
@@ -413,7 +457,7 @@ struct LibraryView: View {
         groupingCacheKey = key
         let filtered = LibraryNoteGrouping.filter(
             store.notes,
-            todayOnly: todayOnly,
+            range: range,
             matchingIDs: searchController.matchingIDs
         )
         cachedFilteredNotes = filtered
@@ -437,9 +481,34 @@ struct LibraryView: View {
             sidebar
                 .navigationSplitViewColumnWidth(min: 260, ideal: 304, max: 380)
         } detail: {
+            // Attached to the detail column so these sit trailing, beside
+            // the note's own actions, rather than against the sidebar.
             detail
+            .toolbar {
+                // `.primaryAction` is the leading edge on macOS; actions that
+                // belong to the whole library sit trailing, as in Mail.
+                ToolbarItemGroup(placement: .automatic) {
+                    Button(action: presentAskSheet) {
+                        Label("Ask Your Library", systemImage: "sparkle.magnifyingglass")
+                    }
+                    .help("Ask a question across all your notes")
+                    .disabled(store.isLoading)
+
+                    Button {
+                        createWeeklyDigest()
+                    } label: {
+                        Label("Create Weekly Digest", systemImage: "newspaper")
+                    }
+                    .help("Compile this week's meetings into one note")
+
+                    LibraryRecordingToolbar(createNote: createNote)
+                }
+            }
         }
-        .tint(NookPalette.accent)
+        // Like Notes and Mail: the selected note names itself in the
+        // content, so a window title would only crowd the toolbar.
+        .toolbar(removing: .title)
+        .tint(NookPalette.accentFill)
         .background {
             CommandPaletteWindowAnchor(presenter: commandPaletteSheet)
                 .frame(width: 0, height: 0)
@@ -465,24 +534,6 @@ struct LibraryView: View {
                 .frame(width: 0, height: 0)
                 .opacity(0)
                 .accessibilityHidden(true)
-        }
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button(action: presentAskSheet) {
-                    Label("Ask your library", systemImage: "sparkle.magnifyingglass")
-                }
-                .help("Ask a question across all your notes")
-                .disabled(store.isLoading)
-
-                Button {
-                    createWeeklyDigest()
-                } label: {
-                    Label("Create weekly digest", systemImage: "newspaper")
-                }
-                .help("Compile this week's meetings into one note")
-
-                LibraryRecordingToolbar(createNote: createNote)
-            }
         }
         .nookNotice(copyNotice.current) { id in
             withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
@@ -846,9 +897,9 @@ struct LibraryView: View {
         )
     }
 
-    private var scopeSelection: Binding<Bool> {
+    private var scopeSelection: Binding<LibraryDateRange> {
         Binding(
-            get: { todayOnly },
+            get: { range },
             set: { requestScopeChange($0) }
         )
     }
@@ -857,12 +908,13 @@ struct LibraryView: View {
         List(selection: listSelection) {
             Section {
                 Picker("Range", selection: scopeSelection) {
-                    Text("All").tag(false)
-                    Text("Today").tag(true)
+                    ForEach(LibraryDateRange.allCases, id: \.self) { range in
+                        Text(range.title).tag(range)
+                    }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .accessibilityLabel("Show all notes or only today's")
+                .accessibilityLabel("Note date range")
             }
 
             prepSection
@@ -901,7 +953,7 @@ struct LibraryView: View {
                             Button("Retry") {
                                 store.reload()
                             }
-                            Button("Open notes folder") {
+                            Button("Open Notes Folder") {
                                 store.openStorageDirectory()
                             }
                         }
@@ -936,7 +988,7 @@ struct LibraryView: View {
                 }
             } else if let message = LibrarySidebarPolicy.emptySearchMessage(
                 query: searchText,
-                todayOnly: todayOnly,
+                range: range,
                 isLoading: store.isLoading,
                 isSearching: searchController.isSearching,
                 hasVisibleNotes: !filteredNotes.isEmpty
@@ -963,14 +1015,6 @@ struct LibraryView: View {
                             showsFileIdentity: store.duplicateNoteIDs.contains(note.id)
                         )
                         .tag(LibrarySelection.note(note.libraryIdentity))
-                        // Nook's own selection fill rather than the system's:
-                        // it is a deeper blue chosen so white row text keeps
-                        // AA contrast in an inactive window too.
-                        .listRowBackground(
-                            selection == .note(note.libraryIdentity)
-                                ? NookPalette.sidebarSelection
-                                : Color.clear
-                        )
                         .contextMenu {
                             Button("Show in Finder") {
                                 store.reveal(note)
@@ -986,7 +1030,7 @@ struct LibraryView: View {
                             }
                             if note.kind != .digest {
                                 Divider()
-                                Button("Record into this note") {
+                                Button("Record into This Note") {
                                     AppModel.shared.meeting.continueRecording(into: note)
                                 }
                                 .disabled(
@@ -996,7 +1040,7 @@ struct LibraryView: View {
                                 .help(
                                     "Appends the next recording to this note instead of creating a new one"
                                 )
-                                Button("Merge another note into this") {
+                                Button("Merge Another Note into This") {
                                     requestMergePicker(for: note)
                                 }
                                 .disabled(mergeTask != nil)
@@ -1029,55 +1073,18 @@ struct LibraryView: View {
         librarySidebarSectionHeader(title)
     }
 
-    /// A section header that folds its own section away.
-    ///
-    /// The disclosure is a real button rather than a tap on the label, so it
-    /// has a hit target, a focus ring, and something for VoiceOver to say.
-    private func collapsibleSectionHeader(
-        _ title: String,
-        isExpanded: Binding<Bool>
-    ) -> some View {
-        Button {
-            withAnimation(reduceMotion ? nil : NookMotion.quick) {
-                isExpanded.wrappedValue.toggle()
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.semibold))
-                    .rotationEffect(
-                        .degrees(isExpanded.wrappedValue ? 90 : 0)
-                    )
-                    .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
-                sidebarSectionHeader(title)
-                Spacer(minLength: 0)
-            }
-            .frame(minHeight: 28)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(isExpanded.wrappedValue ? "Hide \(title)" : "Show \(title)")
-        .accessibilityLabel(title)
-        .accessibilityValue(isExpanded.wrappedValue ? "Showing" : "Hidden")
-        .accessibilityHint("Shows or hides this section")
-    }
-
     /// A quiet pointer at the next sitting of a series with history. Time-
     /// sensitive, so it leads the sidebar; tapping opens the brief.
     @ViewBuilder
     private var prepSection: some View {
         if let brief = prep.current {
-            Section {
-                if prepExpanded {
-                    PrepCard(
-                        brief: brief,
-                        isOpen: selection == .prep,
-                        onOpen: { requestSelection(.prep) }
-                    )
-                    .tag(LibrarySelection.prep)
-                }
-            } header: {
-                collapsibleSectionHeader("Prep", isExpanded: $prepExpanded)
+            Section("Prep", isExpanded: $prepExpanded) {
+                PrepCard(
+                    brief: brief,
+                    isOpen: selection == .prep,
+                    onOpen: { requestSelection(.prep) }
+                )
+                .tag(LibrarySelection.prep)
             }
         }
     }
@@ -1095,10 +1102,8 @@ struct LibraryView: View {
             showingAll: openActionsShowAll
         )
         if !pool.isEmpty || openActions.lastError != nil {
-            Section {
-                if openActionsExpanded {
-                    openActionRows(visible: visible, pool: pool)
-                }
+            Section(isExpanded: $openActionsExpanded) {
+                openActionRows(visible: visible, pool: pool)
                 if let message = openActions.lastError {
                     Label {
                         Text(message)
@@ -1112,10 +1117,7 @@ struct LibraryView: View {
                         .help(message)
                 }
             } header: {
-                collapsibleSectionHeader(
-                    "Open actions",
-                    isExpanded: $openActionsExpanded
-                )
+                Text("Open actions")
             }
         }
     }
@@ -1225,7 +1227,10 @@ struct LibraryView: View {
                 )
                     .id(selectedNote.libraryIdentity)
             } else {
-                MeetingDetailView(note: selectedNote)
+                MeetingDetailView(
+                    note: selectedNote,
+                    summarySession: store.summarySessions.session(for: selectedNote)
+                )
                     .id(selectedNote.libraryIdentity)
             }
         } else if store.isLoading {
@@ -1245,7 +1250,7 @@ struct LibraryView: View {
         switch LibraryPlaceholderState.choose(
             isLoading: store.isLoading,
             hasNotes: !store.notes.isEmpty,
-            todayOnly: todayOnly,
+            range: range,
             hasVisibleNotes: !filteredNotes.isEmpty,
             hasSearch: !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             hasLoadError: store.lastError != nil
@@ -1269,16 +1274,16 @@ struct LibraryView: View {
                 Button("Retry") { store.reload() }
                 Button("Open Notes Folder") { store.openStorageDirectory() }
             }
-        case .emptyToday:
+        case .emptyDay(let range):
             ContentUnavailableView {
                 Label(
-                    searchText.isEmpty ? "No notes today" : "No matching notes today",
+                    range.emptyMessage(hasSearch: !searchText.isEmpty),
                     systemImage: "calendar"
                 )
             } description: {
                 Text("Change the range to All to see your whole library.")
             } actions: {
-                Button("Show All Notes") { requestScopeChange(false) }
+                Button("Show All Notes") { requestScopeChange(.all) }
             }
         case .noSearchMatches:
             ContentUnavailableView.search(text: searchText)
@@ -1352,8 +1357,8 @@ struct LibraryView: View {
         }
     }
 
-    private func requestScopeChange(_ requestedScope: Bool) {
-        guard requestedScope != todayOnly, !showsUnsavedChangesAlert else { return }
+    private func requestScopeChange(_ requestedScope: LibraryDateRange) {
+        guard requestedScope != range, !showsUnsavedChangesAlert else { return }
         let target = selectionForScope(requestedScope)
         // The editor can stay put when its file also belongs to the new range.
         // There is no leave decision to ask about in that case.
@@ -1365,14 +1370,14 @@ struct LibraryView: View {
         }
     }
 
-    private func selectionForScope(_ requestedScope: Bool) -> LibrarySelection? {
+    private func selectionForScope(_ requestedScope: LibraryDateRange) -> LibrarySelection? {
         switch selection {
         case .live, .prep:
-            // These standing sections are visible in both date ranges.
+            // These standing sections are visible in every date range.
             return selection
         default:
             let visible = LibraryNoteGrouping.filter(
-                store.notes, todayOnly: requestedScope,
+                store.notes, range: requestedScope,
                 matchingIDs: searchController.matchingIDs
             )
             let current: LibraryNoteIdentity?
@@ -1385,7 +1390,7 @@ struct LibraryView: View {
 
     private func requestSelection(
         _ requestedSelection: LibrarySelection?,
-        changingScopeTo requestedScope: Bool? = nil
+        changingScopeTo requestedScope: LibraryDateRange? = nil
     ) {
         // A background reload must not replace the destination of a question
         // the user is already answering, including its pending date range.
@@ -1469,7 +1474,7 @@ struct LibraryView: View {
         // blocking the selection the user already confirmed.
         if let failure = personalNotesDraft.saveIfNeeded(store: store) {
             showCopyNotice(failure, severity: .failure)
-            if scope.pendingTodayOnly != nil || pendingMergeTarget != nil {
+            if scope.pendingRange != nil || pendingMergeTarget != nil {
                 scope.settle(confirmed: false)
                 pendingSelection = nil
                 pendingMergeTarget = nil
@@ -1488,7 +1493,7 @@ struct LibraryView: View {
         // Saving can publish a different library snapshot. Resolve the range
         // again instead of selecting a file removed while the alert was open.
         let next: LibrarySelection?
-        if let requestedScope = scope.pendingTodayOnly {
+        if let requestedScope = scope.pendingRange {
             next = selectionForScope(requestedScope)
         } else {
             next = pendingSelection
@@ -1693,7 +1698,7 @@ struct LibraryView: View {
         in notes: [MeetingNote]
     ) -> LibrarySelection? {
         let visible = LibraryNoteGrouping.filter(
-            notes, todayOnly: todayOnly, matchingIDs: searchController.matchingIDs
+            notes, range: range, matchingIDs: searchController.matchingIDs
         )
         if markdownDraft.hasChanges,
            let identity = markdownDraft.libraryIdentity,
@@ -1781,7 +1786,7 @@ private struct LibraryRecordingToolbar: View {
                     }
                 }
             } label: {
-                Label("New note", systemImage: "square.and.pencil")
+                Label("New Note", systemImage: "square.and.pencil")
             }
             .disabled(isProcessing)
             .keyboardShortcut(
@@ -1818,11 +1823,6 @@ private struct LibraryLiveSection: View {
                     isSelected: selection == .live
                 )
                 .tag(LibrarySelection.live)
-                .listRowBackground(
-                    selection == .live
-                        ? NookPalette.sidebarSelection
-                        : Color.clear
-                )
             } header: {
                 librarySidebarSectionHeader("Now")
             }
@@ -1871,7 +1871,7 @@ private struct LibraryRecoverySection: View {
                     .accessibilityHint("Shows the remaining recordings that need attention")
                 } else if showsAll,
                           recovery.orphans.count > Self.visibleOrphanLimit {
-                    Button("Show fewer recordings") {
+                    Button("Show Fewer Recordings") {
                         withAnimation(NookMotion.quickAnimation(reduceMotion: reduceMotion)) {
                             showsAll = false
                         }
@@ -2029,7 +2029,7 @@ private struct LibraryRecoverySection: View {
                 Spacer(minLength: NookSpacing.xSmall)
             }
 
-            Button("Reveal files") {
+            Button("Reveal Files") {
                 recovery.reveal(failure)
             }
             .controlSize(.small)
@@ -2099,108 +2099,45 @@ private struct LibraryRecoverySection: View {
 /// `LibraryLiveSection`, which cannot call a private method on the view.
 private func librarySidebarSectionHeader(_ title: String) -> some View {
     Text(title)
-        .font(.caption.weight(.semibold))
-        .foregroundStyle(Color(nsColor: .secondaryLabelColor))
-        .textCase(nil)
 }
 
+/// Laid out like a Voice Memos row: title, then date and duration. Colours
+/// are hierarchical styles, so the system selection highlight inverts them
+/// in active and inactive windows without any per-row bookkeeping.
 private struct MeetingRow: View {
     let note: MeetingNote
     let isSelected: Bool
     var showsFileIdentity = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: 11) {
-            sourceMark
+        VStack(alignment: .leading, spacing: 3) {
+            Text(note.title)
+                .font(.headline)
+                .lineLimit(1)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(note.title)
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(primaryTextColor)
-                    .lineLimit(1)
-
-                if showsFileIdentity, let file = note.fileURL {
-                    Label(file.lastPathComponent, systemImage: "doc.on.doc")
-                        .font(.caption)
-                        .foregroundStyle(secondaryTextColor)
-                        .lineLimit(2)
-                        .help(file.path)
-                }
-
-                if !note.summary.trimmingCharacters(
-                    in: .whitespacesAndNewlines
-                ).isEmpty {
-                        Text(note.summary)
-                            .font(NookType.caption)
-                            .foregroundStyle(secondaryTextColor)
-                            .lineLimit(1)
-                }
-
-                HStack(spacing: 5) {
-                    Text(
-                        note.startedAt,
-                        format: .dateTime
-                            .hour()
-                            .minute()
-                    )
-                    Text("·")
-                    Text(note.durationLabel)
-                    if !note.sourceApp.isEmpty {
-                        Text("·")
-                        Text(note.sourceApp)
-                            .lineLimit(1)
-                    }
-                }
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(secondaryTextColor)
+            if showsFileIdentity, let file = note.fileURL {
+                Label(file.lastPathComponent, systemImage: "doc.on.doc")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .help(file.path)
             }
+
+            HStack(spacing: 6) {
+                Text(note.startedAt, format: .dateTime.hour().minute())
+                if !note.sourceApp.isEmpty {
+                    Text(note.sourceApp)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                Text(note.durationLabel)
+                    .monospacedDigit()
+            }
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
         }
-        .padding(.vertical, 5)
+        .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
-    }
-
-    private var primaryTextColor: Color {
-        Color(
-            nsColor: isSelected
-                ? .alternateSelectedControlTextColor
-                : .labelColor
-        )
-    }
-
-    private var secondaryTextColor: Color {
-        if isSelected {
-            return Color(nsColor: .alternateSelectedControlTextColor)
-                .opacity(0.78)
-        }
-        return Color(nsColor: .secondaryLabelColor)
-    }
-
-    private var sourceMark: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(
-                    isSelected
-                        ? Color.white.opacity(0.14)
-                        : sourceTint.opacity(0.12)
-                )
-            Image(systemName: sourceSymbol)
-                .font(NookType.bodyEmphasized)
-                .foregroundStyle(isSelected ? Color.white : sourceTint)
-        }
-        .frame(width: 29, height: 29)
-        .accessibilityHidden(true)
-    }
-
-    private var sourceTint: Color {
-        return NookPalette.accent
-    }
-
-    private var sourceSymbol: String {
-        let source = note.sourceApp.lowercased()
-        if source.contains("teams") { return "person.3.fill" }
-        if source.contains("zoom") { return "video.fill" }
-        if source.contains("meet") { return "video.bubble.fill" }
-        return "quote.bubble.fill"
     }
 }
 
@@ -2215,45 +2152,26 @@ private struct LiveSidebarRow: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(spacing: 11) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(
-                        isSelected
-                            ? Color.white.opacity(0.14)
-                            : tint.opacity(0.14)
-                    )
-                Image(systemName: symbol)
-                    .font(NookType.bodyEmphasized)
-                    .foregroundStyle(isSelected ? Color.white : tint)
-                    .symbolEffect(
-                        .pulse,
-                        isActive: phase.isRecording
-                            && !isPaused
-                            && !reduceMotion
-                    )
-            }
-            .frame(width: 30, height: 30)
-
+        Label {
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(NookType.control)
-                    .foregroundStyle(
-                        isSelected
-                            ? Color.white
-                            : Color(nsColor: .labelColor)
-                    )
+                    .font(.headline)
                 Text(detail)
-                    .font(.system(size: 10))
-                    .foregroundStyle(
-                        isSelected
-                            ? Color.white.opacity(0.82)
-                            : Color(nsColor: .secondaryLabelColor)
-                    )
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
             }
-            Spacer()
+        } icon: {
+            Image(systemName: symbol)
+                .foregroundStyle(tint)
+                .symbolEffect(
+                    .pulse,
+                    isActive: phase.isRecording
+                        && !isPaused
+                        && !reduceMotion
+                )
         }
-        .padding(.vertical, 5)
+        .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(title), \(detail)")
     }
@@ -2320,12 +2238,7 @@ private struct EmptyLibraryView: View {
                     Label("Record your first meeting", systemImage: "waveform.badge.mic")
                         .padding(.horizontal, 5)
                 }
-                .buttonStyle(
-                    NookButtonStyle(
-                        tint: NookPalette.accent,
-                        isProminent: true
-                    )
-                )
+                .buttonStyle(.borderedProminent)
                 .controlSize(.large)
             }
             .padding(50)
@@ -2372,13 +2285,15 @@ private struct OpenActionRow: View {
             // invisible to VoiceOver and to the keyboard, so the only way to
             // open the note from here was the pointer.
             Button(action: onSelect) {
+                let parsed = ActionItemOwner.parse(entry.displayText)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.displayText)
+                    Text(parsed.displayTask)
                         .font(.callout)
                         .lineLimit(2)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     HStack(spacing: 6) {
-                        Text(entry.noteTitle)
+                        // Whose it is, then where it came from.
+                        Text([parsed.owner, entry.noteTitle].compactMap { $0 }.joined(separator: " · "))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -2388,15 +2303,6 @@ private struct OpenActionRow: View {
                                 .foregroundStyle(
                                     dueChip.isOverdue
                                         ? NookPalette.danger : .secondary
-                                )
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1)
-                                .background(
-                                    Capsule().fill(
-                                        (dueChip.isOverdue
-                                            ? NookPalette.danger
-                                            : Color.secondary).opacity(0.12)
-                                    )
                                 )
                                 .accessibilityLabel(
                                     dueChip.isOverdue
@@ -2426,15 +2332,15 @@ private struct OpenActionRow: View {
             .disabled(exported)
 
             Divider()
-            Button("Due today") { onSetDue(Calendar.current.startOfDay(for: Date())) }
-            Button("Due tomorrow") { onSetDue(tomorrow()) }
-            Button("Due next week") { onSetDue(nextWeek()) }
-            Button("Choose date…") {
+            Button("Due Today") { onSetDue(Calendar.current.startOfDay(for: Date())) }
+            Button("Due Tomorrow") { onSetDue(tomorrow()) }
+            Button("Due Next Week") { onSetDue(nextWeek()) }
+            Button("Choose Date…") {
                 pickerDate = entry.dueDate ?? tomorrow()
                 showsDuePicker = true
             }
             if entry.dueDate != nil {
-                Button("Remove due date", role: .destructive) {
+                Button("Remove Due Date", role: .destructive) {
                     onClearDue()
                 }
             }
@@ -2449,7 +2355,7 @@ private struct OpenActionRow: View {
                 HStack {
                     Spacer()
                     Button("Cancel") { showsDuePicker = false }
-                    Button("Set due date") {
+                    Button("Set Due Date") {
                         showsDuePicker = false
                         onSetDue(Calendar.current.startOfDay(for: pickerDate))
                     }

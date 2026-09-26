@@ -112,9 +112,9 @@ struct LiveMeetingView: View {
                                 transcriptScroll.jumpToLatest()
                             }
                         } label: {
-                            Label("Jump to latest", systemImage: "arrow.down")
+                            Label("Jump to Latest", systemImage: "arrow.down")
                         }
-                        .buttonStyle(NookButtonStyle())
+                        .buttonStyle(.bordered)
                         .background(
                             NookPalette.paper,
                             in: RoundedRectangle(cornerRadius: NookRadius.control, style: .continuous)
@@ -303,7 +303,7 @@ struct LiveMeetingView: View {
             Button {
                 meeting.stopRecording()
             } label: {
-                Label("Finish meeting", systemImage: "stop.fill")
+                Label("Finish Meeting", systemImage: "stop.fill")
                     .labelStyle(.iconOnly)
             }
             .buttonStyle(
@@ -368,7 +368,7 @@ struct LiveMeetingView: View {
         Button {
             meeting.stopRecording()
         } label: {
-            Label("Finish meeting", systemImage: "stop.fill")
+            Label("Finish Meeting", systemImage: "stop.fill")
         }
         .buttonStyle(
             LiveShelfControlStyle(
@@ -415,7 +415,7 @@ struct LiveMeetingView: View {
                 .font(NookType.metadata)
                 .foregroundStyle(.secondary)
 
-            Label("Finish meeting", systemImage: "stop.fill")
+            Label("Finish Meeting", systemImage: "stop.fill")
                 .font(NookType.metadata)
                 .foregroundStyle(NookPalette.prominentButtonForeground)
                 .padding(.horizontal, 14)
@@ -463,10 +463,10 @@ struct LiveMeetingView: View {
                 LiveProcessingStats(live: meeting.live)
 
                 if step != .discarding, meeting.canCancelProcessing {
-                    Button("Cancel and discard recording") {
+                    Button("Cancel and Discard Recording") {
                         meeting.requestProcessingCancellation()
                     }
-                    .buttonStyle(NookButtonStyle())
+                    .buttonStyle(.bordered)
                     .accessibilityHint(
                         "Asks before permanently discarding this recording without saving a note"
                     )
@@ -497,22 +497,17 @@ struct LiveMeetingView: View {
                     Button(permission.primaryActionTitle) {
                         meeting.performPermissionPrimaryAction()
                     }
-                    .buttonStyle(NookButtonStyle())
+                    .buttonStyle(.bordered)
 
                     Button("Open \(settingsName(for: permission)) Settings") {
                         meeting.revealPermissions()
                     }
-                    .buttonStyle(
-                        NookButtonStyle(
-                            tint: NookPalette.accent,
-                            isProminent: true
-                        )
-                    )
+                    .buttonStyle(.borderedProminent)
                 } else {
                     Button("Dismiss") {
                         meeting.resetStatus()
                     }
-                    .buttonStyle(NookButtonStyle())
+                    .buttonStyle(.bordered)
                 }
             }
         }
@@ -1166,7 +1161,7 @@ private struct ProcessingRail: View {
     private func normalizedIndex(_ step: MeetingPhase.ProcessingStep) -> Int {
         switch step {
         case .preparing: 0
-        case .refining, .transcribing: 1
+        case .refining, .transcribing, .separatingSpeakers: 1
         case .summarizing: 2
         case .saving: 3
         case .discarding: 0
@@ -1193,7 +1188,7 @@ private struct ProcessingRail: View {
         // an instruction. It used to mix the two, so "Transcript" and "Distill"
         // read as different kinds of label sitting in the same row.
         case .preparing: "Capture"
-        case .refining, .transcribing: "Transcript"
+        case .refining, .transcribing, .separatingSpeakers: "Transcript"
         case .summarizing: "Summary"
         case .saving: "Note"
         case .discarding: "Cleanup"

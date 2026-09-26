@@ -46,6 +46,35 @@ struct NookDesignContrastTests {
         }
     }
 
+    /// The notch's filled capsule (Record, Open Settings, Bring Back Here)
+    /// carries its label and symbol in fixed ink, at rest and pressed. The
+    /// symbol once resolved to white and measured under 2:1.
+    @Test
+    func notchCapsuleLabelsAndSymbolsStayReadableOnTheAccent() throws {
+        let appearance = try #require(NSAppearance(named: .darkAqua))
+        let ink = try resolve(NookPalette.notchInk, in: appearance)
+        let black = try resolve(.black, in: appearance)
+        for fillColor in [NookPalette.notchAccent, NookPalette.accent] {
+            for opacity in [1.0, 0.86] {
+                let fill = try resolve(fillColor.opacity(opacity), in: appearance)
+                    .composited(over: black)
+                let ratio = ink.contrast(against: fill)
+                #expect(ratio >= 4.5, "opacity \(opacity): \(ratio):1")
+            }
+        }
+    }
+
+    /// System prominent buttons draw white labels on the accent fill, in
+    /// both appearances, so the fill has to carry them at AA.
+    @Test(arguments: [Appearance.light, .dark])
+    func systemProminentButtonsKeepWhiteLabelsReadableOnTheAccentFill(_ variant: Appearance) throws {
+        let appearance = try #require(NSAppearance(named: variant.name))
+        let fill = try resolve(NookPalette.accentFill, in: appearance)
+        let white = try resolve(.white, in: appearance)
+        let ratio = white.contrast(against: fill)
+        #expect(ratio >= 4.5, "\(variant.rawValue): \(ratio):1")
+    }
+
     @Test(arguments: [NookAppearancePreference.light, .dark])
     func anExplicitAppAppearanceResolvesButtonColorsInsideTheOppositeDrawingAppearance(
         _ choice: NookAppearancePreference

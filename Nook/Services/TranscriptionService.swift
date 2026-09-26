@@ -17,12 +17,29 @@ actor TranscriptionService {
         self.timeoutOverride = timeout
     }
 
-    func transcribe(audioURL: URL, localeIdentifier: String) async throws -> [TranscriptSegment] {
+    func transcribe(
+        audioURL: URL, recordingURLs: [URL] = [], localeIdentifier: String
+    ) async throws -> [TranscriptSegment] {
         try Task.checkCancellation()
         let seconds = timeoutOverride ?? Self.deadline(for: Self.duration(of: audioURL))
         let operation = operation
         let work = Task {
-            try await operation(audioURL, localeIdentifier)
+            let selection = try SourceAudioFiles.select(recordingURLs)
+            if let sourced = try await RecordedSourceTranscription.transcribeIfLabelled(
+                recordingURLs: selection.urls, localeIdentifier: localeIdentifier, operation: operation
+            ) {
+                try selection.validate()
+                return sourced
+            }
+            try Task.checkCancellation()
+            let playbackSnapshot = recordingURLs.isEmpty ? nil : try NoteCombiner.AudioFileSnapshot(url: audioURL)
+            let result = try await operation(audioURL, localeIdentifier)
+            try Task.checkCancellation()
+            do {
+                try selection.validate()
+                try playbackSnapshot?.validate()
+            } catch { throw AudioExtractionError.filesChanged }
+            return result
         }
         // A Speech sequence or its finalization can stop yielding forever.
         // The same abandoning deadline as live capture lets the caller retain

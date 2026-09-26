@@ -2,6 +2,11 @@ import CryptoKit
 import Foundation
 
 enum MarkdownCodec {
+    // A plain "Open questions" heading already belongs to users in older
+    // notes, including inside Summary/My notes. This invisible Markdown marker
+    // gives the generated section ownership without reinterpreting their prose.
+    static let openQuestionsHeading = "Open questions <!-- nook:summary -->"
+
     static func encode(_ note: MeetingNote) -> String {
         let keyPoints = bulletList(note.keyPoints)
         let decisions = bulletList(note.decisions)
@@ -33,6 +38,15 @@ enum MarkdownCodec {
                 .joined(separator: ",")
             frontmatterLines.append("moments: \(offsets)")
         }
+        if let pending = note.summaryPending, note.kind == .meeting {
+            frontmatterLines.append("summary_status: \(pending.rawValue)")
+        }
+        if let provenance = note.summaryProvenance, note.kind == .meeting {
+            frontmatterLines.append("summary_origin: \(provenance.rawValue)")
+        }
+        if note.kind == .meeting, note.summaryRecipe != .general {
+            frontmatterLines.append("summary_recipe: \(note.summaryRecipe.rawValue)")
+        }
         // A single-sitting note is the ordinary case, so its sessions stay
         // out of the file entirely.
         if note.sessions.count > 1 {
@@ -45,6 +59,15 @@ enum MarkdownCodec {
             frontmatterLines.append(
                 "audioStart: \(String(format: "%.1f", note.audioStart))"
             )
+        }
+        // The names used beside transcript lines. Listed so a reader can
+        // tell "**Ana:**" from text that happens to start in bold; only notes
+        // whose speakers were separated carry it.
+        let speakers = SpeakerNames.speakers(in: note.transcript)
+        if !speakers.isEmpty,
+           let data = try? JSONEncoder().encode(speakers),
+           let list = String(data: data, encoding: .utf8) {
+            frontmatterLines.append("speakers: \(list)")
         }
         let frontmatter = (frontmatterLines + ["---"]).joined(separator: "\n")
 
@@ -106,6 +129,10 @@ enum MarkdownCodec {
         appendSection("Key points", keyPoints)
         appendSection("Decisions", decisions)
         appendSection("Action items", actions)
+        if !note.openQuestions.isEmpty
+            || note.extraSections.contains(where: { $0.anchor == "## \(openQuestionsHeading.lowercased())" }) {
+            appendSection(openQuestionsHeading, note.openQuestions.isEmpty ? "" : bulletList(note.openQuestions))
+        }
 
         // A digest has no recorded transcript. Its empty personal section is
         // omitted, but any annotations somebody added must survive saving.
@@ -193,8 +220,15 @@ enum MarkdownCodec {
             actionChecklist.filter(\.isChecked).map(\.text)
         ).intersection(actionItems)
         let personalNotes = personalNotesContent(in: blocks)
+        let speakers = (metadata["speakers"]?.data(using: .utf8))
+            .flatMap { try? JSONDecoder().decode([String].self, from: $0) }?
+            .compactMap(SpeakerNames.sanitized) ?? []
         let transcript = TranscriptAssembler.coalesce(
-            transcriptItems(in: body(of: "Transcript", in: blocks), noteID: id)
+            transcriptItems(
+                in: body(of: "Transcript", in: blocks),
+                noteID: id,
+                speakers: speakers
+            )
         )
         // Flagged moments only describe a recording timeline, which spoken
         // notes do not have.
@@ -210,7 +244,7 @@ enum MarkdownCodec {
             ? 0
             : TimeInterval(metadata["audioStart"] ?? "") ?? 0
 
-        return MeetingNote(
+        var note = MeetingNote(
             id: id,
             kind: kind,
             title: title,
@@ -218,9 +252,18 @@ enum MarkdownCodec {
             endedAt: endedAt,
             sourceApp: source,
             summary: summary,
+            summaryPending: kind == .meeting
+                ? PendingSummaryKind(rawValue: metadata["summary_status"] ?? "") : nil,
+            summaryProvenance: kind == .meeting
+                ? SummaryProvenance(rawValue: unquote(metadata["summary_origin"] ?? "")) : nil,
+            summaryRecipe: kind == .meeting
+                ? SummaryRecipe(rawValue: unquote(metadata["summary_recipe"] ?? "")) ?? .general : .general,
             keyPoints: keyPoints,
             decisions: decisions,
             actionItems: actionItems,
+            openQuestions: NoteContentSanitizer.meaningfulItems(
+                listItems(in: body(of: openQuestionsHeading, in: blocks))
+            ),
             completedActionItems: completedActionItems,
             personalNotes: personalNotes,
             transcript: transcript,
@@ -233,6 +276,10 @@ enum MarkdownCodec {
                 MeetingNote.contentRevision(Data(markdown.utf8))
             }
         )
+        if note.summaryProvenance == nil, kind == .meeting {
+            note.summaryProvenance = SummaryFallback.legacyProvenance(for: note)
+        }
+        return note
     }
 
     /// Flagged offsets from the frontmatter line, in the order written.
@@ -267,8 +314,8 @@ enum MarkdownCodec {
     /// are exactly the offsets appended material was shifted by.
     private static func transcriptLines(for note: MeetingNote) -> String {
         var lines = note.transcript.map { segment in
-            let speaker = segment.source == .mixed
-                ? "" : "**\(segment.source.label):** "
+            let speaker = segment.source == .mixed && segment.speaker == nil
+                ? "" : "**\(segment.speakerLabel):** "
             return "- **[\(segment.timestamp)]** \(speaker)\(segment.text.trimmingCharacters(in: .whitespacesAndNewlines))"
         }
         guard note.sessions.count > 1 else {
@@ -320,6 +367,7 @@ enum MarkdownCodec {
         "## key points",
         "## decisions",
         "## action items",
+        "## \(openQuestionsHeading.lowercased())",
         "## my notes",
         "## transcript"
     ]
@@ -811,7 +859,8 @@ extension MarkdownCodec {
     private static let listSectionHeadings: Set<String> = [
         "## key points",
         "## decisions",
-        "## action items"
+        "## action items",
+        "## \(openQuestionsHeading.lowercased())"
     ]
 
     /// Everything in the body that no field models, in file order.
@@ -1020,21 +1069,32 @@ extension MarkdownCodec {
 
     private static func transcriptItems(
         in section: String,
-        noteID: UUID
+        noteID: UUID,
+        speakers: [String] = []
     ) -> [TranscriptSegment] {
-        section.split(separator: "\n").enumerated().compactMap { index, rawLine in
+        // Longest first, so "Ana Silva" is not read as "Ana".
+        let speakerPrefixes = speakers
+            .sorted { $0.count > $1.count }
+            .map { ($0, "**\($0):** ") }
+        return section.split(separator: "\n").enumerated().compactMap { index, rawLine -> TranscriptSegment? in
             let line = rawLine.trimmingCharacters(in: .whitespaces)
             guard line.hasPrefix("- **["), let closing = line.range(of: "]**") else { return nil }
             let stampStart = line.index(line.startIndex, offsetBy: 5)
             let stamp = String(line[stampStart..<closing.lowerBound])
             var text = line[closing.upperBound...].trimmingCharacters(in: .whitespaces)
             let source: TranscriptSegment.Source
+            var speaker: String?
             if text.hasPrefix("**You:** ") {
                 source = .microphone
                 text.removeFirst("**You:** ".count)
             } else if text.hasPrefix("**Meeting:** ") {
                 source = .system
                 text.removeFirst("**Meeting:** ".count)
+            } else if let match = speakerPrefixes.first(where: { text.hasPrefix($0.1) }) {
+                // A separated voice is always on the meeting side.
+                source = .system
+                speaker = match.0
+                text.removeFirst(match.1.count)
             } else {
                 source = .mixed
             }
@@ -1057,7 +1117,8 @@ extension MarkdownCodec {
                 startTime: seconds,
                 duration: 0,
                 text: text,
-                source: source
+                source: source,
+                speaker: speaker
             )
         }
     }

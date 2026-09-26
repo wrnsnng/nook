@@ -405,13 +405,19 @@ struct RecordingLifecycleTests {
             baseURL,
             directory.appendingPathComponent("\(id.uuidString).part-2.mp4"),
             directory.appendingPathComponent("\(id.uuidString).m4a"),
+            directory.appendingPathComponent("\(id.uuidString).sources"),
+            directory.appendingPathComponent("\(id.uuidString).part-2.sources"),
         ]
         let unrelated = [
             directory.appendingPathComponent("\(UUID().uuidString).mp4"),
             directory.appendingPathComponent("\(id.uuidString).txt"),
+            directory.appendingPathComponent("\(UUID().uuidString).sources"),
         ]
         for url in owned + unrelated {
-            try Data("private".utf8).write(to: url)
+            if url.pathExtension == "sources" {
+                try fileManager.createDirectory(at: url, withIntermediateDirectories: false)
+                try Data("private".utf8).write(to: SourceAudioFiles.audio(in: url))
+            } else { try Data("private".utf8).write(to: url) }
         }
 
         let failures = RecordingArtifactCleanup.removeArtifacts(
@@ -2280,26 +2286,52 @@ struct LiveCaptionRescueTests {
 @MainActor
 struct PauseRemovalErrorTests {
     @Test
-    func aMissingCallbackDoesNotUndoThePause() {
-        #expect(CaptureService.waitErrorMeansRemovalLanded(
-            CaptureError.finalizationTimedOut
-        ))
-        #expect(CaptureService.waitErrorMeansRemovalLanded(
-            CancellationError()
-        ))
+    func aMissingCallbackDoesNotUndoThePause() async {
+        let waiter = CaptureFinalizationWaiter(timeout: .milliseconds(10))
+        var removed = false
+        await #expect(throws: CaptureError.finalizationTimedOut) {
+            try await waiter.wait { removed = true }
+        }
+        #expect(removed)
     }
 
     @Test
-    func aFailedRemovalLeavesCaptureActive() {
+    func aFailedRemovalLeavesCaptureActive() async {
         struct RemovalThrew: Error {}
+        let waiter = CaptureFinalizationWaiter(timeout: .seconds(1))
+        var removed = false
+        let remove: () throws -> Void = { throw RemovalThrew() }
+        await #expect(throws: RemovalThrew.self) {
+            try await waiter.wait { try remove(); removed = true }
+        }
+        #expect(!removed)
+    }
 
-        #expect(!CaptureService.waitErrorMeansRemovalLanded(
-            CaptureError.notRecording
-        ))
-        #expect(!CaptureService.waitErrorMeansRemovalLanded(
-            CaptureError.alreadyPaused
-        ))
-        #expect(!CaptureService.waitErrorMeansRemovalLanded(RemovalThrew()))
+    @Test
+    func cancellationBeforeRemovalDoesNotProduceARemovalReceipt() async {
+        let waiter = CaptureFinalizationWaiter(timeout: .seconds(1))
+        let task = Task { @MainActor in
+            withUnsafeCurrentTask { $0?.cancel() }
+            var removed = false
+            do { try await waiter.wait { removed = true } }
+            catch { #expect(error is CancellationError) }
+            return removed
+        }
+        #expect(await !task.value)
+        #expect(!waiter.isWaiting)
+    }
+
+    @Test
+    func failedFileFinalizationDoesNotEraseASuccessfulRemovalReceipt() async {
+        let waiter = CaptureFinalizationWaiter(timeout: .seconds(1))
+        var removed = false
+        await #expect(throws: (any Error).self) {
+            try await waiter.wait {
+                removed = true
+                waiter.resolve(.failure(CocoaError(.fileWriteUnknown)))
+            }
+        }
+        #expect(removed)
     }
 }
 

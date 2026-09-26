@@ -400,7 +400,7 @@ final class LibraryAnswerService: ObservableObject {
         }
 
         for segment in note.transcript {
-            let line = "[\(segment.timestamp)] \(segment.source.label): \(segment.text)"
+            let line = "[\(segment.timestamp)] \(segment.speakerLabel): \(segment.text)"
             length += line.count
             lines.append(line)
             if length > 600 {

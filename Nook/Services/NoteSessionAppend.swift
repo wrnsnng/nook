@@ -75,7 +75,8 @@ enum NoteSessionAppend {
                         startTime: segment.startTime + offset,
                         duration: segment.duration,
                         text: segment.text,
-                        source: segment.source
+                        source: segment.source,
+                        speaker: segment.speaker
                     )
                 }
         )

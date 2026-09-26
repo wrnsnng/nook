@@ -297,7 +297,7 @@ struct StorageInventoryTests {
         #expect(locations.first { $0.id == .drafts }?.url.path == "/synthetic/current-drafts")
         #expect(locations.first { $0.id == .searchCache }?.url.lastPathComponent == "chunks.json")
         #expect(locations.first { $0.id == .eventLog }?.url == NookEventLog.url)
-        #expect(locations.filter { $0.scope == .directoryTree }.map(\.id) == [.appCache])
+        #expect(locations.filter { $0.scope == .directoryTree }.map(\.id) == [.recordings, .appCache])
     }
 
     private func scan(_ location: StorageInventoryLocation) -> [StorageInventoryEntry] {

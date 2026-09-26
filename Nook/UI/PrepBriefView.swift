@@ -153,21 +153,16 @@ struct PrepBriefView: View {
     private var headerActions: some View {
         HStack(spacing: NookSpacing.small) {
             if let lastSitting = brief.sittings.first {
-                Button("Open last notes") {
+                Button("Open Last Notes") {
                     onSelectNote(lastSitting.id)
                 }
-                .buttonStyle(NookButtonStyle(tint: NookPalette.accent))
+                .buttonStyle(.bordered)
                 .help("Open the note from \(lastSitting.title)")
             }
 
             if let onRecordSitting {
-                Button("Record this sitting", action: onRecordSitting)
-                    .buttonStyle(
-                        NookButtonStyle(
-                            tint: NookPalette.accent,
-                            isProminent: true
-                        )
-                    )
+                Button("Record This Sitting", action: onRecordSitting)
+                    .buttonStyle(.borderedProminent)
                     .help("Start recording and file it under this meeting")
             }
         }
@@ -277,34 +272,25 @@ struct PrepCard: View {
     let isOpen: Bool
     let onOpen: () -> Void
 
+    /// An ordinary sidebar row; the list's own selection shows when the
+    /// brief is open, as it does for every note below it.
     var body: some View {
         Button(action: onOpen) {
-            HStack(spacing: 9) {
-                Image(systemName: "cup.and.saucer.fill")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(isOpen ? Color.white : NookPalette.accent)
-                    .frame(width: 16)
+            Label {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(brief.eventTitle)
-                        .font(.callout.weight(.medium))
+                        .font(.headline)
                         .lineLimit(1)
                     Text(subtitle)
-                        .font(.caption2)
-                        .foregroundStyle(
-                            isOpen ? Color.white.opacity(0.85) : .secondary
-                        )
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
-                Spacer(minLength: 0)
+            } icon: {
+                Image(systemName: "calendar")
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(
-                        isOpen ? NookPalette.accent : NookPalette.accent.opacity(0.10)
-                    )
-            )
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

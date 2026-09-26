@@ -39,6 +39,9 @@ struct SettingsView: View {
     @State private var selectedPane: SettingsPane
     @State private var accessibilityGranted = TextInsertionService.isTrusted
     @State private var showingRestoreAllDefaultsConfirmation = false
+    @AppStorage(NotchPeekPreference.key) private var notchPeekEnabled = true
+    @AppStorage(SpeakerSeparationPreference.key) private var separateSpeakers = true
+    @AppStorage(SpotlightIndexPreference.key) private var spotlightEnabled = true
     /// Nil until the bundle's signature has been read, which happens off the
     /// main thread the first time About is shown.
     @State private var signature: NookCodeSignature?
@@ -100,7 +103,6 @@ struct SettingsView: View {
                 }
                 .tag(SettingsPane.about)
         }
-        .padding(20)
         .sheet(isPresented: $showingStorageInventory) {
             StorageInventoryView(
                 locations: storageLocations(store.storageURL),
@@ -130,8 +132,8 @@ struct SettingsView: View {
         }
     }
 
-    /// Appearance and calendar: the two settings that are about Nook itself
-    /// rather than about a thing Nook does.
+    /// Appearance, the notch and calendar: the settings that are about Nook
+    /// itself rather than about a thing Nook does.
     private var generalPane: some View {
         Form {
             Section {
@@ -143,12 +145,21 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
             } header: {
-                Label("Look & feel", systemImage: "circle.lefthalf.filled")
+                Text("Look & feel")
             } footer: {
                 Text("Auto follows your Mac. Light and Dark keep Nook fixed in that appearance.")
             }
 
+            Section {
+                Toggle("Show Nook when pointing at the notch", isOn: $notchPeekEnabled)
+            } header: {
+                Text("Notch")
+            } footer: {
+                Text("Rest the pointer on the notch, or the middle of the menu bar on a display without one, to record, write a quick note or open the library. Nothing is recorded until you choose to.")
+            }
+
             calendarSection
+            spotlightSection
         }
         .formStyle(.grouped)
     }
@@ -165,7 +176,7 @@ struct SettingsView: View {
                     isOn: $meeting.showLiveCaptions
                 )
             } header: {
-                Label("Meeting awareness", systemImage: "sparkles")
+                Text("Meeting awareness")
             } footer: {
                 Text("Nook quietly watches for meeting windows from Zoom, Teams, Google Meet, FaceTime, Webex, and other common apps. The top panel and a macOS notification always ask before recording.")
             }
@@ -188,10 +199,11 @@ struct SettingsView: View {
                         Text(name).tag(identifier)
                     }
                 }
+                Toggle("Tell speakers apart", isOn: $separateSpeakers)
             } header: {
-                Label("Transcription", systemImage: "captions.bubble")
+                Text("Transcription")
             } footer: {
-                Text("Recognition runs with Apple’s on-device speech model. You can change the language between meetings.")
+                Text("Recognition runs with Apple’s on-device speech model. You can change the language between meetings. After a meeting, Nook separates the other voices on this Mac and labels them Speaker 1, Speaker 2 until you name them.")
             }
 
             audioInputCheckSection
@@ -248,11 +260,20 @@ struct SettingsView: View {
                     .font(NookType.caption)
                     .foregroundStyle(NookPalette.warning)
                     .fixedSize(horizontal: false, vertical: true)
+                if let permission = audioInputCheck.requiredPermission,
+                   let url = permission.settingsURL {
+                    Button("Open Permission Settings…") {
+                        NSWorkspace.shared.open(url)
+                    }
+                    .accessibilityLabel(permission == .microphone
+                        ? "Open Microphone permission settings"
+                        : "Open Screen and System Audio Recording permission settings")
+                }
             }
         } header: {
-            Label("Test meeting audio", systemImage: "waveform.and.mic")
+            Text("Test meeting audio")
         } footer: {
-            Text("Nook briefly listens to your microphone and meeting audio to show these levels. It does not record, save audio, transcribe speech, or send anything. Stop a meeting or dictation before starting the test.")
+            Text("Nook listens only while this test is running. It does not record, save audio, create a note, transcribe speech, or send anything. Normal macOS recording indicators still appear. Stop a meeting or dictation before starting the test.")
         }
     }
 
@@ -293,7 +314,7 @@ struct SettingsView: View {
                     .foregroundStyle(NookPalette.danger)
             }
         } header: {
-            Label("Storage", systemImage: "externaldrive")
+            Text("Storage")
         } footer: {
             Text("Every note is an ordinary Markdown file. When audio retention is off, the temporary recording is removed as soon as the note is safely written.")
         }
@@ -321,11 +342,23 @@ struct SettingsView: View {
                 .foregroundStyle(NookPalette.danger)
             }
         } header: {
-            Label("Calendar", systemImage: "calendar")
+            Text("Calendar")
         } footer: {
             Text(
                 "Read on this Mac only, to name meetings after their event and to mention one shortly before it starts. Events come from every calendar account set up in System Settings, Internet Accounts, including iCloud, Google, and Exchange, so there is nothing to sign in to here. Nook still asks before recording."
             )
+        }
+    }
+
+    /// Spotlight's index is on this Mac, but it is still a second copy of
+    /// titles and summaries outside the notes folder, so it can be removed.
+    private var spotlightSection: some View {
+        Section {
+            Toggle("Show meetings in Spotlight", isOn: $spotlightEnabled)
+        } header: {
+            Text("Spotlight")
+        } footer: {
+            Text("Titles, summaries, key points and decisions from your saved meetings and notes appear in Spotlight and open in the library. Transcripts and My notes are left out. The index stays on this Mac, and turning this off removes everything Nook added to it.")
         }
     }
 
@@ -389,7 +422,7 @@ struct SettingsView: View {
                 }
             }
         } header: {
-            Label("Voice typing", systemImage: "keyboard")
+            Text("Voice typing")
         } footer: {
             Text(
                 dictation.isEnabled
@@ -415,7 +448,7 @@ struct SettingsView: View {
                 detail: "With no text field focused, the same shortcut opens a quick note instead of doing nothing."
             )
         } header: {
-            Label("What this adds", systemImage: "wand.and.stars")
+            Text("What this adds")
         } footer: {
             Text("Dictation is off until you turn it on, and asks for Accessibility access only the first time you use it. Meeting notes work without it.")
         }
@@ -435,16 +468,16 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
 
             if dictation.style == .custom {
-                TextEditor(text: $dictation.customPrompt)
-                    .font(NookType.caption)
-                    .frame(minHeight: 68)
-                    .scrollContentBackground(.hidden)
-                    .padding(NookSpacing.small)
-                    .background(
-                        NookPalette.paper,
-                        in: .rect(cornerRadius: NookRadius.control)
-                    )
-                    .accessibilityLabel("Custom dictation instruction")
+                // A growing system text field rather than a hand-framed editor.
+                TextField(
+                    "Custom instruction",
+                    text: $dictation.customPrompt,
+                    prompt: Text("Describe how Nook should write your words"),
+                    axis: .vertical
+                )
+                .lineLimit(3...8)
+                .labelsHidden()
+                .accessibilityLabel("Custom dictation instruction")
             }
 
             if dictation.style.usesLanguageModel, !isAppleIntelligenceAvailable {
@@ -456,7 +489,7 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
             }
         } header: {
-            Label("How Nook writes it", systemImage: "wand.and.stars")
+            Text("How Nook writes it")
         } footer: {
             Text("Nook checks every rewrite against what you actually said. If the wording drifts too far, your own words are typed instead. A dictated question is never answered, only written down.")
         }
@@ -501,7 +534,7 @@ struct SettingsView: View {
             }
             .padding(.vertical, 2)
         } header: {
-            Label("Permission", systemImage: "hand.raised.fill")
+            Text("Permission")
         }
     }
 
@@ -571,7 +604,7 @@ struct SettingsView: View {
                 .accessibilityElement(children: .contain)
             }
         } header: {
-            Label("Note actions", systemImage: "wand.and.sparkles")
+            Text("Note actions")
         } footer: {
             Text(noteActionsFooter)
         }
@@ -603,7 +636,7 @@ struct SettingsView: View {
                         keyboardShortcutRow(for: id)
                     }
                 } header: {
-                    Label(section.title, systemImage: section.symbol)
+                    Text(section.title)
                 } footer: {
                     Text(section.footer)
                 }
@@ -645,7 +678,7 @@ struct SettingsView: View {
                 }
                 .padding(.vertical, NookSpacing.xSmall)
             } header: {
-                Label("Reset", systemImage: "arrow.counterclockwise")
+                Text("Reset")
             } footer: {
                 Text(
                     "This affects only Nook's shortcuts. It does not change your Mac's keyboard settings."
@@ -660,7 +693,7 @@ struct SettingsView: View {
                             .foregroundStyle(NookPalette.warning)
                     }
                 } header: {
-                    Label("Shared combinations", systemImage: "square.on.square")
+                    Text("Shared combinations")
                 } footer: {
                     Text(
                         "Two actions sharing a combination means only one of them can respond to it."
@@ -718,7 +751,7 @@ struct SettingsView: View {
             }
             .padding(.vertical, NookSpacing.xSmall)
         } header: {
-            Label("Voice typing", systemImage: "mic.and.signal.meter")
+            Text("Voice typing")
         } footer: {
             Text(
                 "Dictation can use a global shortcut, including modifiers held on their own. Change it in the Dictation pane."
@@ -896,7 +929,7 @@ struct SettingsView: View {
                     }
                 }
             } header: {
-                Label("How privacy works", systemImage: "hand.raised.fill")
+                Text("How privacy works")
             }
 
             Section {
@@ -1031,10 +1064,7 @@ struct SettingsView: View {
                     )
                 }
             } header: {
-                Label(
-                    "Software update",
-                    systemImage: "arrow.triangle.2.circlepath"
-                )
+                Text("Software update")
             }
 
             Section {
@@ -1067,7 +1097,7 @@ struct SettingsView: View {
                         || !updater.automaticallyChecksForUpdates
                 )
             } header: {
-                Label("Automatic updates", systemImage: "clock.arrow.circlepath")
+                Text("Automatic updates")
             } footer: {
                 Text(
                     updater.isUpdaterEnabled
@@ -1088,7 +1118,7 @@ struct SettingsView: View {
                     detail: "Updates install through Sparkle’s native dialog and reopen Nook when ready."
                 )
             } header: {
-                Label("Trust & control", systemImage: "lock.shield")
+                Text("Trust & control")
             }
         }
         .formStyle(.grouped)
@@ -1439,7 +1469,7 @@ private struct PerAppDictationStylesSection: View {
                     : "Expand to add or change a style for one app"
             )
         } header: {
-            Label("App-specific behavior", systemImage: "square.stack.3d.up")
+            Text("App-specific behavior")
         } footer: {
             Text(perAppFooter)
         }
@@ -1502,21 +1532,21 @@ private struct AudioInputCheckMeterRow: View {
     let label: String
     let level: Double
 
+    /// A form row like any other: the grouped form lays out the label.
     var body: some View {
-        HStack(spacing: NookSpacing.small) {
-            Text(label)
-                .frame(width: 72, alignment: .leading)
+        LabeledContent(label) {
+            HStack(spacing: NookSpacing.small) {
+                ProgressView(value: level, total: 1)
+                    .accessibilityLabel("\(label) audio level")
+                    .accessibilityValue("\(AudioInputCheckService.percentage(for: level))%")
 
-            ProgressView(value: level, total: 1)
-                .tint(NookPalette.accent)
-                .accessibilityLabel("\(label) audio level")
-                .accessibilityValue("\(AudioInputCheckService.percentage(for: level))%")
-
-            Text("\(AudioInputCheckService.percentage(for: level))%")
-                .font(NookType.metadata.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 42, alignment: .trailing)
-                .accessibilityHidden(true)
+                Text("\(AudioInputCheckService.percentage(for: level))%")
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .frame(width: 42, alignment: .trailing)
+                    .accessibilityHidden(true)
+            }
+            .frame(maxWidth: 320)
         }
     }
 }

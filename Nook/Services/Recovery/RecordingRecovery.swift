@@ -25,14 +25,18 @@ struct OrphanedRecording: Identifiable, Hashable, Sendable {
     }
 
     /// Audio already extracted from the capture, if a previous attempt got
-    /// that far. Reusing it skips the slowest part of recovering the note.
+    /// that far. Any remaining captures require a fresh matching playback export.
     var extractedAudio: URL? {
         urls.first { $0.pathExtension.lowercased() == "m4a" }
     }
 
     var captures: [URL] {
-        urls.filter { $0.pathExtension.lowercased() == "mp4" }
-            .sorted {
+        var captures = Set(urls.filter { $0.pathExtension.lowercased() == "mp4" }.map(\.standardizedFileURL))
+        for directory in urls where directory.pathExtension == "sources" {
+            let original = SourceAudioFiles.capture(for: directory)
+            if SourceAudioFiles.completedAudio(for: original) != nil { captures.insert(original.standardizedFileURL) }
+        }
+        return captures.sorted {
                 let first = Self.capturePart($0)
                 let second = Self.capturePart($1)
                 return first == second
@@ -120,8 +124,8 @@ final class RecordingRecovery: ObservableObject {
     private var reloadCancellable: AnyCancellable?
     private var recoveryTask: Task<Void, Never>?
     private let extractAudio: AudioExtraction
-    private let transcribeAudio: AudioTranscription
-    private let summarizeTranscript: TranscriptSummary
+    private let transcribeAudio: @MainActor (URL, [URL], String) async throws -> [TranscriptSegment]
+    private let summaryRunner: SummaryRegenerationSession.Runner?
 
     init(
         store: MarkdownStore,
@@ -129,6 +133,7 @@ final class RecordingRecovery: ObservableObject {
             try await AudioExtractor.extractAudio(from: sources, to: destination)
         },
         transcribeAudio: AudioTranscription? = nil,
+        transcriber: TranscriptionService = TranscriptionService(),
         summarizeTranscript: TranscriptSummary? = nil,
         trashItem: @escaping (URL) throws -> Void = { url in
             try FileManager.default.trashItem(at: url, resultingItemURL: nil)
@@ -137,21 +142,31 @@ final class RecordingRecovery: ObservableObject {
         self.store = store
         self.trashItem = trashItem
         self.extractAudio = extractAudio
-        let transcriber = TranscriptionService()
         if let transcribeAudio {
-            self.transcribeAudio = transcribeAudio
+            self.transcribeAudio = { url, _, locale in try await transcribeAudio(url, locale) }
         } else {
-            self.transcribeAudio = { url, locale in
-                try await transcriber.transcribe(audioURL: url, localeIdentifier: locale)
+            self.transcribeAudio = { url, captures, locale in
+                try await transcriber.transcribe(
+                    audioURL: url, recordingURLs: captures, localeIdentifier: locale
+                )
             }
         }
-        let summarizer = SummaryService()
         if let summarizeTranscript {
-            self.summarizeTranscript = summarizeTranscript
-        } else {
-            self.summarizeTranscript = { transcript, title in
-                await summarizer.summarize(transcript: transcript, fallbackTitle: title)
+            // Synthetic recovery callers can still control the model boundary.
+            // Production uses the shared failure-reporting, bounded session.
+            self.summaryRunner = { note, _ in
+                let insights = await summarizeTranscript(note.transcript, note.title)
+                var updated = note
+                updated.title = insights.title
+                updated.summary = insights.summary
+                updated.keyPoints = insights.keyPoints
+                updated.decisions = insights.decisions
+                updated.actionItems = insights.actionItems
+                updated.openQuestions = insights.openQuestions
+                return .regenerated(updated)
             }
+        } else {
+            self.summaryRunner = nil
         }
         // MarkdownStore publishes notes before it clears isLoading. Scanning
         // from that transition is the one place that cannot observe the old
@@ -203,7 +218,7 @@ final class RecordingRecovery: ObservableObject {
         var grouped: [UUID: [URL]] = [:]
         for url in entries {
             let extensionName = url.pathExtension.lowercased()
-            guard extensionName == "mp4" || extensionName == "m4a" else {
+            guard extensionName == "mp4" || extensionName == "m4a" || extensionName == "sources" else {
                 continue
             }
             // "<uuid>.mp4" and "<uuid>.part-2.mp4" belong to the same meeting.
@@ -229,7 +244,7 @@ final class RecordingRecovery: ObservableObject {
                 urls: urls,
                 recordedAt: values.compactMap(\.contentModificationDate).min()
                     ?? .distantPast,
-                byteSize: values.reduce(0) { $0 + Int64($1.fileSize ?? 0) }
+                byteSize: urls.reduce(0) { $0 + SourceAudioFiles.byteSize(of: $1) }
             )
         }
         .sorted { $0.recordedAt > $1.recordedAt }
@@ -242,12 +257,7 @@ final class RecordingRecovery: ObservableObject {
                 manager.fileExists(atPath: $0.path)
             }
             guard !remaining.isEmpty else { return nil }
-            let byteSize = remaining.reduce(0) { total, url in
-                total + Int64(
-                    (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
-                        ?? 0
-                )
-            }
+            let byteSize = remaining.reduce(0) { $0 + SourceAudioFiles.byteSize(of: $1) }
             return RecoveryCleanupFailure(
                 id: failure.id,
                 noteTitle: failure.noteTitle,
@@ -321,12 +331,19 @@ final class RecordingRecovery: ObservableObject {
             do {
                 try self.requireRecoverable(orphan.id, at: location)
                 let audioURL: URL
-                if let existing = orphan.extractedAudio {
+                let captures = orphan.captures
+                if let existing = orphan.extractedAudio, captures.isEmpty {
                     audioURL = existing
                 } else {
-                    guard !orphan.captures.isEmpty else {
+                    guard !captures.isEmpty else {
                         throw RecoveryError.nothingToRecover
                     }
+                    // A cached mix can predate a completed source companion or
+                    // a resumed part, including primary-only fallback captures.
+                    // Without a receipt tying that mix to every current part,
+                    // do not transcribe the new source timeline
+                    // while retaining old playback and deleting its originals.
+                    // Staged extraction preserves that cached file on failure.
                     // Named for the note rather than for whichever capture
                     // segment happened to sort first. Retention looks kept
                     // audio up by the note's identifier, so a meeting whose
@@ -334,13 +351,13 @@ final class RecordingRecovery: ObservableObject {
                     // to a name nothing could find again.
                     let destination = location.recordingsDirectory
                         .appendingPathComponent("\(orphan.id.uuidString).m4a")
-                    try await self.extractAudio(orphan.captures, destination)
+                    try await self.extractAudio(captures, destination)
                     try self.requireRecoverable(orphan.id, at: location)
                     audioURL = destination
                 }
 
                 let transcript = TranscriptAssembler.coalesce(
-                    try await self.transcribeAudio(audioURL, localeIdentifier)
+                    try await self.transcribeAudio(audioURL, captures, localeIdentifier)
                 )
                 try self.requireRecoverable(orphan.id, at: location)
                 guard !transcript.isEmpty else {
@@ -348,8 +365,9 @@ final class RecordingRecovery: ObservableObject {
                 }
 
                 let fallbackTitle = "Recovered meeting \(orphan.dateLabel)"
-                let insights = await self.summarizeTranscript(transcript, fallbackTitle)
-                try self.requireRecoverable(orphan.id, at: location)
+                let insights = SummaryService.fallbackInsights(
+                    transcript: transcript, fallbackTitle: fallbackTitle
+                )
                 let recordingsDirectory = location.recordingsDirectory
                 // Anything typed into the meeting's notes while it was running
                 // was written beside the recording. It is the only part of a
@@ -367,13 +385,16 @@ final class RecordingRecovery: ObservableObject {
                     endedAt: orphan.recordedAt,
                     sourceApp: "Recovered",
                     summary: insights.summary,
+                    summaryPending: .initial,
+                    summaryProvenance: .transcriptHighlights,
                     keyPoints: insights.keyPoints,
                     decisions: insights.decisions,
                     actionItems: insights.actionItems,
+                    openQuestions: insights.openQuestions,
                     personalNotes: liveNotes,
                     transcript: transcript
                 )
-                _ = try self.store.save(note, validatingBeforeCommit: {
+                let saved = try self.store.save(note, validatingBeforeCommit: {
                     try self.requireRecoverable(orphan.id, at: location)
                 })
                 try self.requireCurrentLocation(location)
@@ -409,6 +430,9 @@ final class RecordingRecovery: ObservableObject {
                     )
                 }
                 self.scan()
+                self.store.summarySessions.enrich(
+                    saved, purpose: .initial, store: self.store, runner: self.summaryRunner
+                )
             } catch {
                 self.message = error.localizedDescription
             }
@@ -487,11 +511,7 @@ final class RecordingRecovery: ObservableObject {
         recordedAt: Date,
         urls: [URL]
     ) -> RecoveryCleanupFailure {
-        let byteSize = urls.reduce(0) { total, url in
-            total + Int64(
-                (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
-            )
-        }
+        let byteSize = urls.reduce(0) { $0 + SourceAudioFiles.byteSize(of: $1) }
         return RecoveryCleanupFailure(
             id: note.id,
             noteTitle: note.title,
