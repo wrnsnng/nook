@@ -489,7 +489,7 @@ struct LibraryView: View {
                 // belong to the whole library sit trailing, as in Mail.
                 ToolbarItemGroup(placement: .automatic) {
                     Button(action: presentAskSheet) {
-                        Label("Ask your library", systemImage: "sparkle.magnifyingglass")
+                        Label("Ask Your Library", systemImage: "sparkle.magnifyingglass")
                     }
                     .help("Ask a question across all your notes")
                     .disabled(store.isLoading)
@@ -497,7 +497,7 @@ struct LibraryView: View {
                     Button {
                         createWeeklyDigest()
                     } label: {
-                        Label("Create weekly digest", systemImage: "newspaper")
+                        Label("Create Weekly Digest", systemImage: "newspaper")
                     }
                     .help("Compile this week's meetings into one note")
 
@@ -953,7 +953,7 @@ struct LibraryView: View {
                             Button("Retry") {
                                 store.reload()
                             }
-                            Button("Open notes folder") {
+                            Button("Open Notes Folder") {
                                 store.openStorageDirectory()
                             }
                         }
@@ -1030,7 +1030,7 @@ struct LibraryView: View {
                             }
                             if note.kind != .digest {
                                 Divider()
-                                Button("Record into this note") {
+                                Button("Record into This Note") {
                                     AppModel.shared.meeting.continueRecording(into: note)
                                 }
                                 .disabled(
@@ -1040,7 +1040,7 @@ struct LibraryView: View {
                                 .help(
                                     "Appends the next recording to this note instead of creating a new one"
                                 )
-                                Button("Merge another note into this") {
+                                Button("Merge Another Note into This") {
                                     requestMergePicker(for: note)
                                 }
                                 .disabled(mergeTask != nil)
@@ -1786,7 +1786,7 @@ private struct LibraryRecordingToolbar: View {
                     }
                 }
             } label: {
-                Label("New note", systemImage: "square.and.pencil")
+                Label("New Note", systemImage: "square.and.pencil")
             }
             .disabled(isProcessing)
             .keyboardShortcut(
@@ -1871,7 +1871,7 @@ private struct LibraryRecoverySection: View {
                     .accessibilityHint("Shows the remaining recordings that need attention")
                 } else if showsAll,
                           recovery.orphans.count > Self.visibleOrphanLimit {
-                    Button("Show fewer recordings") {
+                    Button("Show Fewer Recordings") {
                         withAnimation(NookMotion.quickAnimation(reduceMotion: reduceMotion)) {
                             showsAll = false
                         }
@@ -2029,7 +2029,7 @@ private struct LibraryRecoverySection: View {
                 Spacer(minLength: NookSpacing.xSmall)
             }
 
-            Button("Reveal files") {
+            Button("Reveal Files") {
                 recovery.reveal(failure)
             }
             .controlSize(.small)
@@ -2330,15 +2330,15 @@ private struct OpenActionRow: View {
             .disabled(exported)
 
             Divider()
-            Button("Due today") { onSetDue(Calendar.current.startOfDay(for: Date())) }
-            Button("Due tomorrow") { onSetDue(tomorrow()) }
-            Button("Due next week") { onSetDue(nextWeek()) }
-            Button("Choose date…") {
+            Button("Due Today") { onSetDue(Calendar.current.startOfDay(for: Date())) }
+            Button("Due Tomorrow") { onSetDue(tomorrow()) }
+            Button("Due Next Week") { onSetDue(nextWeek()) }
+            Button("Choose Date…") {
                 pickerDate = entry.dueDate ?? tomorrow()
                 showsDuePicker = true
             }
             if entry.dueDate != nil {
-                Button("Remove due date", role: .destructive) {
+                Button("Remove Due Date", role: .destructive) {
                     onClearDue()
                 }
             }
@@ -2353,7 +2353,7 @@ private struct OpenActionRow: View {
                 HStack {
                     Spacer()
                     Button("Cancel") { showsDuePicker = false }
-                    Button("Set due date") {
+                    Button("Set Due Date") {
                         showsDuePicker = false
                         onSetDue(Calendar.current.startOfDay(for: pickerDate))
                     }

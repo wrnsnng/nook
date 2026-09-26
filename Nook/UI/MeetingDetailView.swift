@@ -24,35 +24,31 @@ struct SummaryRegenerationProgressCard: View {
     let onCancel: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// A status line, as Mail and Music report background work: a small
+    /// spinner, what is happening, and a way to stop it. No card around it.
     var body: some View {
-        HStack(spacing: 14) {
-            NookPresence(state: .thinking, size: 30)
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(RegenerationCopy.headline(for: stage))
-                    .font(NookType.bodyEmphasized)
+                    .font(.headline)
                 Text(RegenerationCopy.detail(for: stage))
-                    .font(NookType.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
+                    .monospacedDigit()
                     .contentTransition(reduceMotion ? .identity : .numericText())
             }
             .accessibilityElement(children: .combine)
             Spacer(minLength: 0)
             Button("Cancel Summary", action: onCancel)
-                .buttonStyle(.bordered)
+                .controlSize(.small)
                 .accessibilityLabel("Cancel summary regeneration")
                 .help("Keep the saved transcript and notes, and stop accepting this summary result.")
         }
-        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            NookPalette.accent.opacity(0.07),
-            in: RoundedRectangle(cornerRadius: NookRadius.surface, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: NookRadius.surface, style: .continuous)
-                .stroke(NookPalette.accent.opacity(0.16), lineWidth: 0.7)
-        }
         .accessibilityElement(children: .contain)
     }
 }
@@ -836,7 +832,7 @@ struct MeetingDetailView: View {
                     // an autosaving field with no way to ask is a promise you
                     // cannot check. It confirms rather than being the only
                     // path, so forgetting it costs nothing.
-                    Button("Save notes") {
+                    Button("Save Notes") {
                         savePersonalNotes()
                     }
                     .disabled(
@@ -1238,7 +1234,7 @@ struct MeetingDetailView: View {
                 copyTranscript()
             } label: {
                 Label(
-                    copyNotice.current?.message == "Transcript copied" ? "Copied" : "Copy transcript",
+                    copyNotice.current?.message == "Transcript copied" ? "Copied" : "Copy Transcript",
                     systemImage: copyNotice.current?.message == "Transcript copied" ? "checkmark" : "doc.on.doc"
                 )
             }
@@ -1447,13 +1443,13 @@ struct MeetingDetailView: View {
                 canRetry: SummaryRegenerator.isAvailable(for: note) && !markdownDraft.hasChanges,
                 retry: regenerateSummary
             )
-            .padding(.horizontal, 24)
-            .padding(.vertical, 12)
+            .nookReadableColumn()
+            .padding(.vertical, 8)
         }
         if let stage = regeneration.stage {
             SummaryRegenerationProgressCard(stage: stage, onCancel: regeneration.cancel)
-                .padding(.horizontal, 24)
-                .padding(.vertical, 12)
+                .nookReadableColumn()
+                .padding(.vertical, 8)
         } else if SummaryRegenerator.isAvailable(for: note),
                   let message = regeneration.statusMessage(
                     summaryPending: note.summaryPending != nil && note.summaryProvenance == nil
@@ -1474,8 +1470,8 @@ struct MeetingDetailView: View {
                             : "Summarize the saved transcript on this Mac")
                 }
             }
-            .padding(16)
-            .background(NookPalette.accent.opacity(0.07))
+            .nookReadableColumn()
+            .padding(.vertical, 8)
             .accessibilityElement(children: .contain)
         }
     }
@@ -1721,7 +1717,7 @@ private struct RecordIntoNoteMenuItem: View {
         Button {
             meeting.continueRecording(into: note)
         } label: {
-            Label("Record into this note", systemImage: "record.circle")
+            Label("Record into This Note", systemImage: "record.circle")
         }
         .disabled(!canRecordIntoThisNote)
         .help(

@@ -296,7 +296,7 @@ struct QuickNoteView: View {
             Text("Make this a task?")
                 .foregroundStyle(.secondary)
 
-            Button("Make task") {
+            Button("Make Task") {
                 note.applyTaskSuggestion(suggestion)
                 dismissedSuggestion = suggestion.paragraph
             }
@@ -306,7 +306,7 @@ struct QuickNoteView: View {
                 "Make this a task due \(suggestion.cueLabel). Command-Return."
             )
 
-            Button("Not now") {
+            Button("Not Now") {
                 dismissedSuggestion = suggestion.paragraph
             }
             .buttonStyle(.borderless)

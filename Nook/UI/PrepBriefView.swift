@@ -153,7 +153,7 @@ struct PrepBriefView: View {
     private var headerActions: some View {
         HStack(spacing: NookSpacing.small) {
             if let lastSitting = brief.sittings.first {
-                Button("Open last notes") {
+                Button("Open Last Notes") {
                     onSelectNote(lastSitting.id)
                 }
                 .buttonStyle(.bordered)
@@ -161,7 +161,7 @@ struct PrepBriefView: View {
             }
 
             if let onRecordSitting {
-                Button("Record this sitting", action: onRecordSitting)
+                Button("Record This Sitting", action: onRecordSitting)
                     .buttonStyle(.borderedProminent)
                     .help("Start recording and file it under this meeting")
             }

@@ -69,7 +69,7 @@ struct DraftRecoverySection: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                        Button("Show recovery file in Finder") {
+                        Button("Show Recovery File in Finder") {
                             controller.revealIssue(issue)
                         }
                         .font(.caption)
@@ -98,7 +98,7 @@ struct DraftRecoverySection: View {
                 HStack {
                     Button("Retry") { Task { await controller.retry() } }
                         .disabled(controller.isWorking)
-                    Button("Open recovery folder") {
+                    Button("Open Recovery Folder") {
                         controller.revealRecoveryDirectory()
                     }
                 }

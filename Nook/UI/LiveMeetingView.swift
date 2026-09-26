@@ -112,7 +112,7 @@ struct LiveMeetingView: View {
                                 transcriptScroll.jumpToLatest()
                             }
                         } label: {
-                            Label("Jump to latest", systemImage: "arrow.down")
+                            Label("Jump to Latest", systemImage: "arrow.down")
                         }
                         .buttonStyle(.bordered)
                         .background(
@@ -303,7 +303,7 @@ struct LiveMeetingView: View {
             Button {
                 meeting.stopRecording()
             } label: {
-                Label("Finish meeting", systemImage: "stop.fill")
+                Label("Finish Meeting", systemImage: "stop.fill")
                     .labelStyle(.iconOnly)
             }
             .buttonStyle(
@@ -368,7 +368,7 @@ struct LiveMeetingView: View {
         Button {
             meeting.stopRecording()
         } label: {
-            Label("Finish meeting", systemImage: "stop.fill")
+            Label("Finish Meeting", systemImage: "stop.fill")
         }
         .buttonStyle(
             LiveShelfControlStyle(
@@ -415,7 +415,7 @@ struct LiveMeetingView: View {
                 .font(NookType.metadata)
                 .foregroundStyle(.secondary)
 
-            Label("Finish meeting", systemImage: "stop.fill")
+            Label("Finish Meeting", systemImage: "stop.fill")
                 .font(NookType.metadata)
                 .foregroundStyle(NookPalette.prominentButtonForeground)
                 .padding(.horizontal, 14)
@@ -463,7 +463,7 @@ struct LiveMeetingView: View {
                 LiveProcessingStats(live: meeting.live)
 
                 if step != .discarding, meeting.canCancelProcessing {
-                    Button("Cancel and discard recording") {
+                    Button("Cancel and Discard Recording") {
                         meeting.requestProcessingCancellation()
                     }
                     .buttonStyle(.bordered)

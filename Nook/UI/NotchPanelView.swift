@@ -798,7 +798,7 @@ struct NotchPanelView: View {
 
             Spacer()
 
-            Button("Open library") {
+            Button("Open Library") {
                 openLibrary()
                 meeting.resetStatus()
             }
@@ -1515,7 +1515,7 @@ private struct DetachedNotesPanel: View {
 
             Spacer()
 
-            Button("Bring forward", action: bringForward)
+            Button("Bring Forward", action: bringForward)
                 .buttonStyle(NookButtonStyle(tint: NookPalette.accent))
         }
         .frame(maxWidth: .infinity, minHeight: 126)

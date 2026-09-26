@@ -54,11 +54,11 @@ enum NookPermission: String, CaseIterable, Identifiable, Sendable {
     var requestActionTitle: String {
         switch self {
         case .screenRecording:
-            "Set up system audio"
+            "Set Up System Audio"
         case .microphone:
-            "Allow microphone"
+            "Allow Microphone"
         case .speechRecognition:
-            "Allow speech recognition"
+            "Allow Speech Recognition"
         }
     }
 

@@ -8,7 +8,10 @@ struct SummaryFallbackCard: View {
     let canRetry: Bool
     let retry: () -> Void
 
+    /// A system group box: the standard container for a note that sits
+    /// apart from the document without being an alert.
     var body: some View {
+        GroupBox {
         VStack(alignment: .leading, spacing: 10) {
             Label(SummaryFallback.title(for: provenance), systemImage: "doc.text.magnifyingglass")
                 .font(.headline)
@@ -22,8 +25,8 @@ struct SummaryFallbackCard: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+        .padding(6)
+        }
         .accessibilityElement(children: .contain)
     }
 }
