@@ -726,6 +726,15 @@ struct SnapshotRenderer {
                     .environment(\.colorScheme, snapshotColorScheme)
                     .transaction { $0.disablesAnimations = true }
             )
+        case "follow-up-light", "follow-up-dark":
+            canvasSize = CGSize(width: 560, height: 520)
+            content = AnyView(
+                FollowUpDraftView(note: roundTripped)
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .environment(\.colorScheme, snapshotColorScheme)
+                    .transaction { $0.disablesAnimations = true }
+            )
         case "prep-light", "prep-dark":
             canvasSize = CGSize(width: 1_100, height: 700)
             let brief = PrepBriefBuilder.build(

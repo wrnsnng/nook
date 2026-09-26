@@ -210,6 +210,14 @@ When available, Apple's Foundation Models framework creates summaries on-device.
 When it is unavailable or fails, Nook uses deterministic local extraction.
 Nook does not send transcripts to a hosted language model.
 
+## Follow-up drafts and sharing
+
+Draft Follow-up assembles a recap from the saved note on this Mac, without a
+model. Nothing is sent: Copy places the text on the clipboard, and Open in
+Mail hands it to the system's compose window for the user to review and send.
+Share uses the macOS share menu, so the destination is always one the user
+chooses.
+
 ## The command-line assistant bridge (opt-in)
 
 Note actions can optionally run through a Claude Code or Codex CLI already

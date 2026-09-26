@@ -22,6 +22,13 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
   the hover shelf opens a one-line note field in the notch; each line joins
   My notes. The My notes tab no longer disappears while notes are in their
   own window. Lines said at a flagged moment show the flag in live captions.
+- Draft Follow-up writes a recap of a saved meeting (summary, decisions, next
+  steps with owners and dates, open questions) for email or chat, on this Mac.
+  Review it, copy it, or open it in Mail; Nook never sends anything. Share a
+  note's summary or its Markdown file from the toolbar or the actions menu.
+- Action items show their owner when the item names one, as in
+  `Maya: refine the copy` or `@Maya refine the copy`, in the note and in Open
+  actions. The note's wording is not changed.
 - A new accent colour, lagoon teal, and a new app icon built around the notch.
 - Setup shows what each step is for on a small animated Mac, from a meeting
   being noticed to its note being saved.

@@ -2285,13 +2285,15 @@ private struct OpenActionRow: View {
             // invisible to VoiceOver and to the keyboard, so the only way to
             // open the note from here was the pointer.
             Button(action: onSelect) {
+                let parsed = ActionItemOwner.parse(entry.displayText)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.displayText)
+                    Text(parsed.displayTask)
                         .font(.callout)
                         .lineLimit(2)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     HStack(spacing: 6) {
-                        Text(entry.noteTitle)
+                        // Whose it is, then where it came from.
+                        Text([parsed.owner, entry.noteTitle].compactMap { $0 }.joined(separator: " · "))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)

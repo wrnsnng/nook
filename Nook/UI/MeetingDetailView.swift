@@ -106,6 +106,7 @@ struct MeetingDetailView: View {
     /// row's accessibility label below.
     @State private var transcriptSourceBadgeIDs: Set<UUID>
     @State private var reviewingSummaryItem: SummaryItemReviewSession?
+    @State private var showsFollowUpDraft = false
     @State private var lastSummaryReview: SummaryItemReviewSession?
     @State private var reviewSentences: [SummaryReviewItem] = []
     @FocusState private var summaryReviewFocus: String?
@@ -257,6 +258,9 @@ struct MeetingDetailView: View {
             value: tab
         )
         .toolbar { detailToolbar }
+        .sheet(isPresented: $showsFollowUpDraft) {
+            FollowUpDraftView(note: note)
+        }
         .sheet(item: $reviewingSummaryItem, onDismiss: returnFromSummaryReview) { session in
             SummaryItemReviewView(session: session)
         }
@@ -292,6 +296,15 @@ struct MeetingDetailView: View {
             DetailTabBar(selection: $tab, showsTranscript: showsTranscriptTab)
         }
         ToolbarItem(placement: .automatic) {
+            // The note itself: a portable Markdown file that opens anywhere.
+            if let fileURL = note.fileURL {
+                ShareLink(item: fileURL, preview: SharePreview(note.title)) {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                }
+                .help("Share this note")
+            }
+        }
+        ToolbarItem(placement: .automatic) {
             detailActions
         }
     }
@@ -305,6 +318,31 @@ struct MeetingDetailView: View {
             }
             .disabled(!canRenameTitle || isEditingTitle)
             .help(titleRenameHelp)
+
+            Divider()
+
+            if note.kind != .digest {
+                Button {
+                    showsFollowUpDraft = true
+                } label: {
+                    Label("Draft Follow-up…", systemImage: "envelope")
+                }
+                .help("Write a recap of this meeting to review and send yourself")
+            }
+
+            ShareLink(
+                item: FollowUpDraft.make(from: note, format: .chat).body,
+                subject: Text(note.title),
+                preview: SharePreview(note.title)
+            ) {
+                Label("Share Summary…", systemImage: "text.bubble")
+            }
+
+            if let fileURL = note.fileURL {
+                ShareLink(item: fileURL, preview: SharePreview(note.title)) {
+                    Label("Share Markdown File…", systemImage: "doc.text")
+                }
+            }
 
             Divider()
 
@@ -642,15 +680,26 @@ struct MeetingDetailView: View {
                             "\(line.isChecked ? "Reopen" : "Complete"): \(line.displayText)"
                         )
 
-                        Text(line.displayText)
-                            .font(NookType.transcript)
-                            .lineSpacing(4)
-                            .strikethrough(line.isChecked)
-                            .foregroundStyle(
-                                line.isChecked ? .secondary : Color(nsColor: .labelColor)
-                            )
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        let parsed = ActionItemOwner.parse(line.displayText)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(parsed.displayTask)
+                                .font(NookType.transcript)
+                                .lineSpacing(4)
+                                .strikethrough(line.isChecked)
+                                .foregroundStyle(
+                                    line.isChecked ? .secondary : Color(nsColor: .labelColor)
+                                )
+                                .textSelection(.enabled)
+                            // The owner, read from the item's own wording.
+                            if let owner = parsed.owner {
+                                Label(owner, systemImage: "person.fill")
+                                    .font(.caption.weight(.medium))
+                                    .foregroundStyle(.secondary)
+                                    .labelStyle(.titleAndIcon)
+                                    .accessibilityLabel("Owner: \(owner)")
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
                         if let dueDate = line.dueDate {
                             Text("Due \(dueDate.formatted(.dateTime.month().day()))")

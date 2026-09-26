@@ -474,9 +474,25 @@ actions sidebar. Checkbox state and due dates are not part of the decoded
 model, so items are read straight from each file, and toggling one rewrites
 exactly that line through the codec.
 
+Owners are read, never written: `ActionItemOwner` recognises `Name: task`,
+`Name — task`, `@Name task` and `Name will task`, refusing labels such as
+`TODO:` and pronouns. Rows show the owner beside the task; the file keeps its
+own wording.
+
+### `FollowUpDraft`
+
+Builds a recap of a saved note for email or chat from the note's own
+sections: the first summary paragraph, decisions, unfinished action items with
+owners and due dates, and open questions. It is deterministic, so it works
+without a model and cannot state more than the note does. `FollowUpDraftView`
+shows it for editing; Open in Mail uses the system compose service, and Nook
+never sends anything.
+
 ### `MomentHotKeyController`
 
-The system-wide "flag this moment" hotkey, active only while recording.
+System-wide meeting hotkeys (flag this moment, take a note), active only
+while recording. Each instance has its own identifier and answers only its own
+presses, because every handler on the application target sees every hotkey.
 Registered with Carbon's `RegisterEventHotKey` for the same reason dictation
 uses it: the keystroke is consumed globally and needs no Accessibility
 permission.
