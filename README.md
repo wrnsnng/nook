@@ -24,7 +24,8 @@ transcribes and summarizes on-device, and saves a portable Markdown note.
   words appear where you were already typing — verbatim, tidied, or rewritten
   as prose, all on-device.
 - Includes a searchable native library, editable notes, raw Markdown editing,
-  Shortcuts actions, and signed automatic updates.
+  Shortcuts and Siri actions, Spotlight search of saved meetings, and
+  signed automatic updates.
 - Supports VoiceOver, keyboard navigation, Reduce Motion, Reduce Transparency,
   Increased Contrast, and light/dark appearance.
 

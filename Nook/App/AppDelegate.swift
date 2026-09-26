@@ -172,6 +172,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
+    /// A meeting chosen in Spotlight opens in the library.
+    func application(
+        _ application: NSApplication,
+        continue userActivity: NSUserActivity,
+        restorationHandler: @escaping ([any NSUserActivityRestoring]) -> Void
+    ) -> Bool {
+        MeetingSpotlightContinuation.open(userActivity)
+    }
+
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         let menu = NSMenu(title: "Nook")
         let model = AppModel.shared

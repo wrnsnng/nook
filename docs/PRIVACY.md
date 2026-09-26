@@ -314,14 +314,43 @@ Handling of that text once it reaches the CLI tool, and any request the tool
 makes from there, is covered by that provider's own terms and privacy policy,
 not Nook's.
 
-## Shortcuts
+## Shortcuts and Siri
 
-Nook exposes a small set of Shortcuts actions: starting, pausing, or finishing
-a recording, opening the library or the latest meeting, and reading back the
-latest note's text. Each action runs only when a Shortcut invokes it. The
-note-text action hands that text to the Shortcut that asked for it, and
-anything the user's own Shortcut does with it from there, such as sending it
-to another app, is outside Nook.
+Nook exposes a small set of Shortcuts actions, also offered to Siri and
+Spotlight as App Shortcuts: starting, pausing or resuming, and finishing a
+recording, flagging a moment, taking a note, opening the library, the latest
+meeting or a chosen meeting, reading back the latest meeting's summary, listing
+open action items, and asking the library a question. Each action runs inside
+Nook, on this Mac, only when a Shortcut or a spoken request invokes it.
+Starting a recording goes through the same path as the Record button, so the
+same permission prompts apply and nothing records without that request.
+
+Asking the library uses the same on-device retrieval and model as the Ask
+sheet. Choosing a meeting in a Shortcut shows note titles and dates. The
+actions that answer hand their text (a summary, action items, or an answer
+naming the meetings it came from) to the Shortcut that asked for it, and
+Siri may speak it aloud. Anything the user's own Shortcut does with it from
+there, such as sending it to another app, is outside Nook.
+
+## Spotlight
+
+Unless the user turns it off, Nook adds each saved meeting and quick note to
+the Mac's Spotlight index so it can be found from Spotlight and opened in the
+library. Each entry holds the note's title, summary, key points and decisions,
+and start date. Transcripts and My notes are not added. Digests are not added
+either, since they restate other notes. Copies sharing one note ID are left out
+until they are reviewed.
+
+The Spotlight index is kept by macOS on this Mac and is not uploaded by Nook.
+Nook keeps a small record of which notes it has added, as note IDs and content
+fingerprints with no note text, under `~/Library/Caches/<bundle-identifier>/Spotlight`
+so an unchanged library is not re-sent on every launch. Deleting that file
+only makes Nook rebuild its entries.
+
+Trashing a note, or moving it out of the notes folder, removes its entry at
+the next sync, including changes made while Nook was closed. To opt out, turn
+off **Show meetings in Spotlight** in Settings, General: Nook then removes
+every entry it added and adds no more until the switch is turned back on.
 
 ## Files and retention
 
@@ -602,6 +631,7 @@ Users can:
 - pause, finish, or cancel a recording;
 - choose the notes folder;
 - choose whether extracted audio is retained;
+- keep their notes out of Spotlight;
 - edit, move, or delete Markdown and retained audio with ordinary file tools;
   deleting a note from the library moves its Markdown file to the Trash;
 - disable automatic update checks or downloads; and
