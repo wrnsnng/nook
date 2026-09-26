@@ -39,6 +39,7 @@ struct SettingsView: View {
     @State private var selectedPane: SettingsPane
     @State private var accessibilityGranted = TextInsertionService.isTrusted
     @State private var showingRestoreAllDefaultsConfirmation = false
+    @AppStorage(NotchPeekPreference.key) private var notchPeekEnabled = true
     /// Nil until the bundle's signature has been read, which happens off the
     /// main thread the first time About is shown.
     @State private var signature: NookCodeSignature?
@@ -129,8 +130,8 @@ struct SettingsView: View {
         }
     }
 
-    /// Appearance and calendar: the two settings that are about Nook itself
-    /// rather than about a thing Nook does.
+    /// Appearance, the notch and calendar: the settings that are about Nook
+    /// itself rather than about a thing Nook does.
     private var generalPane: some View {
         Form {
             Section {
@@ -145,6 +146,14 @@ struct SettingsView: View {
                 Text("Look & feel")
             } footer: {
                 Text("Auto follows your Mac. Light and Dark keep Nook fixed in that appearance.")
+            }
+
+            Section {
+                Toggle("Show Nook when pointing at the notch", isOn: $notchPeekEnabled)
+            } header: {
+                Text("Notch")
+            } footer: {
+                Text("Rest the pointer on the notch, or the middle of the menu bar on a display without one, to record, write a quick note or open the library. Nothing is recorded until you choose to.")
             }
 
             calendarSection

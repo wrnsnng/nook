@@ -882,7 +882,7 @@ struct SnapshotRenderer {
                     .environment(\.colorScheme, .dark)
                     .transaction { $0.disablesAnimations = true }
             )
-        case "notch", "external-panel", "notch-demo",
+        case "notch", "external-panel", "notch-demo", "notch-flagged", "idle-peek", "idle-upcoming",
              "panel-compact-idle", "panel-compact-flagged", "panel-compact-hover", "panel-compact-note",
              "panel-hidden-recording", "panel-hidden-paused",
              "summary-light", "summary-dark",
@@ -899,6 +899,13 @@ struct SnapshotRenderer {
             geometry.topInset = mode == "external-panel" ? 24 : 32
             geometry.cameraHousingWidth = mode == "external-panel" ? 0 : 184
             geometry.isHovering = mode == "panel-compact-hover" || mode == "panel-compact-note"
+            if mode == "idle-upcoming" {
+                geometry.upcomingEvent = NotchUpcomingEvent(
+                    title: "Design review",
+                    startDate: Date().addingTimeInterval(4 * 60 + 20)
+                )
+                geometry.upcomingHasPrep = true
+            }
             notchDemoGeometry = geometry
             // The prompt shrinks after it has been on screen a while rather
             // than vanishing, so that second shape needs to be renderable too.
@@ -949,10 +956,29 @@ struct SnapshotRenderer {
             )
         }
 
-        let notchModes: Set<String> = ["notch","external-panel","notch-demo","summary-light","summary-dark","notes-light","notes-dark","detected-light","detected-dark","detected-compact-light","detected-compact-dark","processing-light","processing-dark","completed-light","completed-dark","failure-light","failure-dark","live"]
+        let notchModes: Set<String> = ["notch","external-panel","notch-demo","notch-flagged","idle-peek","idle-upcoming","summary-light","summary-dark","notes-light","notes-dark","detected-light","detected-dark","detected-compact-light","detected-compact-dark","processing-light","processing-dark","completed-light","completed-dark","failure-light","failure-dark","live"]
         if notchModes.contains(mode) || staticPanelModes.contains(mode) {
             meeting.showLiveCaptions = mode != "external-panel" && !staticPanelModes.contains(mode)
             switch mode {
+            case "idle-peek", "idle-upcoming":
+                meeting.setPreviewState(
+                    phase: .idle,
+                    elapsed: 0,
+                    liveTranscript: .empty,
+                    audioLevel: 0
+                )
+            case "notch-flagged":
+                meeting.setPreviewState(
+                    phase: .recording(
+                        title: "Nook design weekly",
+                        startedAt: Date().addingTimeInterval(-13 * 60 - 42)
+                    ),
+                    elapsed: 13 * 60 + 42,
+                    liveTranscript: transcriptState,
+                    audioLevel: 0.64,
+                    panelMode: .transcript,
+                    liveMoments: [MeetingMoment(offset: 44)]
+                )
             case "notch-demo":
                 meeting.showLiveCaptions = false
                 meeting.setPreviewState(

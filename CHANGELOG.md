@@ -13,6 +13,15 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
   controls. A light along its lower edge follows the voice, sweeps while notes
   are written and flashes when they are saved. Reduce Motion replaces the
   movement with cross-fades.
+- Rest the pointer on the notch, or the middle of the menu bar on a display
+  without one, to record, write a quick note or open the library. Settings,
+  General turns this off. When calendar context is on, the notch also comes
+  out briefly before an event starts, with Record and, for a series with
+  earlier notes, Prep.
+- While recording, Take a Note (Option-Command-N, rebindable) or the pencil on
+  the hover shelf opens a one-line note field in the notch; each line joins
+  My notes. The My notes tab no longer disappears while notes are in their
+  own window. Lines said at a flagged moment show the flag in live captions.
 - A new accent colour, lagoon teal, and a new app icon built around the notch.
 - Setup shows what each step is for on a small animated Mac, from a meeting
   being noticed to its note being saved.

@@ -237,6 +237,11 @@ final class MeetingCoordinator: ObservableObject {
     private let momentHotKeys = MomentHotKeyController(
         shortcut: ShortcutStore.shared.binding(for: .flagMoment)
     )
+    /// Global "take a note" hotkey, on the same lifecycle as the flag.
+    private let noteHotKeys = MomentHotKeyController(
+        shortcut: ShortcutStore.shared.binding(for: .takeNote),
+        identifier: 2
+    )
     private let transcriber = TranscriptionService()
     private let liveTranscriber = LiveTranscriptionService()
     private let summarizer = SummaryService()
@@ -332,8 +337,11 @@ final class MeetingCoordinator: ObservableObject {
         capture.onUnexpectedStop = { [weak self] _ in
             self?.finishAfterCaptureStopped()
         }
-        momentHotKeys.onFlag = { [weak self] in
+        momentHotKeys.onPress = { [weak self] in
             self?.flagMoment()
+        }
+        noteHotKeys.onPress = { [weak self] in
+            self?.requestNoteLine()
         }
     }
 
@@ -449,6 +457,7 @@ final class MeetingCoordinator: ObservableObject {
         meterTask?.cancel()
         momentNoticeTask?.cancel()
         momentHotKeys.stop()
+        noteHotKeys.stop()
         onRecordingStopped?()
         topPanelHidden = false
         processingCancellationRequested = false
@@ -761,6 +770,21 @@ final class MeetingCoordinator: ObservableObject {
         momentHotKeys.apply(
             ShortcutStore.shared.binding(for: .flagMoment)
         )
+        noteHotKeys.apply(
+            ShortcutStore.shared.binding(for: .takeNote)
+        )
+    }
+
+    /// Bumped to ask the notch for its note line. The panel answers: in the
+    /// compact island with a one-line field, in the workspace with My notes.
+    @Published private(set) var noteLineRequest = 0
+
+    /// Brings the panel back if it was hidden and asks it for a note line.
+    func requestNoteLine() {
+        guard phase.isRecording else { return }
+        topPanelHidden = false
+        onPresentationRequested?()
+        noteLineRequest += 1
     }
 
     func revealPermissions() {
@@ -977,6 +1001,7 @@ final class MeetingCoordinator: ObservableObject {
                 startElapsedClock()
                 startAudioMeter()
                 momentHotKeys.start()
+                noteHotKeys.start()
                 startLiveCaptions()
             } catch {
                 if Task.isCancelled || processingCancellationRequested {
@@ -2320,9 +2345,11 @@ final class MeetingCoordinator: ObservableObject {
         panelMode: MeetingPanelMode? = nil,
         liveInsights: MeetingInsights? = nil,
         liveNotes: String? = nil,
-        isPaused: Bool = false
+        isPaused: Bool = false,
+        liveMoments: [MeetingMoment]? = nil
     ) {
         self.phase = phase
+        if let liveMoments { self.liveMoments = liveMoments }
         live.elapsed = elapsed
         live.liveTranscript = liveTranscript
         live.audioLevel = audioLevel

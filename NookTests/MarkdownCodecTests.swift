@@ -548,6 +548,32 @@ struct MarkdownCodecTests {
         #expect(LiveNoteLine.appending("   ", to: "Budget first") == nil)
     }
 
+    /// A caption line said at a flagged moment carries the flag, and only
+    /// that line; the line still being heard carries a flag set after the
+    /// last finished one.
+    @Test
+    func flaggedMomentsMarkTheCaptionLinesTheyFellIn() {
+        let first = TranscriptSegment(startTime: 10, duration: 4, text: "Budget first", source: .system)
+        let second = TranscriptSegment(startTime: 20, duration: 5, text: "Then hiring", source: .microphone)
+        let segments = [first, second]
+
+        #expect(LiveCaptionFlags.isFlagged(.segment(first.id), segments: segments, moments: [12]))
+        #expect(!LiveCaptionFlags.isFlagged(.segment(second.id), segments: segments, moments: [12]))
+        #expect(LiveCaptionFlags.isFlagged(.partial(.system), segments: segments, moments: [26]))
+        #expect(!LiveCaptionFlags.isFlagged(.partial(.system), segments: segments, moments: [12]))
+        #expect(!LiveCaptionFlags.isFlagged(.segment(first.id), segments: segments, moments: []))
+    }
+
+    /// The notch says when the next event starts in whole minutes, and says
+    /// "now" rather than "in 0 min".
+    @Test
+    func upcomingEventTimesReadAsMinutes() {
+        #expect(UpcomingEventTiming.label(until: 4 * 60 + 10) == "Starts in 4 min")
+        #expect(UpcomingEventTiming.label(until: 20) == "Starting now")
+        #expect(UpcomingEventTiming.label(until: -40) == "Starting now")
+        #expect(UpcomingEventTiming.label(until: -3 * 60) == "Started 3 min ago")
+    }
+
     @Test
     func hiddenRecordingKeepsARecoverableCameraEdgeIndicator() {
         let size = NotchPanelMetrics.bodySize(

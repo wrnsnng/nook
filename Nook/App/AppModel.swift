@@ -131,7 +131,7 @@ final class AppModel: ObservableObject {
             await draftJournal.scan()
             await draftRecovery.reconcileCompletedDrafts()
         }
-        calendar.onUpcomingEvent = { [weak notifications, weak store] event in
+        calendar.onUpcomingEvent = { [weak notifications, weak store, weak panel] event in
             // The notification's Record action routes back through
             // MeetingNotificationService, so nothing starts without a tap.
             // When this series has history, the notification says so and
@@ -145,7 +145,9 @@ final class AppModel: ObservableObject {
                 upcoming: event,
                 priorSittings: priorSittings
             )
+            panel?.presentUpcoming(hasPrep: priorSittings > 0)
         }
+        panel.observeCalendar(calendar)
 
         NotificationCenter.default
             .publisher(for: .nookRequestPrepBrief)

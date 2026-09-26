@@ -141,6 +141,7 @@ struct NotchPanelView: View {
         .onAppear(perform: retainCurrentState)
         .onChange(of: liveMode) { _, _ in retainCurrentState() }
         .onChange(of: meeting.phase) { _, _ in retainCurrentState() }
+        .onChange(of: meeting.noteLineRequest) { _, _ in takeNote() }
     }
 
     private func retainCurrentState() {
@@ -267,6 +268,8 @@ struct NotchPanelView: View {
         }
     }
 
+    /// What the notch offers when nothing is happening: the next event if
+    /// the calendar knows one, and the three things Nook starts from.
     private var idleContent: some View {
         HStack(spacing: 11) {
             NookPresence(
@@ -275,21 +278,44 @@ struct NotchPanelView: View {
                 showsSurface: false
             )
             VStack(alignment: .leading, spacing: 1) {
-                Text("Nook is here")
-                    .font(.system(size: 13, weight: .semibold))
-                Text("Ready when a conversation begins")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                if let event = geometry.upcomingEvent {
+                    Text(event.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                    UpcomingEventTime(startDate: event.startDate)
+                } else {
+                    Text("Nook")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("Ready when a meeting starts")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
             }
-            Spacer()
+            Spacer(minLength: 6)
+
             Button {
+                geometry.isPeeking = false
                 meeting.startManualMeeting()
             } label: {
-                Image(systemName: "waveform.badge.mic")
+                IslandCapsuleLabel(title: "Record")
             }
-            .buttonStyle(IslandControlButtonStyle(tint: NookPalette.accentHighlight))
+            .buttonStyle(IslandCapsuleButtonStyle())
             .help("Start recording")
-            .accessibilityLabel("Start recording")
+
+            if geometry.upcomingEvent != nil, geometry.upcomingHasPrep {
+                IslandControl(symbol: "list.bullet.clipboard", label: "Prep for this meeting") {
+                    geometry.isPeeking = false
+                    AppModel.shared.openPrepBrief()
+                }
+            }
+            IslandControl(symbol: "square.and.pencil", label: "Quick note") {
+                geometry.isPeeking = false
+                AppModel.shared.quickNote.present()
+            }
+            IslandControl(symbol: "rectangle.stack", label: "Open Library") {
+                geometry.isPeeking = false
+                AppModel.shared.openLibrary()
+            }
         }
     }
 
@@ -585,7 +611,8 @@ struct NotchPanelView: View {
                         // thread here competed with it.
                         NotchCaptionStream(
                             live: meeting.live,
-                            notice: meeting.liveCaptionNotice
+                            notice: meeting.liveCaptionNotice,
+                            moments: meeting.liveMoments.map(\.offset)
                         )
                     case .summary:
                         LiveSummaryPanel(
@@ -740,7 +767,7 @@ struct NotchPanelView: View {
             AppModel.shared.openLiveNotes()
             return
         }
-        guard mode == .recordingCompact(showsControls: true) else {
+        if meeting.showLiveCaptions {
             meeting.selectPanelMode(.notes)
             requestNotesFocus()
             return
@@ -1002,6 +1029,29 @@ struct NotchPanelView: View {
         return detail.isEmpty ? step.displaySentence : detail
     }
 
+}
+
+/// Which live caption lines carry a flag. A finished line does when a flag
+/// fell while it was said, with a second of grace either side for the
+/// recogniser's timing; the line still being heard does when a flag fell
+/// after the last finished one.
+enum LiveCaptionFlags {
+    static func isFlagged(
+        _ lineID: LiveCaptionLine.ID,
+        segments: [TranscriptSegment],
+        moments: [TimeInterval]
+    ) -> Bool {
+        guard !moments.isEmpty else { return false }
+        switch lineID {
+        case .segment(let id):
+            guard let segment = segments.last(where: { $0.id == id }) else { return false }
+            let said = (segment.startTime - 1)...(segment.startTime + segment.duration + 1)
+            return moments.contains { said.contains($0) }
+        case .partial:
+            let lastEnd = segments.last.map { $0.startTime + $0.duration } ?? 0
+            return moments.contains { $0 > lastEnd }
+        }
+    }
 }
 
 /// How a line typed into the notch joins My notes: as its own Markdown
@@ -1452,6 +1502,34 @@ private struct IslandFlagMark: View {
             .symbolEffect(.bounce, value: trigger)
             .onAppear { trigger.toggle() }
             .accessibilityLabel("Moment flagged")
+    }
+}
+
+/// "In 4 min", "Starting now": updated twice a minute, which is as fine as
+/// a meeting start needs.
+private struct UpcomingEventTime: View {
+    let startDate: Date
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            Text(UpcomingEventTiming.label(until: startDate.timeIntervalSince(context.date)))
+                .font(.system(size: 11))
+                .foregroundStyle(NookPalette.accentHighlight)
+                .monospacedDigit()
+                .contentTransition(.numericText())
+        }
+    }
+
+}
+
+enum UpcomingEventTiming {
+    static func label(until seconds: TimeInterval) -> String {
+        let minutes = Int((seconds / 60).rounded())
+        switch minutes {
+        case ..<(-1): return "Started \(-minutes) min ago"
+        case -1...0: return "Starting now"
+        default: return "Starts in \(minutes) min"
+        }
     }
 }
 
@@ -2134,6 +2212,9 @@ private struct NotchCaptionStream: View {
     /// A caption-specific notice from the coordinator (for example that
     /// captions are unavailable); shown in place of the listening hint.
     let notice: String?
+    /// Flagged moments, as recording offsets, so a line said at a flagged
+    /// moment carries the flag.
+    var moments: [TimeInterval] = []
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -2172,7 +2253,8 @@ private struct NotchCaptionStream: View {
                     NotchCaptionRow(
                         line: line,
                         isNewest: index == lines.count - 1,
-                        prominence: prominence(for: index)
+                        prominence: prominence(for: index),
+                        isFlagged: isFlagged(line)
                     )
                     .transition(
                         reduceMotion
@@ -2207,6 +2289,16 @@ private struct NotchCaptionStream: View {
         .accessibilityLabel("Live transcript")
     }
 
+    /// A finished line is flagged when a flag fell while it was said; the
+    /// line still being heard, when a flag fell after the last finished one.
+    private func isFlagged(_ line: LiveCaptionLine) -> Bool {
+        LiveCaptionFlags.isFlagged(
+            line.id,
+            segments: live.liveTranscript.segments,
+            moments: moments
+        )
+    }
+
     private func prominence(for index: Int) -> Double {
         guard lines.count > 1 else { return 1 }
         let distanceFromNewest = lines.count - 1 - index
@@ -2223,6 +2315,7 @@ private struct NotchCaptionRow: View {
     let line: LiveCaptionLine
     let isNewest: Bool
     let prominence: Double
+    var isFlagged = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -2250,6 +2343,12 @@ private struct NotchCaptionRow: View {
             if line.isPartial {
                 ListeningCaret(tint: line.source.nookTint)
             }
+
+            if isFlagged {
+                IslandFlagMark()
+                    .scaleEffect(0.8)
+                    .transition(.scale.combined(with: .opacity))
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .opacity(prominence)
@@ -2259,7 +2358,10 @@ private struct NotchCaptionRow: View {
         )
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(line.source.label): \(line.text)")
-        .accessibilityValue(line.isPartial ? "Being transcribed" : "Final")
+        .accessibilityValue(
+            (line.isPartial ? "Being transcribed" : "Final")
+                + (isFlagged ? ", flagged" : "")
+        )
     }
 }
 

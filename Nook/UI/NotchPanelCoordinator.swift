@@ -17,6 +17,59 @@ final class NotchPanelGeometry: ObservableObject {
     /// keeps showing what it showed last, so the content goes away with the
     /// shape instead of switching to an empty state first.
     @Published var isTucking = false
+    /// The idle island is out because the pointer asked for it, not because
+    /// something happened.
+    @Published var isPeeking = false
+    /// The next calendar event, when calendar context is on.
+    @Published var upcomingEvent: NotchUpcomingEvent?
+    /// Whether that event's series has earlier notes worth a Prep button.
+    @Published var upcomingHasPrep = false
+}
+
+struct NotchUpcomingEvent: Equatable {
+    let title: String
+    let startDate: Date
+}
+
+/// Whether pointing at the notch brings Nook out when nothing is happening.
+enum NotchPeekPreference {
+    static let key = "notchPeekEnabled"
+
+    static var isEnabled: Bool {
+        UserDefaults.standard.object(forKey: key) as? Bool ?? true
+    }
+}
+
+/// Watches where the pointer is, without a window of its own.
+///
+/// An invisible sensor window at the top of the screen would take the
+/// clicks meant for the menu bar beneath it. Mouse-moved monitors need no
+/// permission, see the pointer everywhere, and cost one comparison a move.
+@MainActor
+final class NotchPointerWatcher {
+    private var monitors: [Any] = []
+    private let handler: @MainActor (NSPoint) -> Void
+
+    init(handler: @escaping @MainActor (NSPoint) -> Void) {
+        self.handler = handler
+    }
+
+    func start() {
+        guard monitors.isEmpty else { return }
+        let global = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved]) { [weak self] _ in
+            MainActor.assumeIsolated { self?.handler(NSEvent.mouseLocation) }
+        }
+        let local = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved]) { [weak self] event in
+            MainActor.assumeIsolated { self?.handler(NSEvent.mouseLocation) }
+            return event
+        }
+        monitors = [global, local].compactMap { $0 }
+    }
+
+    func stop() {
+        monitors.forEach(NSEvent.removeMonitor)
+        monitors = []
+    }
 }
 
 /// How the consent prompt behaves over time and around focus.
@@ -138,7 +191,7 @@ enum NotchPanelMetrics {
         let ears = max(cameraHousingWidth + 2 * earWidth, 176)
         switch mode {
         case .idle:
-            return CGSize(width: 320, height: 50)
+            return CGSize(width: 440, height: 56)
         case .detected(let compact):
             return compact
                 ? CGSize(width: 236, height: 44)
@@ -212,6 +265,11 @@ final class NotchPanelCoordinator {
     /// Separate from `hideTask`, which phase changes cancel as a matter of
     /// course.
     private var choreographyTask: Task<Void, Never>?
+    private var peekWatcher: NotchPointerWatcher?
+    private var peekTask: Task<Void, Never>?
+    /// The island came out for a calendar event rather than the pointer, so
+    /// it waits for its own timer instead of the pointer leaving.
+    private var peekIsHeadsUp = false
     private var layoutGeneration = 0
     private var lastLayoutMode: NotchIslandMode?
 
@@ -325,6 +383,117 @@ final class NotchPanelCoordinator {
         geometry.isTucking = false
     }
 
+    // MARK: Peek
+
+    /// The band at the top of the screen that asks for Nook: the camera
+    /// housing on a notched Mac, the middle of the menu bar elsewhere.
+    private func peekTriggerZone(on screen: NSScreen) -> NSRect {
+        let halfWidth = max(geometry.cameraHousingWidth / 2, 90)
+        return NSRect(
+            x: screen.frame.midX - halfWidth,
+            y: screen.frame.maxY - max(geometry.topInset, 24),
+            width: halfWidth * 2,
+            height: max(geometry.topInset, 24) + 1
+        )
+    }
+
+    private func pointerMoved(to point: NSPoint) {
+        guard case .idle = meeting.phase, NotchPeekPreference.isEnabled else {
+            peekTask?.cancel()
+            return
+        }
+        if geometry.isPeeking {
+            // Stay out while the pointer is on the island or close to it.
+            let keep = panel.frame.insetBy(dx: -14, dy: -14)
+            if peekIsHeadsUp {
+                // A heads-up the pointer never visited keeps its own timer;
+                // one it has visited behaves like any other peek.
+                guard keep.contains(point) else { return }
+                peekIsHeadsUp = false
+            }
+            if keep.contains(point) {
+                peekTask?.cancel()
+                peekTask = nil
+            } else if peekTask == nil {
+                peekTask = Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .milliseconds(320))
+                    guard !Task.isCancelled, let self else { return }
+                    self.peekTask = nil
+                    self.endPeek()
+                }
+            }
+            return
+        }
+        guard !panel.isVisible, let screen = NSScreen.screens.first(where: { $0.frame.contains(point) }) else {
+            peekTask?.cancel()
+            peekTask = nil
+            return
+        }
+        updateGeometry(for: screen)
+        let inZone = peekTriggerZone(on: screen).contains(point)
+            // Dragging a window to the top of the screen is not a request.
+            && NSEvent.pressedMouseButtons == 0
+        guard inZone else {
+            peekTask?.cancel()
+            peekTask = nil
+            return
+        }
+        guard peekTask == nil else { return }
+        // A short dwell, so sweeping across the menu bar does not open it.
+        peekTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled, let self else { return }
+            self.peekTask = nil
+            guard NSScreen.screens.first(where: {
+                self.peekTriggerZone(on: $0).contains(NSEvent.mouseLocation)
+            }) != nil else { return }
+            self.beginPeek()
+        }
+    }
+
+    private func beginPeek() {
+        guard case .idle = meeting.phase, !panel.isVisible else { return }
+        geometry.isPeeking = true
+        show()
+    }
+
+    /// A calendar event is about to start: come out with it for a few
+    /// seconds, unless something else already has the island.
+    func presentUpcoming(hasPrep: Bool) {
+        guard case .idle = meeting.phase, !panel.isVisible, geometry.upcomingEvent != nil else {
+            return
+        }
+        geometry.upcomingHasPrep = hasPrep
+        peekIsHeadsUp = true
+        geometry.isPeeking = true
+        show()
+        peekTask?.cancel()
+        peekTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(12))
+            guard !Task.isCancelled, let self, self.peekIsHeadsUp else { return }
+            self.peekTask = nil
+            self.peekIsHeadsUp = false
+            self.endPeek()
+        }
+    }
+
+    /// Keeps the island's next-event line in step with the calendar.
+    func observeCalendar(_ calendar: CalendarContextService) {
+        calendar.$currentUpcomingEvent
+            .map { $0.map { NotchUpcomingEvent(title: $0.title, startDate: $0.startDate) } }
+            .removeDuplicates()
+            .sink { [weak self] event in
+                self?.geometry.upcomingEvent = event
+            }
+            .store(in: &cancellables)
+    }
+
+    /// Clearing `isPeeking`, here or from an action on the island, folds
+    /// the idle island away; see the observer in `startObserving`.
+    private func endPeek() {
+        geometry.isPeeking = false
+    }
+
     func showLaunchConfirmation() {
         guard case .idle = meeting.phase else { return }
         show()
@@ -342,6 +511,25 @@ final class NotchPanelCoordinator {
     }
 
     private func startObserving() {
+        let watcher = NotchPointerWatcher { [weak self] point in
+            self?.pointerMoved(to: point)
+        }
+        watcher.start()
+        peekWatcher = watcher
+
+        geometry.$isPeeking
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] isPeeking in
+                guard let self, !isPeeking, self.panel.isVisible else { return }
+                self.peekIsHeadsUp = false
+                self.peekTask?.cancel()
+                self.peekTask = nil
+                guard case .idle = self.meeting.phase else { return }
+                self.hide()
+            }
+            .store(in: &cancellables)
+
         Publishers.CombineLatest4(
             meeting.$phase.removeDuplicates(),
             meeting.$showLiveCaptions.removeDuplicates(),
@@ -389,6 +577,11 @@ final class NotchPanelCoordinator {
         // Every phase change starts a fresh prompt or ends one, so a prompt
         // that collapsed never hands its size to the next.
         geometry.detectionPromptIsCompact = false
+        if case .idle = phase {} else {
+            geometry.isPeeking = false
+            peekTask?.cancel()
+            peekTask = nil
+        }
         if case .idle = phase, panel.isVisible {
             // Going away: keep the current frame and content and fold them
             // into the notch together, rather than first reshaping into an
