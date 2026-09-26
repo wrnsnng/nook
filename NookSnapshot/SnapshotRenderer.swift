@@ -1071,7 +1071,7 @@ struct SnapshotRenderer {
         // toolbar, titlebar and sidebar materials appear. Offscreen caching
         // draws the sidebar blank and has no toolbar at all.
         let isWindowed = ProcessInfo.processInfo.environment["NOOK_SNAPSHOT_WINDOWED"] == "1"
-        let window = NSWindow(
+        let window = (isWindowed ? SnapshotKeyWindow.self : NSWindow.self).init(
             contentRect: hostingView.frame,
             styleMask: isInteractive || isWindowed
                 ? [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
@@ -1092,13 +1092,14 @@ struct SnapshotRenderer {
             window.makeKeyAndOrderFront(nil)
             app.activate(ignoringOtherApps: true)
             RunLoop.current.run(until: Date().addingTimeInterval(2.0))
-            let capture = Process()
-            capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-            capture.arguments = ["-x", "-o", "-l", String(window.windowNumber), arguments[1]]
-            try capture.run()
-            capture.waitUntilExit()
-            print(arguments[1])
-            Foundation.exit(capture.terminationStatus)
+            // Launched through `open` so macOS grants activation, this
+            // process has no Screen Recording permission of its own. It
+            // publishes the window number and holds the window still while
+            // the calling shell captures it.
+            print("NOOK_SNAPSHOT_WINDOW \(window.windowNumber)")
+            fflush(stdout)
+            RunLoop.current.run(until: Date().addingTimeInterval(3.0))
+            Foundation.exit(0)
         }
         RunLoop.current.run(until: Date().addingTimeInterval(1.2))
         // View preparation and asynchronous store reloads must not replace
@@ -1907,4 +1908,13 @@ struct SnapshotCalendarProvider: CalendarEventProviding {
     func events(between start: Date, end: Date) -> [CalendarMeetingEvent] {
         [CalendarMeetingEvent(title: "Research synthesis", attendeeCount: 4, startDate: Date().addingTimeInterval(5 * 60))]
     }
+}
+
+/// A capture launched from a terminal cannot take activation from it, so the
+/// window would render in its inactive state: grey traffic lights, dimmed
+/// sidebar and selection. Reporting key and main status draws what a person
+/// sees in the window they are using.
+private final class SnapshotKeyWindow: NSWindow {
+    override var isKeyWindow: Bool { true }
+    override var isMainWindow: Bool { true }
 }

@@ -145,13 +145,12 @@ enum NookType {
     static let transcriptEmphasized = Font.body.weight(.semibold)
     static let spoken = Font.title3
     static let spokenEmphasized = Font.title3.weight(.semibold)
-    /// Section headers sit a step below body text and lean on weight and
-    /// colour rather than an icon, the way Mail and Notes label their groups.
-    static let sectionTitle = Font.subheadline.weight(.semibold)
+    /// Three steps, as in a Notes document: title, heading, body.
+    static let sectionTitle = Font.title3.weight(.semibold)
     /// The default SF design: rounded read as a toy next to native chrome.
     static let title = Font.title.weight(.bold)
     static let largeTitle = Font.largeTitle.weight(.bold)
-    static let editorialSummary = Font.title3
+    static let editorialSummary = Font.body
     static let code = Font.caption.monospaced()
 }
 
@@ -238,6 +237,21 @@ enum NookElapsedTime {
         parts.append("\(minutes) \(minutes == 1 ? "minute" : "minutes")")
         parts.append("\(seconds) \(seconds == 1 ? "second" : "seconds")")
         return parts.joined(separator: ", ")
+    }
+}
+
+/// One readable column shared by the header and every detail tab, so the
+/// title, the summary and the transcript all start at the same edge.
+enum NookLayout {
+    static let readableWidth: CGFloat = 680
+    static let margin: CGFloat = 40
+}
+
+extension View {
+    func nookReadableColumn() -> some View {
+        frame(maxWidth: NookLayout.readableWidth, alignment: .leading)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, NookLayout.margin)
     }
 }
 
@@ -553,7 +567,7 @@ struct NookSectionLabel: View {
         // one accent-coloured glyph per section competed with the content.
         Text(title)
             .font(NookType.sectionTitle)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.primary)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isHeader)
     }
@@ -742,8 +756,8 @@ struct SoftDivider: View {
 struct NookBullet: View {
     var body: some View {
         Circle()
-            .fill(NookPalette.accent)
-            .frame(width: 4, height: 4)
+            .fill(.secondary)
+            .frame(width: 5, height: 5)
             // Keeps the bullet on the first line's optical centre, close
             // enough to its line to read as belonging to it.
             .frame(width: 10, height: 14, alignment: .leading)

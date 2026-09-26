@@ -285,10 +285,9 @@ struct MeetingDetailView: View {
     /// window toolbar, where every Mac document window keeps them.
     private var documentHeader: some View {
         titleBlock
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 42)
+            .nookReadableColumn()
             .padding(.top, 28)
-            .padding(.bottom, 12)
+            .padding(.bottom, 4)
     }
 
     @ToolbarContentBuilder
@@ -303,6 +302,16 @@ struct MeetingDetailView: View {
 
     private var detailActions: some View {
         Menu {
+            Button {
+                beginTitleEditing()
+            } label: {
+                Label("Rename…", systemImage: "pencil")
+            }
+            .disabled(!canRenameTitle || isEditingTitle)
+            .help(titleRenameHelp)
+
+            Divider()
+
             Button {
                 copyMarkdown()
             } label: {
@@ -380,73 +389,54 @@ struct MeetingDetailView: View {
                     )
                     .accessibilityAddTraits(.isHeader)
             } else {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(note.title)
-                        .font(NookType.title)
-                        .tracking(-0.45)
-                        .lineLimit(2)
-                        .textSelection(.enabled)
-                        .accessibilityLabel("\(titleLabel): \(note.title)")
-                        .accessibilityHint(
-                            titleReadOnlyHint
-                        )
-                        .accessibilityAddTraits(.isHeader)
-
-                    Button {
-                        beginTitleEditing()
-                    } label: {
-                        Image(systemName: "pencil")
-                            .font(.system(size: 12, weight: .semibold))
-                            .frame(width: 28, height: 28)
-                            .contentShape(Rectangle())
+                // Renamed the way Finder and Voice Memos rename: double-click
+                // the name, or choose Rename from the actions menu. A pencil
+                // beside every title was chrome for a rare action.
+                Text(note.title)
+                    .font(NookType.title)
+                    .tracking(-0.45)
+                    .lineLimit(2)
+                    .textSelection(.enabled)
+                    .onTapGesture(count: 2) {
+                        if canRenameTitle { beginTitleEditing() }
                     }
-                    .buttonStyle(.borderless)
-                    .disabled(!canRenameTitle)
-                    .help(titleRenameHelp)
-                    .accessibilityLabel(renameLabel)
-                    .accessibilityHint(titleRenameHelp)
-                }
+                    .help(canRenameTitle ? "Double-click to rename" : titleRenameHelp)
+                    .accessibilityLabel("\(titleLabel): \(note.title)")
+                    .accessibilityHint(titleReadOnlyHint)
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityAction(named: renameLabel) {
+                        if canRenameTitle { beginTitleEditing() }
+                    }
             }
 
             detailMetadata
         }
     }
 
+    /// One quiet line with middle dots, the way Photos and Music write
+    /// details, rather than a row of separately spaced labels.
     private var detailMetadata: some View {
-        HStack(spacing: 12) {
-            if note.kind == .spoken {
-                NookMetadataLabel(
-                    title: "Spoken note",
-                    symbol: "waveform.badge.mic",
-                    tint: NookPalette.accent
-                )
-                NookMetadataLabel(
-                    title: "Created "
-                        + note.startedAt.formatted(
-                            date: .abbreviated,
-                            time: .shortened
-                        ),
-                    symbol: "calendar"
-                )
-            } else {
-                NookMetadataLabel(
-                    title: note.startedAt.formatted(
-                        date: .abbreviated,
-                        time: .shortened
-                    ),
-                    symbol: "calendar"
-                )
-                NookMetadataLabel(title: note.durationLabel, symbol: "clock")
-                if !note.sourceApp.isEmpty {
-                    NookMetadataLabel(title: note.sourceApp, symbol: "macbook")
-                }
-            }
+        Text(metadataParts.joined(separator: " · "))
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .monospacedDigit()
+            .lineLimit(1)
+    }
 
-            NookMetadataLabel(
-                title: "\(contentWordCount) words",
-                symbol: "text.word.spacing"
+    private var metadataParts: [String] {
+        var parts: [String] = []
+        if note.kind == .spoken {
+            parts.append("Spoken note")
+            parts.append(
+                "Created " + note.startedAt.formatted(date: .abbreviated, time: .shortened)
             )
+        } else {
+            parts.append(note.startedAt.formatted(date: .abbreviated, time: .shortened))
+            parts.append(note.durationLabel)
+            if !note.sourceApp.isEmpty { parts.append(note.sourceApp) }
         }
+        parts.append("\(contentWordCount) words")
+        return parts
     }
 
     private var titleLabel: String {
@@ -524,6 +514,7 @@ struct MeetingDetailView: View {
                                     summaryReviewButton(.list(.keyPoint, index: index, in: note))
                                 }
                                 .accessibilityElement(children: .contain)
+                                .modifier(PublishesRowHover())
                             }
                         }
                     }
@@ -544,11 +535,11 @@ struct MeetingDetailView: View {
                                     // somebody had already completed.
                                     Image(systemName: "arrow.turn.down.right")
                                         .font(NookType.caption.weight(.semibold))
-                                        .foregroundStyle(NookPalette.accent)
+                                        .foregroundStyle(.secondary)
                                         .frame(width: 20, height: 20)
                                         .accessibilityHidden(true)
                                     Text(decision)
-                                        .font(NookType.transcriptEmphasized)
+                                        .font(NookType.transcript)
                                         .lineSpacing(4)
                                         .textSelection(.enabled)
                                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -556,6 +547,7 @@ struct MeetingDetailView: View {
                                 }
                                 .padding(.vertical, 2)
                                 .accessibilityElement(children: .contain)
+                                .modifier(PublishesRowHover())
                             }
                         }
                     }
@@ -578,6 +570,7 @@ struct MeetingDetailView: View {
                                     Spacer(minLength: 0)
                                     summaryReviewButton(.list(.question, index: index, in: note))
                                 }
+                                .modifier(PublishesRowHover())
                             }
                         }
                     }
@@ -597,10 +590,8 @@ struct MeetingDetailView: View {
                     .padding(.top, -16)
                 }
             }
-            .padding(.horizontal, 48)
-            .padding(.vertical, 42)
-            .frame(maxWidth: 820, alignment: .leading)
-            .frame(maxWidth: .infinity)
+            .padding(.vertical, 28)
+            .nookReadableColumn()
         }
     }
 
@@ -637,10 +628,11 @@ struct MeetingDetailView: View {
                                 systemName: line.isChecked
                                     ? "checkmark.circle.fill" : "circle"
                             )
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(.system(size: 15))
                             .foregroundStyle(
                                 line.isChecked
-                                    ? NookPalette.success : NookPalette.accent
+                                    ? AnyShapeStyle(NookPalette.accent)
+                                    : AnyShapeStyle(.secondary)
                             )
                             // The glyph stays small; the frame is the hit target.
                             .frame(width: 30, height: 30)
@@ -677,6 +669,7 @@ struct MeetingDetailView: View {
                     }
                     .padding(.vertical, 8)
                     .accessibilityElement(children: .contain)
+                    .modifier(PublishesRowHover())
 
                     if index < checklistLines.count - 1 {
                         Divider()
@@ -803,8 +796,12 @@ struct MeetingDetailView: View {
                 .accessibilityHint(
                     "Saved into the My notes section of this meeting’s Markdown file"
                 )
-                .frame(minHeight: 64)
+                .frame(minHeight: 44)
 
+                // Nothing to report most of the time, so nothing is drawn.
+                // Status and Save appear with an unsaved edit or a result.
+                if markdownDraft.hasChanges || personalNotes.hasChanges
+                    || personalNotes.statusMessage != nil {
                 HStack(spacing: 10) {
                     if markdownDraft.hasChanges {
                         Label(
@@ -828,10 +825,6 @@ struct MeetingDetailView: View {
                         )
                     } else if personalNotes.hasChanges {
                         Text("Saves when you click away")
-                            .font(NookType.caption)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text("Stored locally in this Markdown file")
                             .font(NookType.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -858,6 +851,7 @@ struct MeetingDetailView: View {
                 }
                 .controlSize(.small)
                 .frame(minHeight: 32)
+                }
             }
             // No card: like Notes, the page itself is the writing surface.
         }
@@ -907,6 +901,9 @@ struct MeetingDetailView: View {
                     tint: NookPalette.accent
                 )
                 .focusable()
+                // The heading is only where focus returns after a review
+                // closes. A ring around it on every open read as a bug.
+                .focusEffectDisabled()
                 .focused($summaryReviewFocus, equals: "summary-section")
                 .accessibilityFocused($summaryReviewAccessibilityFocus, equals: "summary-section")
 
@@ -934,6 +931,7 @@ struct MeetingDetailView: View {
                         summaryReviewButton(item)
                     }
                     .accessibilityElement(children: .contain)
+                    .modifier(PublishesRowHover())
                 }
             }
         } else if summaryParagraphs.count < 2 {
@@ -977,6 +975,7 @@ struct MeetingDetailView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
+            .modifier(RevealedOnRowHover(isFocused: summaryReviewFocus == item.id))
             .accessibilityLabel("Show supporting transcript for \(item.label): \(item.text)")
             .help("Review transcript support or correct this item")
             .disabled(markdownDraft.hasChanges || isRegenerating || isEditingTitle)
@@ -1141,7 +1140,6 @@ struct MeetingDetailView: View {
         let audioURL = keptAudioURL
         return VStack(spacing: 0) {
             transcriptSearchBar
-            SoftDivider()
 
             // Search filters passages, not the recording. Keep its transport
             // and failures reachable even when no passage matches.
@@ -1156,10 +1154,8 @@ struct MeetingDetailView: View {
                             .padding(.bottom, 12)
                     }
                 }
-                .padding(.horizontal, 44)
                 .padding(.top, 16)
-                .frame(maxWidth: 880)
-                .frame(maxWidth: .infinity)
+                .nookReadableColumn()
             }
 
             if segments.isEmpty {
@@ -1188,11 +1184,9 @@ struct MeetingDetailView: View {
                                 .id(segment.id)
                             }
                         }
-                        .padding(.horizontal, 44)
-                        .padding(.top, audioURL == nil ? 16 : 0)
+                        .padding(.top, audioURL == nil ? 8 : 0)
                         .padding(.bottom, 16)
-                        .frame(maxWidth: 880)
-                        .frame(maxWidth: .infinity)
+                        .nookReadableColumn()
                     }
                     .onChange(of: requestedMomentOffset, initial: true) { _, newValue in
                         guard let offset = newValue,
@@ -1250,7 +1244,7 @@ struct MeetingDetailView: View {
             }
             .buttonStyle(.borderless)
         }
-        .padding(.horizontal, 38)
+        .nookReadableColumn()
         .padding(.vertical, 12)
     }
 
@@ -1258,38 +1252,42 @@ struct MeetingDetailView: View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 12) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Plain Markdown source")
-                            .font(NookType.control)
-                        Text(note.fileURL?.lastPathComponent ?? "Unsaved note")
-                            .font(NookType.code)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
+                    // The tab already says Markdown; the file and its size
+                    // are the only facts worth a line.
+                    Text("\(note.fileURL?.lastPathComponent ?? "Unsaved note") · \(markdownCharacterCount) characters")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .contentTransition(.numericText())
 
                     Spacer()
 
-                    Text("\(markdownCharacterCount) characters")
-                        .font(NookType.micro.weight(.medium))
-                        .foregroundStyle(.secondary)
-                        .contentTransition(.numericText())
-
+                    // Revert and Save appear once there is an edit to act on.
+                    // They keep their place so the line does not jump, and
+                    // Save keeps Command-S.
                     Button("Revert") {
                         markdownDraft.discardChanges()
                     }
                     .buttonStyle(.bordered)
                     .disabled(!hasMarkdownChanges)
+                    .opacity(hasMarkdownChanges ? 1 : 0)
+                    .accessibilityHidden(!hasMarkdownChanges)
 
                     Button("Save") {
                         saveMarkdown()
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(!hasMarkdownChanges)
+                    .opacity(hasMarkdownChanges ? 1 : 0)
+                    .accessibilityHidden(!hasMarkdownChanges)
                     .keyboardShortcut(
                         shortcuts.binding(for: .saveNote).keyEquivalent,
                         modifiers: shortcuts.binding(for: .saveNote).eventModifiers
                     )
                 }
+                .controlSize(.small)
 
                 // The recovery instruction must not compete with the filename,
                 // counter, and Save controls for a narrow window's last space.
@@ -1307,10 +1305,8 @@ struct MeetingDetailView: View {
                     )))
                 }
             }
-            .padding(.horizontal, 28)
-            .padding(.vertical, 13)
-
-            SoftDivider()
+            .nookReadableColumn()
+            .padding(.vertical, 8)
 
             // Source is still prose to read. Full-pane lines ran past 200
             // characters on a wide window, which no one tracks by eye, so the
@@ -1322,17 +1318,13 @@ struct MeetingDetailView: View {
                 .font(NookType.code)
                 .lineSpacing(3)
                 .scrollContentBackground(.hidden)
-                .padding(.horizontal, 28)
-                .padding(.vertical, 20)
-                .frame(maxWidth: Self.markdownColumnWidth)
-                .frame(maxWidth: .infinity)
-                .background(Color(nsColor: .textBackgroundColor).opacity(0.66))
+                // The text view insets its first glyph by its line fragment
+                // padding; pull it back onto the column edge.
+                .padding(.horizontal, -5)
+                .padding(.bottom, 12)
+                .nookReadableColumn()
         }
     }
-
-    /// Roughly a hundred monospaced characters at `NookType.code`, plus the
-    /// editor's own horizontal padding.
-    private static let markdownColumnWidth: CGFloat = 716
 
     private var hasMarkdownChanges: Bool {
         markdownDraft.noteID == note.id && markdownDraft.hasChanges
@@ -1826,7 +1818,9 @@ private struct TranscriptRow: View {
                         .accessibilityHidden(true)
                 }
                 Text(segment.timestamp)
-                    .font(.system(size: 10, design: .monospaced))
+                    // SF with fixed-width digits, as Voice Memos writes times;
+                    // a monospaced face made each stamp read as code.
+                    .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
             .frame(width: 94, alignment: .trailing)
@@ -2251,5 +2245,37 @@ struct NativeSearchField: NSViewRepresentable {
             guard let field = notification.object as? NSSearchField else { return }
             text.wrappedValue = field.stringValue
         }
+    }
+}
+
+extension EnvironmentValues {
+    /// Whether the pointer is over the summary row that contains a view.
+    @Entry var summaryRowIsHovered = false
+}
+
+/// Tracks the pointer over one summary row for the evidence button inside it.
+private struct PublishesRowHover: ViewModifier {
+    @State private var isHovered = false
+
+    func body(content: Content) -> some View {
+        content
+            .contentShape(Rectangle())
+            .onHover { isHovered = $0 }
+            .environment(\.summaryRowIsHovered, isHovered)
+    }
+}
+
+/// Per-row actions appear on hover, as Reminders' info button does. Opacity
+/// alone hides them, so they stay in the accessibility tree and in the key
+/// view loop, and they show whenever they hold keyboard focus.
+private struct RevealedOnRowHover: ViewModifier {
+    let isFocused: Bool
+    @Environment(\.summaryRowIsHovered) private var isHovered
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isHovered || isFocused ? 1 : 0)
+            .animation(reduceMotion ? nil : NookMotion.quick, value: isHovered)
     }
 }
