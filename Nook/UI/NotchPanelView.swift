@@ -307,7 +307,7 @@ struct NotchPanelView: View {
             Button {
                 meeting.startDetectedMeeting()
             } label: {
-                Label("Record", systemImage: "record.circle")
+                IslandCapsuleLabel(title: "Record")
             }
             .buttonStyle(IslandCapsuleButtonStyle())
             .keyboardShortcut(.defaultAction)
@@ -368,7 +368,7 @@ struct NotchPanelView: View {
             Button {
                 meeting.startDetectedMeeting()
             } label: {
-                Label("Record", systemImage: "record.circle")
+                IslandCapsuleLabel(title: "Record")
             }
             .buttonStyle(IslandCapsuleButtonStyle())
             .keyboardShortcut(.defaultAction)
@@ -1523,7 +1523,7 @@ private struct IslandCheckmark: View {
             CheckmarkShape()
                 .trim(from: 0, to: isDrawn ? 1 : 0)
                 .stroke(
-                    NookPalette.prominentButtonForeground,
+                    NookPalette.notchInk,
                     style: StrokeStyle(lineWidth: 2.4, lineCap: .round, lineJoin: .round)
                 )
                 .padding(8.5)
@@ -1607,7 +1607,8 @@ private struct IslandCapsuleButtonStyle: ButtonStyle {
         return configuration.label
             .font(.system(size: 12.5, weight: .semibold))
             .labelStyle(.titleAndIcon)
-            .foregroundStyle(NookPalette.prominentButtonForeground)
+            .symbolRenderingMode(.monochrome)
+            .foregroundStyle(NookPalette.notchInk)
             .padding(.horizontal, 13)
             .frame(minHeight: 30)
             .background(
@@ -1619,6 +1620,42 @@ private struct IslandCapsuleButtonStyle: ButtonStyle {
             .scaleEffect(feedback.scale)
             .nookFocusRing(Capsule(), isVisible: isFocused)
             .animation(feedback.animation, value: configuration.isPressed)
+    }
+}
+
+/// The Record capsule's label. The glyph is drawn, not an SF Symbol: the
+/// symbol ignored every foreground style here and rendered white on mint,
+/// under 2:1, while shapes in the same ink render as asked.
+private struct IslandCapsuleLabel: View {
+    let title: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            RecordGlyph()
+                .frame(width: 13, height: 13)
+            Text(title)
+        }
+        .foregroundStyle(NookPalette.notchInk)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(title)
+    }
+}
+
+/// A ring around a dot: the record mark, in the current foreground style.
+struct RecordGlyph: View {
+    var body: some View {
+        GeometryReader { proxy in
+            let side = min(proxy.size.width, proxy.size.height)
+            ZStack {
+                Circle()
+                    .strokeBorder(.foreground, lineWidth: max(1.2, side * 0.12))
+                Circle()
+                    .fill(.foreground)
+                    .frame(width: side * 0.42, height: side * 0.42)
+            }
+            .frame(width: side, height: side)
+        }
+        .accessibilityHidden(true)
     }
 }
 

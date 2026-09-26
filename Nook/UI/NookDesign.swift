@@ -95,6 +95,13 @@ enum NookPalette {
         light: .white,
         dark: NSColor(red: 0.012, green: 0.125, blue: 0.106, alpha: 1)
     )
+    /// Ink for labels and symbols on the notch's filled accent. Fixed, not
+    /// adaptive: the notch is always dark, and an adaptive ink let SF Symbols
+    /// resolve through the window's light appearance and draw white on mint.
+    static let notchInk = Color(red: 0.012, green: 0.125, blue: 0.106)
+    /// The notch's accent in its only appearance, for checks that must not
+    /// depend on how the surrounding window resolves colours.
+    static let notchAccent = Color(red: 0.290, green: 0.859, blue: 0.776)
     /// A deeper selection color so white text retains AA contrast in both
     /// active and inactive windows.
     static let sidebarSelection = adaptive(

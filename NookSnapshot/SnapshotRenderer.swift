@@ -1083,8 +1083,9 @@ struct SnapshotRenderer {
             rootView: content.environmentObject(shortcuts)
         )
         hostingView.frame = NSRect(origin: .zero, size: canvasSize)
-        let isLightAppearance = mode == "library-light"
-            || mode.hasSuffix("-light")
+        let isNotchSurface = notchDemoGeometry != nil
+        let isLightAppearance = !isNotchSurface
+            && (mode == "library-light" || mode.hasSuffix("-light"))
         let appearance: NSAppearance.Name = isLightAppearance ? .aqua : .darkAqua
         hostingView.appearance = NSAppearance(named: appearance)
 

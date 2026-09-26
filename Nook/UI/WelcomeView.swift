@@ -1032,9 +1032,13 @@ private struct MiniIsland: View {
                     }
                     .lineLimit(1)
                     Spacer(minLength: 4)
-                    Label("Record", systemImage: "record.circle")
+                    HStack(spacing: 4) {
+                        RecordGlyph()
+                            .frame(width: 9, height: 9)
+                        Text("Record")
+                    }
                         .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(NookPalette.prominentButtonForeground)
+                        .foregroundStyle(NookPalette.notchInk)
                         .padding(.horizontal, 8)
                         .frame(height: 20)
                         .background(NookPalette.accent, in: Capsule())
@@ -1109,7 +1113,7 @@ private struct MiniIsland: View {
                 HStack(spacing: 8) {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 16))
-                        .foregroundStyle(NookPalette.prominentButtonForeground, NookPalette.accent)
+                        .foregroundStyle(NookPalette.notchInk, NookPalette.notchAccent)
                         .symbolEffect(.bounce, value: state)
                     VStack(alignment: .leading, spacing: 0) {
                         Text("Tucked away")

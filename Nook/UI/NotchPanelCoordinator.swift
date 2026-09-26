@@ -233,6 +233,10 @@ final class NotchPanelCoordinator {
         // resize it to fit the island, or the stage would chase the spring.
         host.sizingOptions = []
         panel.contentViewController = host
+        // The notch is black glass in every system appearance. Pinning the
+        // window's appearance makes AppKit-resolved colours, SF Symbols
+        // included, agree with the dark scheme SwiftUI is told to use.
+        panel.appearance = NSAppearance(named: .darkAqua)
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
