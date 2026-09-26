@@ -792,10 +792,10 @@ struct MeetingDetailView: View {
                         set: { personalNotesFocused = $0 }
                     ),
                     contentInsets: EdgeInsets(
-                        top: 9,
-                        leading: 9,
-                        bottom: 9,
-                        trailing: 9
+                        top: 4,
+                        leading: 0,
+                        bottom: 4,
+                        trailing: 0
                     ),
                     lineSpacing: 5
                 )
@@ -803,9 +803,7 @@ struct MeetingDetailView: View {
                 .accessibilityHint(
                     "Saved into the My notes section of this meeting’s Markdown file"
                 )
-                .frame(minHeight: 118)
-
-                SoftDivider()
+                .frame(minHeight: 64)
 
                 HStack(spacing: 10) {
                     if markdownDraft.hasChanges {
@@ -858,26 +856,10 @@ struct MeetingDetailView: View {
                             .eventModifiers
                     )
                 }
-                .padding(.horizontal, 14)
-                .frame(minHeight: 42)
+                .controlSize(.small)
+                .frame(minHeight: 32)
             }
-            .background(
-                NookPalette.paper,
-                in: RoundedRectangle(
-                    cornerRadius: NookRadius.surface,
-                    style: .continuous
-                )
-            )
-            .overlay {
-                RoundedRectangle(
-                    cornerRadius: NookRadius.surface,
-                    style: .continuous
-                )
-                    .stroke(
-                        Color(nsColor: .separatorColor).opacity(0.52),
-                        lineWidth: 0.7
-                    )
-            }
+            // No card: like Notes, the page itself is the writing surface.
         }
     }
 
@@ -1242,31 +1224,9 @@ struct MeetingDetailView: View {
 
     private var transcriptSearchBar: some View {
         HStack(spacing: 12) {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                TextField("Find in transcript", text: $transcriptSearch)
-                    .textFieldStyle(.plain)
-                if !transcriptSearch.isEmpty {
-                    Button {
-                        transcriptSearch = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 24, height: 24)
-                    .contentShape(Rectangle())
-                    .accessibilityLabel("Clear transcript search")
-                }
-            }
-            .padding(.horizontal, 12)
-            .frame(height: 32)
-            .background(
-                .primary.opacity(0.055),
-                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
-            )
-            .frame(maxWidth: 360)
+            NativeSearchField(prompt: "Find in transcript", text: $transcriptSearch)
+                .accessibilityLabel("Find in transcript")
+                .frame(maxWidth: 360)
 
             // Only a search has a result count. With an empty field the line
             // read as a progress indicator through the transcript, which it
@@ -2259,5 +2219,37 @@ private extension MeetingNote {
             source = transcript.map(\.text).joined(separator: " ")
         }
         return source.split(whereSeparator: \.isWhitespace).count
+    }
+}
+
+/// The system search field, with its own clear button, focus ring and
+/// Increased Contrast treatment. SwiftUI's `.searchable` is already taken by
+/// the sidebar in this window, so the AppKit control is used directly.
+struct NativeSearchField: NSViewRepresentable {
+    let prompt: String
+    @Binding var text: String
+
+    func makeNSView(context: Context) -> NSSearchField {
+        let field = NSSearchField()
+        field.placeholderString = prompt
+        field.sendsSearchStringImmediately = true
+        field.delegate = context.coordinator
+        return field
+    }
+
+    func updateNSView(_ field: NSSearchField, context: Context) {
+        if field.stringValue != text { field.stringValue = text }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
+
+    final class Coordinator: NSObject, NSSearchFieldDelegate {
+        let text: Binding<String>
+        init(text: Binding<String>) { self.text = text }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSSearchField else { return }
+            text.wrappedValue = field.stringValue
+        }
     }
 }
