@@ -334,8 +334,20 @@ struct CommandPaletteSection: Identifiable {
 /// Keep the chosen row's identity, and require another choice if it disappears.
 struct CommandPaletteSelection {
     private(set) var itemID: String?
+    private var selectsFirstSearchResult = false
+
+    mutating func beginSearch() {
+        itemID = nil
+        selectsFirstSearchResult = true
+    }
+
+    mutating func finishSearch(in items: [CommandPaletteItem]) {
+        refresh(in: items, selectFirst: selectsFirstSearchResult && itemID == nil)
+        selectsFirstSearchResult = false
+    }
 
     mutating func select(_ item: CommandPaletteItem) {
+        selectsFirstSearchResult = false
         itemID = item.id
     }
 
@@ -349,6 +361,7 @@ struct CommandPaletteSelection {
 
     mutating func move(_ direction: Int, in items: [CommandPaletteItem]) {
         guard !items.isEmpty else { return }
+        selectsFirstSearchResult = false
         let index: Int
         if let current = items.firstIndex(where: { $0.id == itemID }) {
             index = min(max(current + direction, 0), items.count - 1)
@@ -363,34 +376,204 @@ struct CommandPaletteSelection {
     }
 }
 
+/// Fuzzy matching is local and deterministic. Exact title hits lead, then
+/// abbreviations/typos, then content. Matching never changes the stored words.
 enum CommandPaletteNoteOrder {
-    static func ordered(_ notes: [MeetingNote], matching needle: String) -> [MeetingNote] {
-        let hits = needle.isEmpty ? notes : notes.filter { note in
-            note.title.localizedLowercase.contains(needle)
-                || note.summary.localizedLowercase.contains(needle)
-                || note.personalNotes.localizedLowercase.contains(needle)
-        }
-        let ordered = hits.sorted {
-            if !needle.isEmpty {
-                let leftLeads = $0.title.localizedLowercase.hasPrefix(needle)
-                let rightLeads = $1.title.localizedLowercase.hasPrefix(needle)
-                if leftLeads != rightLeads { return leftLeads }
+    nonisolated static func ordered(
+        _ notes: [MeetingNote],
+        matching query: String,
+        documents: [LibraryNoteIdentity: String]? = nil,
+        isCancelled: @Sendable () -> Bool = { Task.isCancelled }
+    ) -> [MeetingNote] {
+        guard !isCancelled() else { return [] }
+        let matcher = PaletteFuzzyQuery(query)
+        var hits: [(note: MeetingNote, rank: Int)] = []
+        for note in notes {
+            guard !isCancelled() else { return [] }
+            let rank: Int?
+            if matcher.text.isEmpty {
+                rank = 0
+            } else if let titleRank = matcher.rank(in: note.title, isTitle: true, isCancelled: isCancelled) {
+                rank = titleRank
+            } else {
+                let document = documents?[note.libraryIdentity]
+                    ?? LibrarySearchController.document(for: note)
+                rank = matcher.rank(in: document, isTitle: false, isCancelled: isCancelled).map { $0 + 3 }
             }
-            if $0.startedAt != $1.startedAt { return $0.startedAt > $1.startedAt }
-            let leftPath = $0.libraryIdentity.filePath ?? ""
-            let rightPath = $1.libraryIdentity.filePath ?? ""
-            if leftPath != rightPath { return leftPath < rightPath }
-            return $0.id.uuidString < $1.id.uuidString
+            // A cancelled last note must not return the earlier partial hits.
+            guard !isCancelled() else { return [] }
+            if let rank { hits.append((note, rank)) }
         }
-        return needle.isEmpty ? Array(ordered.prefix(5)) : ordered
+        guard !isCancelled() else { return [] }
+        let ordered = hits.sorted {
+            if $0.rank != $1.rank { return $0.rank < $1.rank }
+            let left = $0.note
+            let right = $1.note
+            if left.startedAt != right.startedAt { return left.startedAt > right.startedAt }
+            let leftPath = left.libraryIdentity.filePath ?? ""
+            let rightPath = right.libraryIdentity.filePath ?? ""
+            if leftPath != rightPath { return leftPath < rightPath }
+            return left.id.uuidString < right.id.uuidString
+        }.map(\.note)
+        guard !isCancelled() else { return [] }
+        return matcher.text.isEmpty ? Array(ordered.prefix(5)) : ordered
+    }
+}
+
+private struct PaletteFuzzyQuery {
+    let text: String
+    private let terms: [String]
+
+    init(_ query: String) {
+        text = Self.normalized(query).trimmingCharacters(in: .whitespacesAndNewlines)
+        terms = text.split(whereSeparator: \.isWhitespace).map(String.init)
+    }
+
+    func rank(in source: String, isTitle: Bool, isCancelled: () -> Bool) -> Int? {
+        guard !isCancelled() else { return nil }
+        let value = Self.normalized(source)
+        guard !isCancelled() else { return nil }
+        if value.hasPrefix(text) { return 0 }
+        if value.contains(text) { return 1 }
+        guard !isCancelled() else { return nil }
+        let words = value.split { !$0.isLetter && !$0.isNumber }.map(String.init)
+        if isTitle {
+            // Initials let "rr" find "Research review"; do not let a pair of
+            // letters match arbitrary distant characters in a transcript.
+            let initials = String(words.compactMap(\.first))
+            if text.count >= 2, !text.contains(" "), initials.hasPrefix(text) { return 2 }
+        }
+        for term in terms {
+            guard !isCancelled() else { return nil }
+            if value.contains(term) { continue }
+            var matched = false
+            for word in words {
+                // One long transcript can contain most of the library's work.
+                // Checking only between notes/terms leaves obsolete fuzzy
+                // comparisons running after the next query has already begun.
+                guard !isCancelled() else { return nil }
+                if Self.fuzzyWord(term, matches: word) {
+                    matched = true
+                    break
+                }
+            }
+            guard matched else { return nil }
+        }
+        return 2
+    }
+
+    private static func normalized(_ text: String) -> String {
+        text.folding(
+            options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+            locale: Locale(identifier: "en_US_POSIX")
+        )
+    }
+
+    private static func fuzzyWord(_ query: String, matches word: String) -> Bool {
+        // Short strings have too little information for typo guesses. Limit
+        // edit-distance work, not source text: long words still match exactly.
+        guard query.count >= 3, query.count <= 64, word.count <= 64 else { return false }
+        let needle = Array(query)
+        let candidate = Array(word)
+        if needle.count >= 3, needle.first == candidate.first,
+           candidate.count <= needle.count * 2 {
+            var index = 0
+            for character in candidate where index < needle.count {
+                if character == needle[index] { index += 1 }
+            }
+            if index == needle.count { return true }
+        }
+        let limit = needle.count >= 8 ? 2 : 1
+        guard abs(needle.count - candidate.count) <= limit else { return false }
+        // Bounded Damerau-Levenshtein also recognizes a transposed keystroke.
+        var previous = Array(0...candidate.count)
+        var beforePrevious = previous
+        for i in 1...needle.count {
+            var row = [i] + Array(repeating: 0, count: candidate.count)
+            for j in 1...candidate.count {
+                row[j] = min(
+                    row[j - 1] + 1,
+                    previous[j] + 1,
+                    previous[j - 1] + (needle[i - 1] == candidate[j - 1] ? 0 : 1)
+                )
+                if i > 1, j > 1,
+                   needle[i - 1] == candidate[j - 2],
+                   needle[i - 2] == candidate[j - 1] {
+                    row[j] = min(row[j], beforePrevious[j - 2] + 1)
+                }
+            }
+            if row.min()! > limit { return false }
+            beforePrevious = previous
+            previous = row
+        }
+        return previous[candidate.count] <= limit
+    }
+}
+
+/// Searching whole transcripts cannot run on the query field's main actor.
+/// One cancellable request owns each result; closing or changing the library
+/// invalidates it even if an old matcher ignores cancellation.
+@MainActor
+final class CommandPaletteSearchController: ObservableObject {
+    @Published private(set) var matches: [MeetingNote] = []
+    @Published private(set) var isSearching = false
+    private let documents = SearchDocumentCache()
+    private let matcher: @Sendable (String, [MeetingNote], [LibraryNoteIdentity: String]) async -> [MeetingNote]
+    private var task: Task<Void, Never>?
+    private var revision = 0
+
+    init(
+        matcher: @escaping @Sendable (String, [MeetingNote], [LibraryNoteIdentity: String]) async -> [MeetingNote] = {
+            CommandPaletteNoteOrder.ordered($1, matching: $0, documents: $2)
+        }
+    ) {
+        self.matcher = matcher
+    }
+
+    deinit { task?.cancel() }
+
+    @discardableResult
+    func update(query: String, notes: [MeetingNote]) -> Task<Void, Never>? {
+        cancel()
+        if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            matches = CommandPaletteNoteOrder.ordered(notes, matching: "")
+            return nil
+        }
+        isSearching = true
+        let expected = revision
+        task = Task { [weak self, documents, matcher] in
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled else { return }
+            let snapshots = await documents.documents(for: notes)
+            guard !Task.isCancelled else { return }
+            let worker = Task.detached(priority: .userInitiated) {
+                await matcher(query, notes, snapshots)
+            }
+            let result = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
+            guard !Task.isCancelled, let self, self.revision == expected else { return }
+            self.matches = result
+            self.isSearching = false
+        }
+        return task
+    }
+
+    func cancel() {
+        revision += 1
+        task?.cancel()
+        task = nil
+        matches = []
+        isSearching = false
     }
 }
 
 /// A `⌘K` launcher over everything the library can do.
 ///
 /// Verbs stay visible so the palette teaches the app's actions while it
-/// jumps between them; notes arrive through the same matcher the sidebar
-/// search uses; open actions appear so follow-through is one keystroke away.
+/// jumps between them; notes use a cancellable local fuzzy search; open actions appear so follow-through is one keystroke away.
 /// A native sheet owns the keyboard and accessibility boundary. An overlay
 /// left the underlying editor focused, so typing a query edited the note.
 struct CommandPaletteView: View {
@@ -411,6 +594,7 @@ struct CommandPaletteView: View {
     var onSelectCommand: (CommandPaletteItem) -> CommandPaletteCommandDisposition = { _ in .dismiss }
 
     @State private var query = ""
+    @StateObject private var noteSearch = CommandPaletteSearchController()
     @State private var selection = CommandPaletteSelection()
     @FocusState private var queryFocused: Bool
     /// The sections as of the last refresh. `sections` used to be computed
@@ -425,9 +609,14 @@ struct CommandPaletteView: View {
     var body: some View {
         VStack(spacing: 0) {
             searchHeader
+            if noteSearch.isSearching {
+                ProgressView("Searching notes…")
+                    .controlSize(.small)
+                    .padding(.bottom, NookSpacing.small)
+            }
             SoftDivider()
 
-            if items.isEmpty {
+            if items.isEmpty, !noteSearch.isSearching {
                 emptyState
             } else {
                 resultsList
@@ -474,14 +663,29 @@ struct CommandPaletteView: View {
         // character reach the parent window during the presentation handoff.
         .defaultFocus($queryFocused, true)
         .onAppear {
+            selection.beginSearch()
+            noteSearch.update(query: query, notes: store.notes)
             refreshSections(selectFirst: true)
         }
         .onChange(of: query) { _, _ in
+            selection.beginSearch()
+            noteSearch.update(query: query, notes: store.notes)
             refreshSections(selectFirst: true)
         }
         .onChange(of: store.notes) { _, _ in
+            noteSearch.update(query: query, notes: store.notes)
             refreshSections()
         }
+        .onChange(of: noteSearch.matches) { _, _ in
+            refreshSections()
+        }
+        .onChange(of: noteSearch.isSearching) { _, isSearching in
+            if !isSearching {
+                refreshSections()
+                selection.finishSearch(in: items)
+            }
+        }
+        .onDisappear { noteSearch.cancel() }
         .onChange(of: meeting.phase) { _, _ in
             refreshSections()
         }
@@ -682,7 +886,7 @@ struct CommandPaletteView: View {
             needle.isEmpty || $0.title.localizedLowercase.contains(needle)
         }
 
-        let notes = orderedNotes(matching: needle).prefix(8).map { note in
+        let notes = noteSearch.matches.prefix(8).map { note in
             CommandPaletteItem(
                 id: "note-\(note.libraryIdentity.navigationKey)",
                 symbol: note.kind.symbol,
@@ -729,12 +933,6 @@ struct CommandPaletteView: View {
     /// The sections flattened, which is what arrow keys move through.
     private var items: [CommandPaletteItem] {
         sections.flatMap(\.items)
-    }
-
-    /// Title matches lead, then content matches, mirroring how a person
-    /// scans their own library.
-    private func orderedNotes(matching needle: String) -> [MeetingNote] {
-        CommandPaletteNoteOrder.ordered(store.notes, matching: needle)
     }
 
     private var verbs: [CommandPaletteItem] {

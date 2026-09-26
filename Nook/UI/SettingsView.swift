@@ -248,11 +248,20 @@ struct SettingsView: View {
                     .font(NookType.caption)
                     .foregroundStyle(NookPalette.warning)
                     .fixedSize(horizontal: false, vertical: true)
+                if let permission = audioInputCheck.requiredPermission,
+                   let url = permission.settingsURL {
+                    Button("Open Permission Settings…") {
+                        NSWorkspace.shared.open(url)
+                    }
+                    .accessibilityLabel(permission == .microphone
+                        ? "Open Microphone permission settings"
+                        : "Open Screen and System Audio Recording permission settings")
+                }
             }
         } header: {
             Label("Test meeting audio", systemImage: "waveform.and.mic")
         } footer: {
-            Text("Nook briefly listens to your microphone and meeting audio to show these levels. It does not record, save audio, transcribe speech, or send anything. Stop a meeting or dictation before starting the test.")
+            Text("Nook listens only while this test is running. It does not record, save audio, create a note, transcribe speech, or send anything. Normal macOS recording indicators still appear. Stop a meeting or dictation before starting the test.")
         }
     }
 

@@ -80,6 +80,19 @@ struct ExtraSection: Hashable, Sendable {
     let anchor: String?
 }
 
+enum PendingSummaryKind: String, Sendable {
+    case initial = "pending"
+    case appended = "pending-append"
+}
+
+/// Describes retained fallback content, not the state of the latest model
+/// request. A failed Retry leaves both the content and its provenance intact.
+enum SummaryProvenance: String, Sendable, CaseIterable {
+    case transcriptHighlights = "transcript-highlights"
+    case partialExtraction = "partial-extraction"
+    case editedFallback = "edited-fallback"
+}
+
 struct MeetingNote: Identifiable, Hashable, Sendable {
     let id: UUID
     var kind: NoteKind = .default
@@ -88,9 +101,15 @@ struct MeetingNote: Identifiable, Hashable, Sendable {
     var endedAt: Date
     var sourceApp: String
     var summary: String
+    /// Durable evidence that the transcript saved before enrichment finished.
+    /// On relaunch this offers Retry, never an automatic model invocation.
+    var summaryPending: PendingSummaryKind?
+    var summaryProvenance: SummaryProvenance?
+    var summaryRecipe: SummaryRecipe
     var keyPoints: [String]
     var decisions: [String]
     var actionItems: [String]
+    var openQuestions: [String]
     /// The action items that are ticked, keyed by the exact stored text of the
     /// item, including any `[due: ...]` suffix.
     ///
@@ -154,9 +173,13 @@ struct MeetingNote: Identifiable, Hashable, Sendable {
         endedAt: Date,
         sourceApp: String,
         summary: String,
+        summaryPending: PendingSummaryKind? = nil,
+        summaryProvenance: SummaryProvenance? = nil,
+        summaryRecipe: SummaryRecipe = .general,
         keyPoints: [String] = [],
         decisions: [String] = [],
         actionItems: [String] = [],
+        openQuestions: [String] = [],
         completedActionItems: Set<String> = [],
         personalNotes: String = "",
         transcript: [TranscriptSegment] = [],
@@ -175,9 +198,13 @@ struct MeetingNote: Identifiable, Hashable, Sendable {
         self.endedAt = endedAt
         self.sourceApp = sourceApp
         self.summary = summary
+        self.summaryPending = summaryPending
+        self.summaryProvenance = summaryProvenance
+        self.summaryRecipe = summaryRecipe
         self.keyPoints = keyPoints
         self.decisions = decisions
         self.actionItems = actionItems
+        self.openQuestions = openQuestions
         self.completedActionItems = completedActionItems
         self.personalNotes = personalNotes
         self.transcript = transcript
@@ -237,6 +264,7 @@ struct MeetingNote: Identifiable, Hashable, Sendable {
             && keyPoints.isEmpty
             && decisions.isEmpty
             && actionItems.isEmpty
+            && openQuestions.isEmpty
             && transcript.isEmpty
             && extraSections.isEmpty
     }

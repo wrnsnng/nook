@@ -104,6 +104,7 @@ final class LibrarySearchController: ObservableObject {
             note.keyPoints.joined(separator: " "),
             note.decisions.joined(separator: " "),
             note.actionItems.joined(separator: " "),
+            note.openQuestions.joined(separator: " "),
             note.personalNotes,
             note.transcriptText,
         ].joined(separator: "\n").localizedLowercase

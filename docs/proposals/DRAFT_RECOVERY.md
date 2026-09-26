@@ -1,9 +1,12 @@
 # [Feature]: Recover unfinished writing after Nook closes unexpectedly
 
 **Status:** Proposed publicly in [issue #14](https://github.com/wrnsnng/nook/issues/14).
-This file records the design and acceptance criteria. The first phase is
-implemented locally and has not been released. Automated regression checks
-and light/dark snapshots are complete; manual Mac acceptance remains in
+This file records the design and acceptance criteria. The first phase was
+included in [1.20.0](https://github.com/wrnsnng/nook-releases/releases/tag/v1.20.0),
+published September 1, 2026; the release listing was checked September 4.
+Publication does not establish completion of manual acceptance. Automated
+regression checks and light/dark snapshots are recorded; manual Mac acceptance
+remains in
 [`../HANDOFF.md`](../HANDOFF.md).
 
 ## Problem

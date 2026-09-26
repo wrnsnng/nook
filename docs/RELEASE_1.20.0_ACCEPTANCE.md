@@ -2,10 +2,20 @@
 
 Candidate version: **1.20.0**, Sparkle build **36**.
 
+## Publication status checked September 4, 2026
+
+The [1.20.0 binary release](https://github.com/wrnsnng/nook-releases/releases/tag/v1.20.0)
+was published September 1 and was followed by
+[1.20.1](https://github.com/wrnsnng/nook-releases/releases/tag/v1.20.1) on September 3. The
+candidate validation below is historical, not a current claim that publication
+is pending. This reconciliation checked the release listing only; it did not
+re-verify archive signatures, the signed update feed, or an installed update.
+The hands-on checklist remains open because publication is not its evidence.
+
 This release includes the accumulated review fixes, the Library publication and
 observation changes, and the native editor work proposed in
-[issue 15](https://github.com/wrnsnng/nook/issues/15). It must not be described as
-published until the binary release and signed update feed are verified.
+[issue 15](https://github.com/wrnsnng/nook/issues/15). The original publication
+gate required binary-release and signed-update-feed verification.
 
 ## Candidate validation
 

@@ -52,7 +52,7 @@ enum AudioRetention {
         // or a sitting being appended to an existing note. A saved identifier
         // alone cannot prove that this audio has finished serving its purpose.
         let unfinishedIDs = Set(files.compactMap { file -> UUID? in
-            guard file.pathExtension.lowercased() == "mp4" else { return nil }
+            guard ["mp4", "sources"].contains(file.pathExtension.lowercased()) else { return nil }
             let stem = file.deletingPathExtension().lastPathComponent
                 .components(separatedBy: ".part-").first ?? ""
             return UUID(uuidString: stem)
