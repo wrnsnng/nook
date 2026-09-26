@@ -25,6 +25,31 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
   utterances as correction proposals. Words stay in the note until an explicit
   review applies the change; Undo restores them. Ambiguous targets, changed
   notes and active text composition cannot authorize a correction.
+- New captures preserve microphone/system input labels in a separate local
+  audio copy for file transcription and recovery. The original recording
+  remains the fallback if the source copy cannot be completed or validated.
+  Recovery refreshes older playback mixes from all remaining capture parts,
+  including resumed parts without a completed source copy.
+  Legacy recordings without source metadata remain Unattributed.
+- Extracted recordings include every audio track across paused/resumed parts,
+  preserving track offsets and gaps. Failed or cancelled exports no longer
+  delete previously extracted audio before a replacement is ready.
+- Recordings, recovered recordings and live-caption rescue notes save their
+  words before summary enrichment. Saved notes show background progress,
+  non-destructive cancellation and Retry without hiding the transcript or
+  current write-up. Unfinished summaries remain retryable after relaunch.
+- Fallback write-ups are explicitly labeled and keep a visible Retry action
+  after reopening. Their origin stays separate from progress and failure
+  messages. Failed note merging retains earlier facts, decisions and questions;
+  successful merging clears stale pending status.
+- Review related transcript passages from a summary sentence, key point,
+  decision, action or question. Request a local correction or preview removal,
+  then explicitly apply it. Undo is available until the review closes. Stale
+  notes, source changes and incomplete-recording warnings remain protected.
+- Meeting summaries retain supported open questions in their own section.
+  Choose General, Standup, One-to-one or Interview emphasis on a saved meeting,
+  then explicitly regenerate on this Mac. Recipe selection does not start a
+  model, and existing user-written Open questions headings keep their meaning.
 
 ## 1.20.1
 

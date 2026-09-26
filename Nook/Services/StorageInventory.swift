@@ -59,7 +59,7 @@ struct StorageInventoryLocation: Identifiable, Hashable, Sendable {
         return [
             Self(id: .notes, url: notesDirectory, scope: .markdownFiles),
             Self(id: .interruptedSaves, url: notesDirectory, scope: .interruptedSaveFiles),
-            Self(id: .recordings, url: notesDirectory.appendingPathComponent(".recordings"), scope: .directFiles),
+            Self(id: .recordings, url: notesDirectory.appendingPathComponent(".recordings"), scope: .directoryTree),
             Self(id: .drafts, url: draftsDirectory, scope: .directFiles),
             Self(id: .searchCache, url: support.appendingPathComponent("NookAsk/chunks.json"), scope: .file),
             Self(id: .appCache, url: caches.appendingPathComponent(identity), scope: .directoryTree),

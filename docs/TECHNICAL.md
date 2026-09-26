@@ -105,9 +105,111 @@ native-sheet keyboard behavior or VoiceOver acceptance.
 The central state machine for detection, recording, live transcript, pause,
 processing, title generation, summary generation, notes, and recovery.
 
+`AudioExtractor` assembles all audio tracks from each ordered capture part into
+reusable composition lanes. It retains source assets while using their weakly
+owned tracks, preserves offsets and silence, and applies equal per-part mixing
+headroom. If video outlasts audio, a short silent PCM endpoint in the private
+staging directory makes the M4A exporter retain the final gap; an empty edit and
+explicit export time range alone do not. Lane order and stereo channels are not
+speaker identity. Export uses
+a private, same-volume staging directory; only a verified complete file can
+replace the destination after file-identity checks. Failed or cancelled exports
+leave source audio and the previous destination intact; cleanup failure is
+reported even if a complete replacement has already succeeded. Metadata checks
+narrow replacement races, but do not form a transaction against an uncooperative
+external writer.
+
+`SourceAudioFiles` selects a completed source companion for each ordered capture
+part when its receipt and file identities remain valid, otherwise the original
+ScreenCaptureKit file. Playback extraction and transcription use this same
+selection and revalidate it across asynchronous work.
+Recovery rebuilds playback whenever capture parts remain, even if no completed
+source companion exists and an extracted M4A already exists. That cached mix
+may predate a companion or a resumed primary-only part; it has no receipt tying
+it to every current capture. Failed staged re-export preserves the cached audio
+and original captures instead of saving a new source transcript beside obsolete playback and
+then deleting its only complete sources. Legacy audio-only recovery still reuses
+the surviving M4A.
+
+`RecordedSourceTranscription` inspects the selected ordered capture files
+before the mixed playback export is transcribed. A track can identify its input
+only with one exact QuickTime information marker,
+`nook:audio-source:v1:microphone` or `nook:audio-source:v1:system`. Track titles,
+order, stereo channels, duplicate/conflicting markers and unknown versions are
+not source evidence. If no track has a recognized marker, transcription uses
+the existing mixed file. If any track is labelled, every audio track from every
+part is isolated and transcribed serially, including unlabelled tracks as
+Unattributed. Result timestamps include the track offset and preceding parts'
+full durations. Identical words on two tracks are not deduplicated. Failed
+transcription, invalid result timing, cancellation or changed input files reject
+the result instead of returning a shortened transcript. The existing abandoning
+deadline encloses this operation, including track export and Speech.
+
+`SourceAudioRecording` is an auxiliary AAC writer fed by typed `.audio` and
+`.microphone` ScreenCaptureKit callbacks. It keeps the original
+`SCRecordingOutput` MP4 as fallback and writes explicitly marked tracks into
+`<capture-stem>.sources/audio.mov`. AVFoundation state is confined to one serial
+queue, with an 8 MiB retained-buffer budget and bounded encoder backpressure.
+Initial packets share one timestamp epoch regardless of callback arrival order.
+PCM packets straddling resume are copied from the first eligible frame in each
+channel buffer; non-interleaved PCM cannot use CoreMedia's range-copy helper.
+Intra-source gaps and final tails are filled with bounded native-format silent
+PCM chunks because the AAC writer otherwise closes those timestamp gaps.
+
+Pause records whether output removal actually succeeded, rather than inferring
+it from a later waiter error. Successful removal seals the source queue; stop
+also detaches it before finalization. Repeated finish calls share one boundary.
+Cancellation, invalid packets, overflow or failed finalization leave the
+companion ineligible and the original intact. After encoder completion, the
+file is reopened to check the complete duration, exact source set, valid track
+ranges and each source's expected final timestamp (with AAC-frame tolerance).
+One full-length source cannot conceal a shortened second track. Only then is
+`complete.json` published under the cancellation gate, after rechecking the
+audio identity captured before the asynchronous validation. Cancellation or
+cleanup during a delayed validation cannot recreate a receipt or package.
+These container checks are not proof of audibility or SDK callback completeness.
+Selection checks file identity,
+size and modification/change times, not just playability. This receipt is a
+local ownership check, not authenticated provenance or a portable format:
+copying/replacing its files invalidates it. A valid companion remains
+recoverable if only its original MP4 was removed. Partial packages remain
+discoverable for Reveal/Delete. Recovery, artifact cleanup, retention and
+storage accounting include these directories.
+
+Synthetic buffer/file tests for the auxiliary writer
+do not establish real callback completeness, physical pause/stop boundaries,
+audio quality or sustained capture resource use; those acceptance checks remain.
+The marker records an input route, not a person's identity and not authenticated
+proof against someone deliberately editing recording metadata. Existing files
+without that evidence remain Unattributed.
+
 Published state drives every UI surface. Commands must be idempotent or guarded
 against invalid phases because the same meeting can be controlled from several
 surfaces.
+
+Once a transcript-first note is saved, capture processing settles its recording
+artifacts and completes without waiting for a summary. Recovery and partial
+live-caption rescue use the same handoff. `MarkdownStore` owns
+`NoteSummarySessions`, keyed by UUID plus file path, so the Library detail and
+background writer share one cancellable request. Navigation does not cancel it.
+Folder-generation changes, deletion and duplicate IDs invalidate it. A bounded
+`SummaryRegenerationSession` rejects late callbacks, stale inputs and on-disk
+revision conflicts; appended summaries retain existing tracked actions.
+Cancelling its returned task also clears the running state and permits Retry.
+Cleanup checks the request identity so an old task cannot clear a newer run.
+All summary merge paths share exact transcript-input comparison: count, wording,
+timing, duration and source must match; presentation-only segment UUIDs need not.
+This keeps a valid initial/appended write-up from being silently discarded after
+the session accepts the input and clears its pending marker.
+
+`summary_status: pending` (or `pending-append`) is minimal durable state in the
+ordinary Markdown file. The appended value selects the action-preserving merge
+on Retry even after relaunch. The field is removed only when a successful
+summary is committed. A failure,
+cancellation or relaunch leaves saved words available with explicit Retry;
+relaunch does not automatically restart enrichment. Progress and Retry appear
+above every saved-note tab without replacing the existing prose. A partial
+live-caption recording warning survives successful regeneration.
 
 ### `CaptureService`
 
@@ -177,6 +279,57 @@ transcription service.
 Uses Apple's on-device Foundation Models framework when available and falls
 back to deterministic extraction. The result is grounded against transcript
 evidence before decisions and actions are saved.
+
+Open questions travel through the typed and prose result schemas, first-pass
+candidate ledger, validation, regeneration, append/recovery and Markdown. Their
+ledger share stays inside the existing total prompt budget. Numeric/lexical
+validation requires source wording and an explicit unresolved-status signal;
+these conservative checks are not a proof of semantic entailment or that later
+speech never answers a question. Actual-model and review acceptance must check
+that distinction. Existing plain Open questions headings remain user-owned;
+only the generated section's `<!-- nook:summary -->` marker gives it a modeled
+field. Non-list text and repeated marked headings remain preserved extras.
+
+`SummaryRecipe` is a fixed, explicit local selection carried through
+`SummaryAttention`. General adds no recipe prompt. Saved selections survive
+relaunch in `summary_recipe`, do not invoke generation and participate in the
+stale-input check. Regeneration keeps the selected value. Merging uses the
+surviving note's selection rather than guessing from the conversation or the
+absorbed note; failed merging retains existing questions.
+
+`SummaryProvenance` distinguishes retained transcript highlights, partial
+extraction and edited fallback independently of `summaryPending`. The optional
+`summary_origin` field is present only for meeting fallback content. Decode
+recognizes exact legacy fallback output, including known failure reasons and
+the partial-extraction notice, but not loose diagnostic mentions or modified
+samples. Opening is read-only. Provenance follows the corresponding summary
+field through optimistic merges: a successful model request does not clear
+provenance attached to a newer user summary that was kept. Item correction
+marks edited fallback and Undo restores the old origin. Diagnostic copy is not
+an editable generated item. Failed note merging preserves earlier key points,
+decisions, actions and questions and marks `pending-append` for a safe Retry;
+success clears pending and fallback state. The saved-note fallback card stays
+visible during progress and uses a native explicit Retry action.
+
+`SummaryItemReviewSession` owns one explicit item review. Summary ranges are
+derived with `NLTokenizer`; list references address an exact item snapshot.
+Passages are exact UTF-16 ranges in current transcript segments and do not rely
+on segment UUIDs surviving Markdown decode. Off-main retrieval ranks up to six
+related passages with lexical overlap and local embeddings, retaining negative
+statements rather than labeling matches as proof. Each passage is bounded to
+900 characters. Feedback is bounded to 1,000 characters.
+
+The native item-driven sheet owns source selection, transient feedback and
+explicit Apply/Undo. It requests keyboard/accessibility focus at the first
+passage and returns to the originating item, or the summary section after
+removal/staleness. A typed on-device correction supplies a replacement and exact
+quote. Existing grounding and numeric checks plus negation/uncertainty checks
+reject unsupported proposals, but do not prove entailment. Deadlines and request
+identities reject late results; changing feedback or source invalidates the
+proposal. Apply/Undo recheck file revision, library generation and exact encoded
+content. Action dates/completion and the incomplete-recording notice are not
+model-editable. Undo is one-shot and refuses newer content. No review state is
+persisted outside the explicitly saved item change.
 
 ### `MeetingDetector`
 

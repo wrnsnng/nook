@@ -1270,7 +1270,10 @@ struct LibraryView: View {
                 )
                     .id(selectedNote.libraryIdentity)
             } else {
-                MeetingDetailView(note: selectedNote)
+                MeetingDetailView(
+                    note: selectedNote,
+                    summarySession: store.summarySessions.session(for: selectedNote)
+                )
                     .id(selectedNote.libraryIdentity)
             }
         } else if store.isLoading {

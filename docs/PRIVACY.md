@@ -17,10 +17,10 @@ local meeting metadata (optional detection)
   → user chooses Record
   → ScreenCaptureKit system audio + microphone audio
   → on-device Speech transcription
-  → on-device Foundation Models summary, or deterministic fallback
-  → plaintext Markdown in the selected notes folder
+  → plaintext transcript-first Markdown in the selected notes folder
   → temporary recording deleted; extracted audio deleted unless kept, and
     kept audio later swept by age if audio retention is enabled
+  → cancellable on-device Foundation Models summary enrichment
 ```
 
 Dictation is a separate path with the same property:
@@ -146,7 +146,10 @@ succeeds. Permission errors link to the matching macOS Settings pane; the test
 does not request Speech Recognition access.
 
 Pausing removes the recording output and stops forwarding audio to live
-transcription until the user resumes.
+transcription until the user resumes. It also seals the auxiliary source-audio
+writer; resume starts a separate part and excludes queued pre-resume PCM frames.
+File session boundaries are not a guarantee that encoded containers contain no
+out-of-range packet bytes. Physical capture-boundary acceptance remains required.
 
 ## Dictation and Accessibility access
 
@@ -330,7 +333,45 @@ to another app, is outside Nook.
 The default notes folder is `~/Documents/Nook`. A user can select another folder
 in Settings. Each completed note is a plaintext Markdown file containing
 timestamps, source application, title, summary, key points, decisions, action
-items, personal notes, and transcript.
+items, open questions, personal notes, and transcript.
+
+An explicitly selected non-general summary recipe is stored as
+`summary_recipe: standup`, `one-on-one` or `interview` in the same file. Choosing
+one saves emphasis only; the user must separately request regeneration. Recipes
+contain fixed local guidance, never inferred personal attributes, and do not add
+a model, provider or network path. Nook-owned question sections use
+`## Open questions <!-- nook:summary -->`; the invisible Markdown comment keeps
+older user-written headings from being reinterpreted as generated content.
+
+Fallback write-ups store a small `summary_origin` value in that same Markdown
+file: `transcript-highlights`, `partial-extraction` or `edited-fallback`. This
+describes the origin of the retained write-up, not whether a model is currently
+running. It contains no transcript copy or failure log. Exact recognized legacy
+fallback output receives this classification when read; opening does not write
+the file, and a later explicit save can persist the field. Reviewed item changes
+retain an edited-fallback classification; only an accepted replacement of the
+summary clears it. No model runs merely because a fallback note is opened.
+
+Summary item review derives exact passage references from the saved transcript,
+using local word matching and, when available, the on-device sentence embedding.
+Opening review does not invoke a language model or save feedback. An explicit
+Correct This request sends only the selected passage, current item and bounded
+feedback to Apple's on-device Foundation Models. Nothing is sent to a CLI
+provider or server. References, feedback, proposals and the temporary Undo
+snapshot stay in memory for the review; no evidence cache or feedback log is
+created. Applying a correction or removal rewrites the existing Markdown note
+through its conflict checks. Feedback is not a durable instruction for future
+whole-summary generation. Similarity and lexical validation are not proof that
+a claim follows from the transcript; the reviewed quote remains visible.
+
+An unfinished meeting summary adds `summary_status: pending` (or
+`pending-append` for an added sitting) to that same Markdown file. The latter
+keeps earlier action items when retrying after relaunch. This is local status
+only, not a transcript copy, recording or
+new log. A successful summary removes the field. On relaunch, an unfinished
+note offers Retry without automatically invoking a model. Cancel Summary keeps
+the saved transcript and current notes; it does not mean Discard Recording and
+does not change the user's audio-retention choice.
 
 **Review Storage on This Mac** in Settings counts file metadata in the current
 notes folder, its `.recordings` folder, the active installation's draft-recovery
@@ -386,15 +427,71 @@ Temporary capture and extracted-audio files live in a hidden `.recordings`
 folder inside the selected notes folder while Nook processes a meeting.
 
 - Temporary MP4 containers are deleted after successful processing.
+- Local source-preserving capture also writes a second audio copy, with separate
+  microphone/system tracks, under `<capture-stem>.sources/audio.mov` for each
+  unpaused part. These packages are inside `.recordings`, created exclusively
+  with `0700` permissions; completed audio and its `complete.json` receipt use
+  `0600`. The receipt contains capture filename and filesystem identities,
+  sizes and timestamps, not transcript text or credentials. It is an ownership
+  guard, not encryption or authenticated provenance. The auxiliary encoding
+  adds CPU, memory and disk work; capture callbacks enqueue at most 8 MiB of
+  retained audio, and timestamp gaps use bounded generated-silence chunks.
+  Long-capture resource use still needs physical-Mac acceptance.
+- Only a successfully finalized, unchanged source package can be selected in
+  place of its MP4 for processing. Before publishing its receipt, Nook reopens
+  the local file to check duration, source markers and track timing, and checks
+  that the file did not change during validation. Cancellation or cleanup
+  while that read is pending cannot recreate the package or completion receipt.
+  These checks do not invoke Speech or a model. Recovery with remaining capture
+  parts re-exports playback even when an earlier M4A remains, including when
+  source packages are absent or unfinished, so retained audio includes resumed
+  primary-only parts too. Audio-only recovery reuses the surviving M4A. Failed
+  re-export retains that old audio, primary captures and source packages.
+  Failed/cancelled auxiliary writing leaves
+  the original recording intact. Partial packages stay discoverable for
+  Reveal/Delete, and a valid complete package can be recovered even if its MP4
+  was removed. Copying or replacing files invalidates the local receipt.
+  Packages follow recording cleanup and recovery, not the keep-extracted-audio
+  preference: successful processing removes them, failure retains them for
+  recovery, and cleanup failures remain visible. They count toward storage
+  usage and protect unfinished recordings from age-based audio cleanup.
 - A recording is kept when processing fails, because at that point it is the
   only copy of the conversation. The Library lists anything kept this way with its
   date and size, so it can be turned into a note or deleted rather than sitting
   on disk unnoticed.
 - Extracted M4A audio is deleted unless **Keep extracted meeting audio** is on.
+- Audio export first writes into a private macOS item-replacement directory
+  on the destination volume. The directory has owner-only POSIX permissions
+  (`0700`); the completed file receives `0600` permissions before publication.
+  Only a completed, duration-checked export may replace existing extracted
+  audio, after checking the source and destination identities again. The same
+  staging directory can contain a short generated silent PCM file to preserve
+  a recording's trailing silence; it contains no captured sound. Staging
+  files are removed on normal completion, failure and cancellation. A cleanup
+  failure reports the directory path so it can be reviewed; an abrupt process
+  termination can leave temporary items for later system cleanup, whose timing
+  Nook does not guarantee. These are local plaintext copies, not encrypted
+  storage or protection against other software running as the same user.
 - Merging two notes that both kept audio combines them into one continuous
   file. That work happens in a transient `merged-<UUID>.m4a` file inside the
   recordings folder, which replaces the kept audio it was built from once the
   merge succeeds and never survives past that step.
+- The source-aware file-transcription path recognizes minimal versioned track
+  markers identifying microphone or system input. It does not infer a person
+  from a voice, filename, track position or stereo channel. The auxiliary
+  source writer creates these markers; legacy/unlabelled recordings continue
+  through mixed/Unattributed transcription. When a labelled file is processed,
+  each track is temporarily exported to M4A inside an owner-only (`0700`)
+  macOS item-replacement directory, given `0600` permissions, and read by local
+  Speech. No network call or additional permission is introduced. Tracks are
+  processed serially and each temporary audio file is removed after use. The
+  enclosing directory is removed on normal return or a reported error, with a
+  cleanup failure identifying the retained location. An unresponsive framework
+  can delay cleanup after cancellation until its operation unwinds; abrupt
+  termination can leave temporary items for later system cleanup. These files
+  are plaintext copies subject to the same backup/same-user access limits as
+  other local audio. Original captures remain owned by the existing recovery
+  and retention controls; they are not deleted by transcription itself.
 - Cancelling processing discards the meeting's temporary files.
 - Nook attempts to clean up partial files after processing failures. Cleanup
   failures are surfaced rather than treated as success.

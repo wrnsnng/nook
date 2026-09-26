@@ -85,13 +85,15 @@ enum NoteContentSanitizer {
                 "no decisions",
                 "no action items",
                 "no key points",
+                "no open questions",
                 "not discussed",
                 "not specified",
             ]
             guard !value.isEmpty,
                   !placeholderPhrases.contains(normalized),
                   !normalized.hasPrefix("no decisions were"),
-                  !normalized.hasPrefix("no action items were")
+                  !normalized.hasPrefix("no action items were"),
+                  !normalized.hasPrefix("no open questions were")
             else {
                 return nil
             }
