@@ -18,7 +18,7 @@ Contributor builds require no release credentials and use the development
 bundle identity with automatic updates disabled.
 
 1. Use macOS 26 and stable Xcode 26.
-2. Install XcodeGen 2.45.4.
+2. Install XcodeGen 2.46.0.
 3. Fetch the speaker separation models once. They are downloaded at a pinned
    revision, checked against pinned SHA-256 checksums and bundled into the app,
    but never committed. The Nook target refuses to build without them, and

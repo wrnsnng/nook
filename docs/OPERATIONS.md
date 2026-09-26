@@ -41,7 +41,7 @@ Both contributor CI and distribution builds use:
 
 - macOS 26;
 - stable Xcode 26, never a beta or release candidate; and
-- XcodeGen 2.45.4.
+- XcodeGen 2.46.0.
 
 The generated Xcode project is committed. `project.yml` is authoritative; after
 changing it, run:
@@ -89,7 +89,7 @@ disabled-updater marker.
 maintainer. It has read-only repository permissions and no release secrets. It:
 
 1. selects stable Xcode 26;
-2. downloads XcodeGen 2.45.4 and checks the pinned SHA-256, then fetches and
+2. downloads XcodeGen 2.46.0 and checks the pinned SHA-256, then fetches and
    verifies the pinned speaker separation models;
 3. tests with `NOOK_OFFICIAL_BUILD=YES` and
    `PRODUCT_BUNDLE_IDENTIFIER=com.localfirst.nook`;

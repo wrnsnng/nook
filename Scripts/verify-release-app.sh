@@ -103,6 +103,10 @@ SPARKLE_VERSION=$(read_plist_value "$SPARKLE_INFO_PLIST" CFBundleShortVersionStr
   || fail "the bundled notices do not attribute the speaker diarization models."
 "$SCRIPT_DIR/fetch-diarization-models.sh" --check "$APP_PATH/Contents/Resources/SpeakerDiarizationModels" \
   || fail "the bundled speaker diarization models are missing or differ from the pinned files."
+[[ ! -e "$APP_PATH/Contents/Resources/FluidAudio_FluidAudio.bundle" ]] \
+  || fail "FluidAudio's unused text-to-speech lexicon is bundled."
+/usr/bin/strings "$APP_PATH/Contents/MacOS/Nook" | /usr/bin/grep -Fq "NemoTextProcessing engine not linked" \
+  || fail "FluidAudio's text normalizer is linked; the FluidAudio package must have no traits."
 SPARKLE_LICENSE_SHA256=$(
   /usr/bin/shasum -a 256 "$SPARKLE_LICENSE_PATH" | /usr/bin/awk '{print $1}'
 )

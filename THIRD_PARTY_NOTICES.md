@@ -35,19 +35,10 @@ following third-party works:
   Apache License 2.0.
 - **fastcluster**, hierarchical clustering routines. Licensed under the
   BSD 2-Clause license reproduced below.
-- **text-processing-rs** (`NemoTextProcessing`), a text-normalization engine
-  FluidAudio links by default. Nook never calls it. Apache License 2.0
-  (<https://github.com/FluidInference/text-processing-rs>). It includes
-  grammars derived from NVIDIA NeMo Text Processing (Copyright (c) NVIDIA
-  CORPORATION & AFFILIATES, Apache License 2.0), rustfst (Copyright (c)
-  Alexandre Caulier and the rustfst contributors, MIT OR Apache-2.0), flate2
-  (Copyright (c) Alex Crichton and the flate2 contributors, MIT OR
-  Apache-2.0), and further MIT or Apache-2.0 Rust crates listed in that
-  project's `THIRD-PARTY-LICENSES.md`.
-
-FluidAudio's Swift package also carries a small English pronunciation lexicon
-for its text-to-speech module (`FluidAudio_FluidAudio.bundle`). Swift Package
-Manager copies it into the application; Nook never loads it.
+Nook builds FluidAudio without its default `NemoTextProcessing` trait, so the
+text-processing-rs normalization engine is not linked, and the release build
+removes the package's text-to-speech lexicon bundle. Neither is distributed
+with Nook.
 
 ### fastcluster license
 

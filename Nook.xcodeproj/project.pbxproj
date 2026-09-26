@@ -978,8 +978,8 @@
 			projectRoot = "";
 			targets = (
 				8E7BD5965AE4DD3F52BB8C83 /* Nook */,
-				F2CA71676FE37A953FC1B309 /* NookSnapshot */,
 				A2BDB367E2CB3D493D1E5329 /* NookTests */,
+				F2CA71676FE37A953FC1B309 /* NookSnapshot */,
 			);
 		};
 /* End PBXProject section */
@@ -1646,6 +1646,8 @@
 				kind = exactVersion;
 				version = 0.17.4;
 			};
+			traits = (
+			);
 		};
 /* End XCRemoteSwiftPackageReference section */
 

@@ -51,7 +51,8 @@ git diff --exit-code -- Nook.xcodeproj   # must be committed together
 ```
 
 Generate with the exact XcodeGen version pinned in `.github/workflows/ci.yml`
-(`xcodegen --version` to check). Other versions order the project file
+(`xcodegen --version` to check; 2.46.0 or later is also required for the
+FluidAudio package's `traits: []`). Other versions order the project file
 differently, and CI's "Verify generated project" step fails on any difference,
 even when every file is present. If yours differs, download the pinned release
 and verify its checksum as the workflow does, rather than committing its

@@ -55,6 +55,13 @@ if [[ -e "$OUTPUT_APP" ]]; then
 fi
 /usr/bin/ditto "$SOURCE_APP" "$OUTPUT_APP"
 
+# FluidAudio's resource bundle holds only its text-to-speech lexicon, which
+# was harvested from espeak-ng output. Nook never runs text-to-speech and only
+# that code reads the bundle, so it is not shipped. Xcode copies package
+# resource bundles after every custom build phase, so this happens here,
+# before signing, rather than in project.yml.
+/bin/rm -rf "$OUTPUT_APP/Contents/Resources/FluidAudio_FluidAudio.bundle"
+
 # Privacy & Security grants are attached to an app's designated requirement.
 # Contributor builds default to com.localfirst.nook.dev. The release pipeline
 # opts into com.localfirst.nook so an official upgrade retains the designated

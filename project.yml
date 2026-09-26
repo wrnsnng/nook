@@ -27,6 +27,11 @@ packages:
   FluidAudio:
     url: https://github.com/FluidInference/FluidAudio
     exactVersion: "0.17.4"
+    # No traits: the default NemoTextProcessing trait links a 22 MB text
+    # normalizer that only FluidAudio's speech recognition and text-to-speech
+    # call. Nook uses its speaker separation alone and transcribes with
+    # Apple's Speech framework, which already writes numbers and dates.
+    traits: []
 targets:
   Nook:
     type: application
