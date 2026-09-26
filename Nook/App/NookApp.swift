@@ -93,7 +93,7 @@ struct NookApp: App {
             WelcomeView(appModel: appModel)
                 .background(NookWindowBridge(role: .welcome))
         }
-        .defaultSize(width: 680, height: 560)
+        .defaultSize(width: 700, height: 680)
         .windowResizability(.contentMinSize)
         .windowToolbarStyle(.unifiedCompact(showsTitle: false))
 

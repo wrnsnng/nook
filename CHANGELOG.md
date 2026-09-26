@@ -6,6 +6,16 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
+- The notch is redesigned as one island that grows out of the camera housing,
+  springs between states and folds back into it when a meeting is saved.
+  While recording it wraps the camera, a waveform on one side and the clock
+  on the other, and hangs nothing below the menu bar; hovering lowers the
+  controls. A light along its lower edge follows the voice, sweeps while notes
+  are written and flashes when they are saved. Reduce Motion replaces the
+  movement with cross-fades.
+- A new accent colour, lagoon teal, and a new app icon built around the notch.
+- Setup shows what each step is for on a small animated Mac, from a meeting
+  being noticed to its note being saved.
 - The Library, Settings and setup now use standard macOS controls and layout.
   Note view switching and actions live in the window toolbar, the sidebar uses
   system selection and collapsible sections, and each note reads as one

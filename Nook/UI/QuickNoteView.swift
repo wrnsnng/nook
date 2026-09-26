@@ -46,7 +46,7 @@ struct QuickNoteView: View {
         // One accent for the whole pad. Without this the system controls here
         // carry the user's system accent while Nook's own chrome carries the
         // brand colour, and the pad shows two different blues at once.
-        .tint(NookPalette.accent)
+        .tint(NookPalette.accentFill)
         .background { closeShortcut }
         // Escape leaves the pad the way every other exit does, by saving.
         .onExitCommand {

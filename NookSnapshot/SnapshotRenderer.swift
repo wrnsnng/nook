@@ -342,7 +342,7 @@ struct SnapshotRenderer {
                 .transaction { $0.disablesAnimations = true }
             )
         case _ where mode.hasPrefix("welcome"):
-            canvasSize = CGSize(width: 680, height: 560)
+            canvasSize = CGSize(width: 700, height: 680)
             let welcomeStep: WelcomeStep
             if mode.contains("permission") || mode.contains("screen") { welcomeStep = .screenRecording }
             else if mode.contains("ready") { welcomeStep = .ready }
@@ -1126,8 +1126,11 @@ struct SnapshotRenderer {
             if isNotchDemo, let demoGeometry = notchDemoGeometry {
                 NotchDemoScript.start(meeting: meeting, geometry: demoGeometry)
             }
+            let hold = ProcessInfo.processInfo.environment["NOOK_SNAPSHOT_HOLD"].flatMap(Double.init)
             RunLoop.current.run(
-                until: Date().addingTimeInterval(isNotchDemo ? NotchDemoScript.duration + 1 : 3.0)
+                until: Date().addingTimeInterval(
+                    hold ?? (isNotchDemo ? NotchDemoScript.duration + 1 : 3.0)
+                )
             )
             Foundation.exit(0)
         }

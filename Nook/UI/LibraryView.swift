@@ -508,7 +508,7 @@ struct LibraryView: View {
         // Like Notes and Mail: the selected note names itself in the
         // content, so a window title would only crowd the toolbar.
         .toolbar(removing: .title)
-        .tint(NookPalette.accent)
+        .tint(NookPalette.accentFill)
         .background {
             CommandPaletteWindowAnchor(presenter: commandPaletteSheet)
                 .frame(width: 0, height: 0)

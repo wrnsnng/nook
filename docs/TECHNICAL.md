@@ -335,9 +335,31 @@ It reads:
 - actual menu-bar height
 - backing scale for pixel alignment
 
+The window is a stage, not the shape. `NotchPanelMetrics.mode` names what the
+island shows (prompt, ears, shelf, workspace, processing, saved, failed,
+hidden) and `bodySize(for:)` sizes it. On a change the coordinator first grows
+the window to cover both the old and new island, lets SwiftUI spring the
+`NotchIslandShape` between them, and trims the window once
+`NookMotion.morphSettleSeconds` has passed. Nothing animates the window frame,
+so the shape and its content always move on one curve. `sizingOptions` is
+empty so SwiftUI never resizes the stage itself.
+
+Appearing grows the island out of the camera housing (`revealProgress` from 0
+with `NookMotion.morph`); going away folds it back with `NookMotion.tuck`
+while `isTucking` keeps the last content on screen. Compact recording wraps
+the housing (waveform left, clock right) and hangs nothing below the menu
+bar; hovering lowers a control shelf, and every shelf control is also a
+VoiceOver action on the ears. Only floating states keep a transparent shadow
+margin, because that margin still takes clicks.
+
 Normal resizes preserve the exact screen center. Hidden recording is a special
 case: an 86-point window is positioned at the physical camera housing's right
-edge. External displays center that same indicator.
+edge, reached by folding into the housing and reappearing beside it. External
+displays center that same indicator.
+
+Audio level, elapsed time and captions are read only by leaf views
+(`IslandWaveform`, `VoiceRim`, `NotchRecordingClock`, `NotchCaptionStream`).
+They smooth the 80 ms meter at up to 30 fps; the shell never observes it.
 
 ### `StatusMenuState`
 
@@ -545,8 +567,14 @@ Detached notes close when recording stops or leaves the recording phase.
 - Appearance choices: Auto, Light, Dark.
 - The camera-attached top panel is always edge-black because the physical bezel
   is its material, independent of app appearance.
+- Accent: lagoon teal. `NookPalette.accent` is the luminous value for text,
+  icons and light on dark surfaces; `NookPalette.accentFill` is the fill behind
+  white labels (system prominent buttons, switches) and matches
+  `AccentColor`. Both hold AA in their roles and are pinned by
+  `NookDesignContrastTests`.
 - The current app icon source is
-  `Nook/Resources/Brand/NookIconSource-Lagoon.png`.
+  `Nook/Resources/Brand/NookIconSource-Lagoon.png`, rendered with the app icon
+  set by `Scripts/brand/render-icon.swift`.
 - `AppDelegate` sets the packaged lagoon master explicitly to avoid stale
   Launch Services/Dock artwork after an update.
 

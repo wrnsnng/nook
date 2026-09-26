@@ -341,7 +341,7 @@ struct DraftRecoveryView: View {
                 }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
-                .tint(NookPalette.accent)
+                .tint(NookPalette.accentFill)
                 .disabled(actionsDisabled || canSave != true)
                 .help("Creates a separate note in the displayed destination. The original is unchanged.")
             }

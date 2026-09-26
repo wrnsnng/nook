@@ -46,6 +46,17 @@ struct NookDesignContrastTests {
         }
     }
 
+    /// System prominent buttons draw white labels on the accent fill, in
+    /// both appearances, so the fill has to carry them at AA.
+    @Test(arguments: [Appearance.light, .dark])
+    func systemProminentButtonsKeepWhiteLabelsReadableOnTheAccentFill(_ variant: Appearance) throws {
+        let appearance = try #require(NSAppearance(named: variant.name))
+        let fill = try resolve(NookPalette.accentFill, in: appearance)
+        let white = try resolve(.white, in: appearance)
+        let ratio = white.contrast(against: fill)
+        #expect(ratio >= 4.5, "\(variant.rawValue): \(ratio):1")
+    }
+
     @Test(arguments: [NookAppearancePreference.light, .dark])
     func anExplicitAppAppearanceResolvesButtonColorsInsideTheOppositeDrawingAppearance(
         _ choice: NookAppearancePreference

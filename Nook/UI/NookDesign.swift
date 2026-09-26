@@ -75,6 +75,15 @@ enum NookPalette {
         light: NSColor(red: 0.000, green: 0.427, blue: 0.388, alpha: 1),
         dark: NSColor(red: 0.290, green: 0.859, blue: 0.776, alpha: 1)
     )
+    /// The accent as a fill behind white text: system prominent buttons,
+    /// switches and selection. The luminous `accent` is right for text and
+    /// light on dark surfaces but carried white labels at under 2:1; this is
+    /// the brightest teal that keeps white text at 4.5:1. `AccentColor` in
+    /// the asset catalog matches it.
+    static let accentFill = adaptive(
+        light: NSColor(red: 0.000, green: 0.427, blue: 0.388, alpha: 1),
+        dark: NSColor(red: 0.043, green: 0.522, blue: 0.467, alpha: 1)
+    )
     /// The luminous end of the accent, for glows, meters and the notch.
     static let accentHighlight = adaptive(
         light: NSColor(red: 0.106, green: 0.639, blue: 0.573, alpha: 1),

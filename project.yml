@@ -10,7 +10,7 @@ settings:
     # colour Nook draws by hand. Without it a window can show two accents at
     # once: the user's system accent on checkboxes, insertion points and
     # bordered buttons, and NookPalette.accent everywhere else. The values in
-    # Assets.xcassets/AccentColor.colorset match NookPalette.accent.
+    # Assets.xcassets/AccentColor.colorset match NookPalette.accentFill.
     ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
     SWIFT_VERSION: "6.0"
     MACOSX_DEPLOYMENT_TARGET: "26.0"

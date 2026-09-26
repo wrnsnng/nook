@@ -22,6 +22,8 @@ struct SummaryRecipeControl: View {
             Text(recipe.title)
         }
         .menuStyle(.borderlessButton)
+        // Tinted text, so the luminous accent rather than the fill colour.
+        .tint(NookPalette.accent)
         .fixedSize()
         .disabled(!isEnabled)
         .help(recipe == .general
