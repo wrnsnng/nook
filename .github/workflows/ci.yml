@@ -66,6 +66,11 @@ jobs:
           xcodegen generate
           git diff --exit-code -- Nook.xcodeproj
 
+      # Build-time only. The Nook target refuses to build without these
+      # pinned, checksum-verified models, and the app never downloads them.
+      - name: Fetch pinned speaker diarization models
+        run: ./Scripts/fetch-diarization-models.sh
+
       - name: Test release tooling
         run: python3 -m unittest discover -s Scripts/Tests
 
@@ -95,3 +100,4 @@ jobs:
           info="$app/Contents/Info.plist"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info")" = 'com.localfirst.nook.dev'
           test "$(/usr/libexec/PlistBuddy -c 'Print :NookOfficialBuild' "$info")" = 'NO'
+          ./Scripts/fetch-diarization-models.sh --check "$app/Contents/Resources/SpeakerDiarizationModels"
