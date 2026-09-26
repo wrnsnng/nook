@@ -21,9 +21,10 @@ struct SnapshotRenderer {
         ].contains(mode)
         let isLiveFollowFixture = ["live-follow-light", "live-follow-dark"].contains(mode)
         let staticPanelModes: Set<String> = [
-            "panel-compact-idle", "panel-compact-flagged",
+            "panel-compact-idle", "panel-compact-flagged", "panel-compact-hover",
             "panel-hidden-recording", "panel-hidden-paused"
         ]
+        let isNotchDemo = mode == "notch-demo"
         let isAssistantFixture = mode.hasPrefix("quick-note-assistant-")
             || mode.hasPrefix("settings-assistant-")
         let isAssistantUnavailable = isAssistantFixture && mode.contains("unavailable")
@@ -313,6 +314,7 @@ struct SnapshotRenderer {
         )
         let canvasSize: CGSize
         let content: AnyView
+        var notchDemoGeometry: NotchPanelGeometry?
         var validateConflictFixture: (@MainActor () throws -> Void)?
         var validateFilingFixture: (@MainActor () throws -> Void)?
         var validateSummaryReviewFixture: (@MainActor () throws -> Void)?
@@ -880,8 +882,8 @@ struct SnapshotRenderer {
                     .environment(\.colorScheme, .dark)
                     .transaction { $0.disablesAnimations = true }
             )
-        case "notch", "external-panel",
-             "panel-compact-idle", "panel-compact-flagged",
+        case "notch", "external-panel", "notch-demo",
+             "panel-compact-idle", "panel-compact-flagged", "panel-compact-hover",
              "panel-hidden-recording", "panel-hidden-paused",
              "summary-light", "summary-dark",
              "notes-light", "notes-dark",
@@ -892,7 +894,12 @@ struct SnapshotRenderer {
              "failure-light", "failure-dark":
             canvasSize = CGSize(width: 980, height: 380)
             let geometry = NotchPanelGeometry()
-            geometry.topInset = mode == "notch" ? 32 : 28
+            // A notched MacBook: the island grows out of, and wraps around,
+            // a housing this size. `external-panel` keeps a plain top edge.
+            geometry.topInset = mode == "external-panel" ? 24 : 32
+            geometry.cameraHousingWidth = mode == "external-panel" ? 0 : 184
+            geometry.isHovering = mode == "panel-compact-hover"
+            notchDemoGeometry = geometry
             // The prompt shrinks after it has been on screen a while rather
             // than vanishing, so that second shape needs to be renderable too.
             geometry.detectionPromptIsCompact = mode.hasPrefix("detected-compact")
@@ -902,16 +909,16 @@ struct SnapshotRenderer {
             content = AnyView(
                 ZStack(alignment: .top) {
                     NotchPreviewBackground()
-                    NotchPanelView(rendersForSnapshot: true)
+                    NotchPanelView(rendersForSnapshot: !isNotchDemo)
                         .environmentObject(meeting)
                         .environmentObject(geometry)
-                    if mode == "notch" {
+                    if mode != "external-panel" {
                         SimulatedCameraHousing()
                     }
                 }
                 .frame(width: canvasSize.width, height: canvasSize.height)
                 .environment(\.colorScheme, panelColorScheme)
-                .transaction { $0.disablesAnimations = true }
+                .transaction { $0.disablesAnimations = !isNotchDemo }
             )
         default:
             canvasSize = mode == "library-compact"
@@ -939,11 +946,22 @@ struct SnapshotRenderer {
             )
         }
 
-        let notchModes: Set<String> = ["notch","external-panel","summary-light","summary-dark","notes-light","notes-dark","detected-light","detected-dark","detected-compact-light","detected-compact-dark","processing-light","processing-dark","completed-light","completed-dark","failure-light","failure-dark","live"]
+        let notchModes: Set<String> = ["notch","external-panel","notch-demo","summary-light","summary-dark","notes-light","notes-dark","detected-light","detected-dark","detected-compact-light","detected-compact-dark","processing-light","processing-dark","completed-light","completed-dark","failure-light","failure-dark","live"]
         if notchModes.contains(mode) || staticPanelModes.contains(mode) {
             meeting.showLiveCaptions = mode != "external-panel" && !staticPanelModes.contains(mode)
             switch mode {
-            case "panel-compact-idle", "panel-compact-flagged",
+            case "notch-demo":
+                meeting.showLiveCaptions = false
+                meeting.setPreviewState(
+                    phase: .detected(
+                        DetectedMeeting(appName: "Teams", windowTitle: "Design review")
+                    ),
+                    elapsed: 0,
+                    liveTranscript: .empty,
+                    audioLevel: 0
+                )
+                notchDemoGeometry?.revealProgress = 0
+            case "panel-compact-idle", "panel-compact-flagged", "panel-compact-hover",
                  "panel-hidden-recording", "panel-hidden-paused":
                 meeting.setPreviewState(
                     phase: .recording(
@@ -1096,9 +1114,21 @@ struct SnapshotRenderer {
             // process has no Screen Recording permission of its own. It
             // publishes the window number and holds the window still while
             // the calling shell captures it.
+            if let contentView = window.contentView, let screen = NSScreen.screens.first {
+                let rect = window.convertToScreen(contentView.frame)
+                print(
+                    "NOOK_SNAPSHOT_RECT \(Int(rect.minX)),\(Int(screen.frame.maxY - rect.maxY)),"
+                        + "\(Int(rect.width)),\(Int(rect.height))"
+                )
+            }
             print("NOOK_SNAPSHOT_WINDOW \(window.windowNumber)")
             fflush(stdout)
-            RunLoop.current.run(until: Date().addingTimeInterval(3.0))
+            if isNotchDemo, let demoGeometry = notchDemoGeometry {
+                NotchDemoScript.start(meeting: meeting, geometry: demoGeometry)
+            }
+            RunLoop.current.run(
+                until: Date().addingTimeInterval(isNotchDemo ? NotchDemoScript.duration + 1 : 3.0)
+            )
             Foundation.exit(0)
         }
         RunLoop.current.run(until: Date().addingTimeInterval(1.2))
@@ -1917,4 +1947,113 @@ struct SnapshotCalendarProvider: CalendarEventProviding {
 private final class SnapshotKeyWindow: NSWindow {
     override var isKeyWindow: Bool { true }
     override var isMainWindow: Bool { true }
+}
+
+/// A scripted meeting for recording the notch's motion: prompt, recording,
+/// the control shelf, a flagged moment, live captions, writing notes, saved,
+/// and folding away. Synthetic words only; nothing is captured.
+@MainActor
+private enum NotchDemoScript {
+    static let duration: TimeInterval = 25
+
+    private static let lines: [(TimeInterval, TranscriptSegment.Source, String)] = [
+        (0, .system, "Let's start with the onboarding numbers from last week."),
+        (1, .microphone, "Completion is up, mostly from the shorter permission step."),
+        (2, .system, "Great. Can we ship the new prompt to everyone on Friday?"),
+        (3, .microphone, "Yes, if the notch animation review goes well tomorrow."),
+    ]
+
+    static func start(meeting: MeetingCoordinator, geometry: NotchPanelGeometry) {
+        Task { @MainActor in
+            let started = Date()
+            func at(_ seconds: TimeInterval) async {
+                let wait = seconds - Date().timeIntervalSince(started)
+                if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+            }
+            var recordingStartedAt: Date?
+            var transcript = LiveTranscriptState()
+            let meter = Task { @MainActor in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .milliseconds(80))
+                    guard let recordingStartedAt else { continue }
+                    let time = Date().timeIntervalSince(recordingStartedAt)
+                    let syllables = abs(sin(time * 7.1)) * abs(sin(time * 2.3 + 0.7))
+                    let phrase = sin(time * 0.9) > -0.55 ? 1.0 : 0.15
+                    meeting.setPreviewSignals(
+                        audioLevel: min(1, 0.08 + syllables * 0.62 * phrase),
+                        elapsed: 11 * 60 + 52 + time,
+                        liveTranscript: transcript
+                    )
+                }
+            }
+
+            await at(0.3)
+            withAnimation(NookMotion.morph) { geometry.revealProgress = 1 }
+
+            await at(2.8)
+            meeting.setPreviewState(
+                phase: .recording(title: "Design review", startedAt: .now),
+                elapsed: 11 * 60 + 52,
+                liveTranscript: .empty,
+                audioLevel: 0.2
+            )
+            recordingStartedAt = Date()
+
+            await at(5.2)
+            withAnimation(NookMotion.morph) { geometry.isHovering = true }
+            await at(6.8)
+            meeting.flagMoment()
+            await at(8.8)
+            withAnimation(NookMotion.morph) { geometry.isHovering = false }
+
+            await at(10.0)
+            meeting.showLiveCaptions = true
+            for (index, line) in lines.enumerated() {
+                await at(11.0 + Double(index) * 1.3)
+                let words = line.2.split(separator: " ")
+                let half = words.prefix(words.count / 2).joined(separator: " ")
+                if line.1 == .microphone {
+                    transcript.microphonePartial = half
+                } else {
+                    transcript.meetingPartial = half
+                }
+                transcript.latestSource = line.1
+                transcript.revision += 1
+                try? await Task.sleep(for: .milliseconds(520))
+                transcript.meetingPartial = ""
+                transcript.microphonePartial = ""
+                transcript.segments.append(
+                    TranscriptSegment(
+                        startTime: TimeInterval(line.0 * 6),
+                        duration: 5,
+                        text: line.2,
+                        source: line.1
+                    )
+                )
+                transcript.revision += 1
+            }
+
+            await at(16.6)
+            meeting.showLiveCaptions = false
+            await at(17.8)
+            recordingStartedAt = nil
+            meter.cancel()
+            meeting.setPreviewState(
+                phase: .processing(.summarizing),
+                elapsed: 12 * 60 + 9,
+                liveTranscript: transcript,
+                audioLevel: 0
+            )
+            await at(20.8)
+            meeting.setPreviewState(
+                phase: .completed("Design review"),
+                elapsed: 12 * 60 + 9,
+                liveTranscript: .empty,
+                audioLevel: 0
+            )
+            await at(23.4)
+            geometry.isTucking = true
+            withAnimation(NookMotion.tuck) { geometry.revealProgress = 0 }
+        }
+    }
 }

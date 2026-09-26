@@ -2292,6 +2292,18 @@ final class MeetingCoordinator: ObservableObject {
 
     static let stalledTrackGap: TimeInterval = 300
 
+    /// Updates only the fast signals, for scripted previews that animate a
+    /// meeting in progress without re-publishing its phase on every tick.
+    func setPreviewSignals(
+        audioLevel: Double,
+        elapsed: TimeInterval,
+        liveTranscript: LiveTranscriptState? = nil
+    ) {
+        live.audioLevel = audioLevel
+        live.elapsed = elapsed
+        if let liveTranscript { live.liveTranscript = liveTranscript }
+    }
+
     func setPreviewState(
         phase: MeetingPhase,
         elapsed: TimeInterval,

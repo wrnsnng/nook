@@ -67,27 +67,30 @@ final class NookAppearanceController: ObservableObject {
 }
 
 enum NookPalette {
-    /// Nook's single brand accent: calm enough for long meetings, bright enough
-    /// to remain legible on both native window backgrounds and the top-edge glass.
+    /// Nook's accent: a lagoon teal. It glows on the black notch, stays calm
+    /// through a long meeting, and is distinct from system blue, the red of
+    /// recording and the orange microphone indicator. Light mode uses the
+    /// deepest value that still carries white text at 4.5:1 when pressed.
     static let accent = adaptive(
-        light: NSColor(red: 0.10, green: 0.34, blue: 0.72, alpha: 1),
-        dark: NSColor(red: 0.43, green: 0.68, blue: 1.00, alpha: 1)
+        light: NSColor(red: 0.000, green: 0.427, blue: 0.388, alpha: 1),
+        dark: NSColor(red: 0.290, green: 0.859, blue: 0.776, alpha: 1)
     )
+    /// The luminous end of the accent, for glows, meters and the notch.
     static let accentHighlight = adaptive(
-        light: NSColor(red: 0.32, green: 0.55, blue: 0.92, alpha: 1),
-        dark: NSColor(red: 0.64, green: 0.80, blue: 1.00, alpha: 1)
+        light: NSColor(red: 0.106, green: 0.639, blue: 0.573, alpha: 1),
+        dark: NSColor(red: 0.651, green: 0.949, blue: 0.894, alpha: 1)
     )
     /// The dark accent is deliberately light enough for text and icons. A
-    /// filled button needs dark ink on that same color; white was only 2.3:1.
+    /// filled button needs dark ink on that same color.
     static let prominentButtonForeground = adaptive(
         light: .white,
-        dark: NSColor(red: 0.04, green: 0.10, blue: 0.18, alpha: 1)
+        dark: NSColor(red: 0.012, green: 0.125, blue: 0.106, alpha: 1)
     )
-    /// A deliberately deeper selection color so white sidebar text retains
-    /// AA contrast in both active and inactive windows.
+    /// A deeper selection color so white text retains AA contrast in both
+    /// active and inactive windows.
     static let sidebarSelection = adaptive(
-        light: NSColor(red: 0.07, green: 0.25, blue: 0.54, alpha: 1),
-        dark: NSColor(red: 0.10, green: 0.29, blue: 0.58, alpha: 1)
+        light: NSColor(red: 0.000, green: 0.369, blue: 0.333, alpha: 1),
+        dark: NSColor(red: 0.043, green: 0.361, blue: 0.325, alpha: 1)
     )
 
     /// Speaker roles are intentionally variations of the same ink rather than
@@ -99,8 +102,8 @@ enum NookPalette {
     )
     static let voiceSystem = accent
     static let voiceMixed = adaptive(
-        light: NSColor(red: 0.14, green: 0.38, blue: 0.64, alpha: 1),
-        dark: NSColor(red: 0.53, green: 0.70, blue: 0.91, alpha: 1)
+        light: NSColor(red: 0.06, green: 0.40, blue: 0.44, alpha: 1),
+        dark: NSColor(red: 0.47, green: 0.80, blue: 0.80, alpha: 1)
     )
 
     /// Surfaces are the system's own, so Nook sits in the same material as
@@ -304,6 +307,19 @@ enum NookMotion {
     static func glide(over duration: Double) -> Animation {
         .timingCurve(0.16, 1, 0.30, 1, duration: duration)
     }
+
+    /// The notch island changing shape: a spring with a little life in it,
+    /// so a state change reads as the notch itself growing, not a window
+    /// being resized.
+    static let morph = Animation.spring(response: 0.46, dampingFraction: 0.78)
+
+    /// The island folding back into the camera housing. No overshoot: going
+    /// away should feel settled, not bouncy.
+    static let tuck = Animation.spring(response: 0.34, dampingFraction: 1)
+
+    /// How long `morph` takes to come to rest, for work that has to wait for
+    /// the shape, such as shrinking the window behind it.
+    static let morphSettleSeconds: Double = 0.62
 
     static func quickAnimation(reduceMotion: Bool) -> Animation? {
         reduceMotion ? nil : quick

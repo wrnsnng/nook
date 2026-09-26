@@ -10,6 +10,13 @@ final class NotchPanelGeometry: ObservableObject {
     @Published var cameraHousingWidth: CGFloat = 0
     /// Whether the consent prompt has shrunk to its Record affordance.
     @Published var detectionPromptIsCompact = false
+    /// Whether the pointer rests on the island. Only the compact recording
+    /// state answers it, by lowering its control shelf.
+    @Published var isHovering = false
+    /// True while the island folds back into the camera housing. The view
+    /// keeps showing what it showed last, so the content goes away with the
+    /// shape instead of switching to an empty state first.
+    @Published var isTucking = false
 }
 
 /// How the consent prompt behaves over time and around focus.
@@ -55,46 +62,142 @@ enum DetectionPromptPolicy {
     }
 }
 
+/// What the island is showing, which decides its shape.
+enum NotchIslandMode: Equatable, Sendable {
+    case idle
+    case detected(compact: Bool)
+    /// Waveform and clock either side of the camera; the control shelf
+    /// hangs below only while the pointer is on the island.
+    case recordingCompact(showsControls: Bool)
+    case recordingExpanded(MeetingPanelMode)
+    case hiddenRecording
+    case processing
+    case completed
+    case failed
+
+    /// Content identity. Hovering keeps the compact identity, so the ears
+    /// stay put while only the shelf comes and goes.
+    var contentIdentity: String {
+        switch self {
+        case .idle: "idle"
+        case .detected(let compact): compact ? "detected-compact" : "detected"
+        case .recordingCompact: "recording-compact"
+        case .recordingExpanded: "recording-expanded"
+        case .hiddenRecording: "hidden"
+        case .processing: "processing"
+        case .completed: "completed"
+        case .failed: "failed"
+        }
+    }
+
+    /// Cards float: they cast a shadow and need room for it. The ears are
+    /// part of the bezel and hang nothing below the menu bar.
+    var floatsAboveContent: Bool {
+        switch self {
+        case .recordingCompact(let showsControls): showsControls
+        case .hiddenRecording: false
+        default: true
+        }
+    }
+}
+
 enum NotchPanelMetrics {
+    /// The concave joins where the island meets the screen edge, like the
+    /// camera housing's own.
+    static let shoulder: CGFloat = 8
+    /// One side of the camera in the compact recording state.
+    static let earWidth: CGFloat = 76
+
+    static func mode(
+        for phase: MeetingPhase,
+        showsCaptions: Bool,
+        panelMode: MeetingPanelMode,
+        isHidden: Bool = false,
+        detectionPromptIsCompact: Bool = false,
+        isHovering: Bool = false
+    ) -> NotchIslandMode {
+        switch phase {
+        case .idle: return .idle
+        case .detected: return .detected(compact: detectionPromptIsCompact)
+        case .recording:
+            if isHidden { return .hiddenRecording }
+            return showsCaptions
+                ? .recordingExpanded(panelMode)
+                : .recordingCompact(showsControls: isHovering)
+        case .processing: return .processing
+        case .completed: return .completed
+        case .failed: return .failed
+        }
+    }
+
+    /// The island below the menu bar band, excluding its shoulders.
+    static func bodySize(
+        for mode: NotchIslandMode,
+        cameraHousingWidth: CGFloat = 0
+    ) -> CGSize {
+        let ears = max(cameraHousingWidth + 2 * earWidth, 176)
+        switch mode {
+        case .idle:
+            return CGSize(width: 320, height: 50)
+        case .detected(let compact):
+            return compact
+                ? CGSize(width: 236, height: 44)
+                : CGSize(width: 420, height: 60)
+        case .recordingCompact(let showsControls):
+            // At rest nothing hangs below the menu bar. The shelf is tall
+            // enough for 30pt controls, the app's own hit-target floor.
+            return showsControls
+                ? CGSize(width: max(ears, 292), height: 50)
+                : CGSize(width: ears, height: 0)
+        case .recordingExpanded(let panelMode):
+            return CGSize(width: 680, height: panelMode == .notes ? 212 : 190)
+        case .hiddenRecording:
+            return CGSize(width: 86, height: 0)
+        case .processing:
+            return CGSize(width: 460, height: 58)
+        case .completed:
+            return CGSize(width: 452, height: 58)
+        case .failed:
+            return CGSize(width: 560, height: 72)
+        }
+    }
+
     static func bodySize(
         for phase: MeetingPhase,
         showsCaptions: Bool,
         panelMode: MeetingPanelMode,
         isHidden: Bool = false,
-        detectionPromptIsCompact: Bool = false
+        detectionPromptIsCompact: Bool = false,
+        isHovering: Bool = false,
+        cameraHousingWidth: CGFloat = 0
     ) -> CGSize {
-        if phase.isRecording, isHidden {
-            return CGSize(width: 86, height: 0)
-        }
+        bodySize(
+            for: mode(
+                for: phase,
+                showsCaptions: showsCaptions,
+                panelMode: panelMode,
+                isHidden: isHidden,
+                detectionPromptIsCompact: detectionPromptIsCompact,
+                isHovering: isHovering
+            ),
+            cameraHousingWidth: cameraHousingWidth
+        )
+    }
 
-        switch phase {
-        case .idle:
-            return CGSize(width: 336, height: 54)
-        case .detected:
-            return detectionPromptIsCompact
-                ? CGSize(width: 176, height: 42)
-                : CGSize(width: 360, height: 48)
-        case .recording:
-            guard showsCaptions else {
-                // Tall enough for 30pt controls: the compact rail is minimal,
-                // not too small to press.
-                return CGSize(width: 316, height: 42)
-            }
-            switch panelMode {
-            case .transcript:
-                return CGSize(width: 680, height: 190)
-            case .summary:
-                return CGSize(width: 680, height: 190)
-            case .notes:
-                return CGSize(width: 680, height: 204)
-            }
-        case .processing:
-            return CGSize(width: 424, height: 72)
-        case .completed:
-            return CGSize(width: 440, height: 76)
-        case .failed:
-            return CGSize(width: 584, height: 76)
+    static func bottomRadius(for mode: NotchIslandMode) -> CGFloat {
+        switch mode {
+        case .recordingCompact(let showsControls): showsControls ? 22 : 12
+        case .recordingExpanded: 30
+        case .hiddenRecording: 8
+        case .detected(let compact): compact ? 20 : 24
+        default: 24
         }
+    }
+
+    /// Transparent room around a floating island for its shadow. Kept to the
+    /// states that float, because this band still takes clicks.
+    static func stageMargins(for mode: NotchIslandMode) -> (horizontal: CGFloat, bottom: CGFloat) {
+        mode.floatsAboveContent ? (18, 24) : (0, 0)
     }
 }
 
@@ -105,7 +208,12 @@ final class NotchPanelCoordinator {
     private let geometry = NotchPanelGeometry()
     private var cancellables: Set<AnyCancellable> = []
     private var hideTask: Task<Void, Never>?
+    /// The fold-and-reappear step when the island moves beside the camera.
+    /// Separate from `hideTask`, which phase changes cancel as a matter of
+    /// course.
+    private var choreographyTask: Task<Void, Never>?
     private var layoutGeneration = 0
+    private var lastLayoutMode: NotchIslandMode?
 
     init(meeting: MeetingCoordinator) {
         self.meeting = meeting
@@ -116,11 +224,15 @@ final class NotchPanelCoordinator {
             defer: false
         )
 
-        panel.contentViewController = NSHostingController(
+        let host = NSHostingController(
             rootView: NotchPanelView()
                 .environmentObject(meeting)
                 .environmentObject(geometry)
         )
+        // The window is a stage sized by `updateLayout`. SwiftUI must never
+        // resize it to fit the island, or the stage would chase the spring.
+        host.sizingOptions = []
+        panel.contentViewController = host
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
@@ -155,6 +267,7 @@ final class NotchPanelCoordinator {
 
     func show() {
         hideTask?.cancel()
+        geometry.isTucking = false
         let wasVisible = panel.isVisible
         if !wasVisible, shouldAnimate {
             geometry.revealProgress = 0
@@ -173,7 +286,9 @@ final class NotchPanelCoordinator {
         Task { @MainActor [weak self] in
             await Task.yield()
             guard let self, self.panel.isVisible else { return }
-            withAnimation(NookMotion.glide(over: 0.36)) {
+            // The island grows out of the camera housing rather than fading
+            // in over it.
+            withAnimation(NookMotion.morph) {
                 self.geometry.revealProgress = 1
             }
         }
@@ -183,19 +298,27 @@ final class NotchPanelCoordinator {
         hideTask?.cancel()
         guard panel.isVisible, shouldAnimate else {
             geometry.revealProgress = 1
+            geometry.isTucking = false
             panel.orderOut(nil)
             return
         }
+        hideTask = Task { [weak self] in
+            await self?.tuckAway()
+        }
+    }
 
-        withAnimation(.easeIn(duration: 0.16)) {
+    /// Folds the island back into the camera housing with whatever it was
+    /// showing, then takes the panel off screen.
+    private func tuckAway() async {
+        geometry.isTucking = true
+        withAnimation(NookMotion.tuck) {
             geometry.revealProgress = 0
         }
-        hideTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(180))
-            guard !Task.isCancelled, let self else { return }
-            self.panel.orderOut(nil)
-            self.geometry.revealProgress = 1
-        }
+        try? await Task.sleep(for: .milliseconds(380))
+        guard !Task.isCancelled else { return }
+        panel.orderOut(nil)
+        geometry.revealProgress = 1
+        geometry.isTucking = false
     }
 
     func showLaunchConfirmation() {
@@ -231,6 +354,17 @@ final class NotchPanelCoordinator {
         }
         .store(in: &cancellables)
 
+        // The shelf grows the window first and shrinks it after the shape
+        // has settled, like every other change of size.
+        geometry.$isHovering
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] isHovering in
+                guard let self, self.panel.isVisible, !self.geometry.isTucking else { return }
+                self.updateLayout(animated: true, isHovering: isHovering)
+            }
+            .store(in: &cancellables)
+
         NotificationCenter.default.publisher(
             for: NSApplication.didChangeScreenParametersNotification
         )
@@ -251,6 +385,21 @@ final class NotchPanelCoordinator {
         // Every phase change starts a fresh prompt or ends one, so a prompt
         // that collapsed never hands its size to the next.
         geometry.detectionPromptIsCompact = false
+        if case .idle = phase, panel.isVisible {
+            // Going away: keep the current frame and content and fold them
+            // into the notch together, rather than first reshaping into an
+            // idle card nobody asked to see.
+            hideTask?.cancel()
+            guard shouldAnimate else {
+                panel.orderOut(nil)
+                return
+            }
+            hideTask = Task { [weak self] in
+                await self?.tuckAway()
+            }
+            return
+        }
+        geometry.isTucking = false
         updateLayout(
             animated: panel.isVisible,
             phase: phase,
@@ -284,22 +433,6 @@ final class NotchPanelCoordinator {
             scheduleCompletionReset()
         }
 
-        if case .idle = phase, panel.isVisible {
-            hideTask?.cancel()
-            hideTask = Task { [weak self] in
-                try? await Task.sleep(for: .milliseconds(180))
-                guard !Task.isCancelled, let self else { return }
-                if self.shouldAnimate {
-                    withAnimation(.easeIn(duration: 0.16)) {
-                        self.geometry.revealProgress = 0
-                    }
-                    try? await Task.sleep(for: .milliseconds(180))
-                }
-                guard !Task.isCancelled else { return }
-                self.panel.orderOut(nil)
-                self.geometry.revealProgress = 1
-            }
-        }
     }
 
     private func updateLayout(
@@ -307,34 +440,41 @@ final class NotchPanelCoordinator {
         phase: MeetingPhase? = nil,
         showsCaptions: Bool? = nil,
         panelMode: MeetingPanelMode? = nil,
-        isHidden: Bool? = nil
+        isHidden: Bool? = nil,
+        isHovering: Bool? = nil
     ) {
         guard let screen = targetScreen else { return }
         updateGeometry(for: screen)
 
         let resolvedPhase = phase ?? meeting.phase
         let resolvedHidden = isHidden ?? meeting.topPanelHidden
-        let bodySize = NotchPanelMetrics.bodySize(
+        let mode = NotchPanelMetrics.mode(
             for: resolvedPhase,
             showsCaptions: showsCaptions ?? meeting.showLiveCaptions,
             panelMode: panelMode ?? meeting.panelMode,
             isHidden: resolvedHidden,
-            detectionPromptIsCompact: geometry.detectionPromptIsCompact
+            detectionPromptIsCompact: geometry.detectionPromptIsCompact,
+            isHovering: isHovering ?? geometry.isHovering
         )
+        let bodySize = NotchPanelMetrics.bodySize(
+            for: mode,
+            cameraHousingWidth: geometry.cameraHousingWidth
+        )
+        let margins = NotchPanelMetrics.stageMargins(for: mode)
         let scale = max(1, screen.backingScaleFactor)
-        let resolvedWidth = pixelAligned(
-            min(bodySize.width, geometry.maximumPanelWidth),
-            scale: scale
-        )
+        let islandWidth = min(bodySize.width, geometry.maximumPanelWidth)
+        let stageWidth = mode == .hiddenRecording
+            ? islandWidth
+            : islandWidth + 2 * (NotchPanelMetrics.shoulder + margins.horizontal)
         let size = NSSize(
-            width: resolvedWidth,
+            width: pixelAligned(stageWidth, scale: scale),
             height: pixelAligned(
-                bodySize.height + geometry.topInset,
+                bodySize.height + geometry.topInset + margins.bottom,
                 scale: scale
             )
         )
         #if DEBUG
-        if resolvedHidden, resolvedPhase.isRecording {
+        if mode == .hiddenRecording {
             NookDebugLog.write(
                 "[panel] hidden indicator: screen=\(screen.frame) "
                     + "safeTop=\(screen.safeAreaInsets.top) "
@@ -366,38 +506,54 @@ final class NotchPanelCoordinator {
         )
         layoutGeneration += 1
         let generation = layoutGeneration
+        let previousMode = lastLayoutMode
+        lastLayoutMode = mode
 
-        guard
-            animated,
-            shouldAnimate
-        else {
+        // The window is only a stage; SwiftUI animates the island inside it.
+        // Growing first gives the shape room to spring outward, and the
+        // window shrinks once the shape has settled, so no frame animation
+        // ever runs on a different curve from the shape.
+        guard animated, shouldAnimate, panel.isVisible else {
             panel.setFrame(frame, display: true)
-        #if DEBUG
-        if resolvedHidden, resolvedPhase.isRecording {
-            NookDebugLog.write("[panel] applied frame: \(panel.frame) visible=\(panel.isVisible)")
-        }
-        #endif
             return
         }
 
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.32
-            context.timingFunction = CAMediaTimingFunction(
-                controlPoints: 0.16,
-                1,
-                0.30,
-                1
-            )
-            panel.animator().setFrame(frame, display: true)
-        } completionHandler: { [weak self] in
-            Task { @MainActor in
-                guard let self, generation == self.layoutGeneration else {
-                    return
+        // Hiding moves the island off the camera's centre line, which no
+        // single frame can span. Fold into the housing, move, then peek out
+        // beside it; restoring runs the same steps the other way.
+        if mode == .hiddenRecording || previousMode == .hiddenRecording,
+           mode != previousMode {
+            choreographyTask?.cancel()
+            choreographyTask = Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.geometry.isTucking = true
+                withAnimation(NookMotion.tuck) {
+                    self.geometry.revealProgress = 0
                 }
-                // End every interrupted resize on the exact same screen-centre
-                // anchor, including half-point Retina coordinates.
+                try? await Task.sleep(for: .milliseconds(300))
+                guard !Task.isCancelled, generation == self.layoutGeneration else { return }
                 self.panel.setFrame(frame, display: true)
+                self.geometry.isTucking = false
+                withAnimation(NookMotion.morph) {
+                    self.geometry.revealProgress = 1
+                }
             }
+            return
+        }
+
+        let current = panel.frame
+        let stage = NSRect(
+            x: min(current.minX, frame.minX),
+            y: min(current.minY, frame.minY),
+            width: max(current.maxX, frame.maxX) - min(current.minX, frame.minX),
+            height: max(current.maxY, frame.maxY) - min(current.minY, frame.minY)
+        )
+        panel.setFrame(stage, display: true)
+        guard stage != frame else { return }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(NookMotion.morphSettleSeconds))
+            guard let self, generation == self.layoutGeneration else { return }
+            self.panel.setFrame(frame, display: true)
         }
     }
 
@@ -457,7 +613,7 @@ final class NotchPanelCoordinator {
             }
 
             if self.shouldAnimate {
-                withAnimation(NookMotion.glide(over: 0.28)) {
+                withAnimation(NookMotion.morph) {
                     self.geometry.detectionPromptIsCompact = true
                 }
             } else {
