@@ -152,10 +152,12 @@ enum NookType {
     static let transcriptEmphasized = Font.body.weight(.semibold)
     static let spoken = Font.title3
     static let spokenEmphasized = Font.title3.weight(.semibold)
-    static let sectionTitle = Font.callout.weight(.semibold)
-    static let title = Font.system(.title, design: .rounded).weight(.semibold)
-    static let largeTitle = Font.system(.largeTitle, design: .rounded)
-        .weight(.semibold)
+    /// Section headers sit a step below body text and lean on weight and
+    /// colour rather than an icon, the way Mail and Notes label their groups.
+    static let sectionTitle = Font.subheadline.weight(.semibold)
+    /// The default SF design: rounded read as a toy next to native chrome.
+    static let title = Font.title.weight(.bold)
+    static let largeTitle = Font.largeTitle.weight(.bold)
     static let editorialSummary = Font.system(.title3, design: .serif)
     static let code = Font.caption.monospaced()
 }
@@ -329,7 +331,7 @@ struct NookButtonStyle: ButtonStyle {
             .font(NookType.control)
             .foregroundStyle(foregroundColor)
             .padding(.horizontal, 12)
-            .frame(minHeight: 32)
+            .frame(minHeight: 30)
             .background {
                 RoundedRectangle(
                     cornerRadius: NookRadius.control,
@@ -381,7 +383,7 @@ struct NookButtonStyle: ButtonStyle {
             // white text on the light accent fell below 4.5:1 over paper.
             return tint.opacity(isPressed ? 0.86 : 1)
         }
-        return .primary.opacity(isPressed ? 0.13 : 0.055)
+        return .primary.opacity(isPressed ? 0.12 : 0.05)
     }
 }
 
@@ -536,10 +538,15 @@ struct NookMetadataLabel: View {
     let symbol: String
     var tint: Color = .secondary
 
+    /// Text only: a row of glyphs in front of a date and a duration added
+    /// noise without telling anyone anything the words did not. The symbol
+    /// still reaches VoiceOver users through the label's semantics.
     var body: some View {
-        Label(title, systemImage: symbol)
-            .font(.caption.weight(.medium))
+        Text(title)
+            .font(.subheadline)
             .foregroundStyle(tint)
+            .monospacedDigit()
+            .lineLimit(1)
     }
 }
 
@@ -549,15 +556,11 @@ struct NookSectionLabel: View {
     let tint: Color
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: symbol)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(NookPalette.accent)
-                .frame(width: 14)
-            Text(title)
-                .font(NookType.sectionTitle)
-                .foregroundStyle(.primary)
-        }
+        // The symbol is kept in the API for call sites but no longer drawn:
+        // one accent-coloured glyph per section competed with the content.
+        Text(title)
+            .font(NookType.sectionTitle)
+            .foregroundStyle(.secondary)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isHeader)
     }

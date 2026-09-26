@@ -429,7 +429,7 @@ struct MeetingDetailView: View {
     }
 
     private var detailMetadata: some View {
-        HStack(spacing: 15) {
+        HStack(spacing: 12) {
             if note.kind == .spoken {
                 NookMetadataLabel(
                     title: "Spoken note",
@@ -1000,9 +1000,13 @@ struct MeetingDetailView: View {
     private func summaryReviewButton(_ item: SummaryReviewItem?) -> some View {
         if note.kind == .meeting, !note.transcript.isEmpty, let item, item.isCurrent(in: note) {
             Button { beginSummaryReview(item) } label: {
-                Image(systemName: "text.quote").frame(width: 30, height: 30)
+                Image(systemName: "text.quote")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 26, height: 26)
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.borderless)
             .accessibilityLabel("Show supporting transcript for \(item.label): \(item.text)")
             .help("Review transcript support or correct this item")
             .disabled(markdownDraft.hasChanges || isRegenerating || isEditingTitle)
