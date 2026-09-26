@@ -6,6 +6,12 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
+- The meeting-audio check retains control of streams whose startup cleanup or
+  stop failed. Meeting capture and dictation wait for confirmed cleanup, and
+  denied permissions link to the corresponding macOS Settings pane.
+  A stream confirmed stopped by its callback cannot become stuck after a late
+  Stop error; other capture still waits for the stop operation to finish.
+
 ## 1.20.1
 
 [Release notes](Releases/Nook-1.20.1.md)

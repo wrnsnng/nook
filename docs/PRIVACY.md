@@ -133,6 +133,12 @@ Recording permissions, but it has no recording output, transcript, summary, or
 stored artifact. It stops when the user presses Stop, leaves Settings, starts a
 meeting, or starts dictation.
 
+Normal macOS recording indicators appear during this meter-only test. If macOS
+does not confirm that the stream stopped, Nook keeps a Stop control available
+and will not start a competing meeting or dictation capture until cleanup
+succeeds. Permission errors link to the matching macOS Settings pane; the test
+does not request Speech Recognition access.
+
 Pausing removes the recording output and stops forwarding audio to live
 transcription until the user resumes.
 

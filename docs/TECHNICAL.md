@@ -77,6 +77,28 @@ barrier, so a new check cannot start while ScreenCaptureKit is still winding
 down. Input permission failures are shown in Settings and no sample leaves
 the process.
 
+The lifecycle accepts an injectable start/stop session for synthetic testing;
+the native implementation still uses the same ScreenCaptureKit configuration.
+Failed cleanup retains the candidate stream for Stop/retry instead of losing
+its only handle. `prepareForOtherCapture` refuses meeting/dictation startup
+until every input-check start/stop operation has relinquished ownership.
+The candidate identity is recorded before awaiting native startup. A matching
+terminal delegate callback remains recorded through the startup/cleanup barrier:
+late startup success cannot publish a stopped stream, and a redundant cleanup
+failure cannot restore its ownership. An explicit Stop still waits for that
+barrier after an early failure. Direct cancellation of the returned startup task
+also leaves no permanent Starting state. Callbacks from older identities do not
+stop a newer session. A terminal callback during an explicit Stop is retained
+until that stop returns: it prevents a later stop error from restoring the dead
+stream, without releasing the competing-capture barrier early. That receipt is
+cleared before another stop and cannot authorize a later failed teardown.
+These are synthetic ordering guarantees, not a claim about
+physical permission prompts or audio-device behavior.
+Tests exercise cancellation before scheduling, delayed permission resolution,
+cancelled/failed startup, failed cleanup and overlapping stop requests without
+microphone, system audio, Speech or model access. These tests are not physical
+permission, real-meter, artifact-absence or keyboard/VoiceOver acceptance.
+
 ### `LiveTranscriptionService`
 
 Runs Apple's Speech recognizers on-device while capture is active. System audio

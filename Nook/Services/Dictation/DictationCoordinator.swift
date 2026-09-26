@@ -152,7 +152,7 @@ final class DictationCoordinator: ObservableObject {
     /// The input check shares the microphone and ScreenCaptureKit. Waiting for
     /// its teardown before opening dictation keeps the two capture paths
     /// mutually exclusive even when a shortcut starts during teardown.
-    private let prepareForAudioCapture: (@MainActor () async -> Void)?
+    private let prepareForAudioCapture: (@MainActor () async throws -> Void)?
     /// Set by `AppModel` once the store exists. Dictation works without it;
     /// only the no-text-field path needs it.
     weak var quickNote: QuickNoteController?
@@ -183,7 +183,7 @@ final class DictationCoordinator: ObservableObject {
         insertion: any DictationTextInserting = TextInsertionService(),
         registersShortcut: Bool = true,
         ceilings: DictationSessionCeilings = .standard,
-        prepareForAudioCapture: (@MainActor () async -> Void)? = nil
+        prepareForAudioCapture: (@MainActor () async throws -> Void)? = nil
     ) {
         let defaults = UserDefaults.standard
         self.ceilings = ceilings
@@ -432,7 +432,7 @@ final class DictationCoordinator: ObservableObject {
                 guard self.sessionID == session, self.phase == .preparing else {
                     return
                 }
-                await self.prepareForAudioCapture?()
+                try await self.prepareForAudioCapture?()
                 try Task.checkCancellation()
                 guard self.sessionID == session, self.phase == .preparing else {
                     return
