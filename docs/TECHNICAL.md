@@ -244,6 +244,48 @@ Performs a careful saved-audio pass when live speech recognition did not
 complete reliably. This is a recovery/refinement path rather than a cloud
 transcription service.
 
+### `SpeakerDiarizationService` / `SpeakerAttribution`
+
+The engine for on-device speaker separation (issue #28), in
+`Nook/Services/Speakers/`. It is not yet called by the meeting pipeline; the
+saved-note background session, the transcript model and Markdown will use it.
+
+- `SpeakerDiarizationService.diarize(audioURL:)` returns `[SpeakerTurn]`
+  (`start`, `end`, 0-based `speaker`, numbered by first appearance). It runs
+  FluidAudio's offline pipeline: pyannote Community-1 powerset segmentation
+  over 10 s windows stepped every 2 s, WeSpeaker embeddings, PLDA and VBx
+  clustering, with the speaker count found automatically and non-overlapping
+  output. It is a stateless `Sendable` struct; each call loads the models and
+  releases them on return.
+- `DiarizationAudio` reads the file with `AVAudioFile`, converts it with
+  `AVAudioConverter` (channels mixed down, 16 kHz mono Float32) in 64k-frame
+  chunks into a private temporary file, memory-maps it and unlinks it. Long
+  recordings are therefore never materialized as one array; the pipeline
+  copies one window at a time. Measured on an M4 Pro, 36 minutes of audio took
+  12 s and raised peak memory by about 450 MB, largely independent of length.
+- Errors are `SpeakerDiarizationError` (`modelsMissing`, `unreadableAudio`,
+  `failed`). Cancellation surfaces as `CancellationError`; it is checked while
+  converting and between analysis windows. Silence returns no turns.
+- Engine output is not trusted: turns with non-finite or inverted times are
+  dropped, the rest clamped to the audio, and speaker identifiers renumbered.
+- `SpeakerAttribution.assign(segments:turns:audio:)` maps each attributable
+  `TranscriptSegment` to the speaker with the greatest total time overlap.
+  Microphone passages are never attributed. `.mixed` passages are attributed
+  only when the turns came from the same mixed recording
+  (`.mixedRecording`); against the remote-only system track (`.systemTrack`)
+  a `.mixed` passage might be the user, so it stays unassigned. Passages with
+  no overlap stay unassigned; ties go to the speaker already talking when the
+  passage began, then the lower number.
+  `renumberedByFirstAppearance(_:in:)` renumbers so labels count up in reading
+  order.
+
+No network path is reachable. The models are loaded with
+`MLModel.load(contentsOf:)` from the bundle and passed to
+`OfflineDiarizerManager.initialize(models:)`, so the manager never calls
+`prepareModels()`, which is its only route to FluidAudio's `ModelHub`. The hub
+is also put in `offlineMode` once, before FluidAudio is first used, so any
+download path throws instead of fetching.
+
 ### `SummaryService`
 
 Uses Apple's on-device Foundation Models framework when available and falls
@@ -522,6 +564,25 @@ deliberately, since at that point it is the only copy of the conversation;
 this service is what lets Settings turn one into a note or delete it instead
 of it sitting on disk unnoticed.
 
+## Bundled speaker diarization models
+
+`Scripts/fetch-diarization-models.sh` downloads the five offline-pipeline
+artifacts (`Segmentation`, `FBank`, `Embedding` and `PldaRho` `.mlmodelc`
+folders plus `plda-parameters.json`, about 21 MB) from
+`FluidInference/speaker-diarization-coreml` at the revision FluidAudio 0.17.4
+pins, checks every file against a SHA-256 in the script, and moves them into
+the gitignored `ThirdParty/SpeakerDiarizationModels/`. It is idempotent: when
+the folder already verifies, it does nothing. `--check [directory]` verifies
+without any network access and also rejects unexpected extra files.
+
+`project.yml` adds that folder to the Nook target as a folder reference, so the
+generated project is identical whether or not the models have been fetched,
+and runs `fetch-diarization-models.sh --check` as a pre-build script. A build
+without the exact models fails with an error telling the developer to run the
+script, so no build can quietly ship without speaker separation.
+`Scripts/build-app.sh` and both CI workflows fetch before building, and
+`Scripts/verify-release-app.sh` and CI re-verify the copy inside the built app.
+
 ## Permissions
 
 Nook may require:
@@ -586,7 +647,12 @@ status-menu state, search, storage collisions, and update configuration, plus
 calendar context, prep briefs, weekly digests, multi-session append and
 merge, note-combining, action item due dates, quick capture task parsing,
 "ask your library" retrieval, recording recovery, dictation output guarding
-and settings, and interface copy rules.
+and settings, interface copy rules, and speaker attribution. The speaker
+separation engine is exercised end to end against a checked-in synthetic
+two-voice fixture (`NookTests/Fixtures`, made with macOS `say`), which requires
+the bundled models and fails, rather than skips, if they are absent.
+`Scripts/Tests` checks that the model check rejects missing, extra and altered
+files.
 
 Debug-only launch arguments provide deterministic states for visual and
 accessibility audits:
