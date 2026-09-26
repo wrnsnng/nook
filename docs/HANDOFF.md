@@ -6,16 +6,30 @@ contribute.
 
 ## Current release
 
-Nook 1.20.1 is the current public release, published September 3, 2026.
-The release listing was checked on September 4. Version 1.20.0 was published
-September 1. Publication does not prove that the hands-on acceptance items
-recorded below were completed.
+Nook 1.21.0 (build 38) is the current public release, published September 27,
+2026, and promoted to the Sparkle feed the same day. It was released at the
+maintainer's direction **without** the hands-on acceptance described under
+[Manual release acceptance](#manual-release-acceptance). Nothing in it has
+been checked by a person on a Mac: physical capture and permission prompts,
+VoiceOver, the notch island on a notched MacBook, speaker separation on real
+voices, Siri and Spotlight in the signed app. Treat those as open work, not
+as verified behaviour. Version 1.20.1 was published September 3.
 
-- Release builds use stable Xcode 26 and the macOS 26 SDK.
-- Distributed builds are Developer ID signed, notarized, stapled, and delivered
-  through a signed Sparkle feed.
+- Source: [c0e0542](https://github.com/wrnsnng/nook/commit/c0e05421cef0a4b9a14fc0dfc6f5b763ece4a704)
+  (release PR #31, which merged draft PRs #22, #23, #25, #26 and #27). The
+  artifact came from `stable-macos-build` run 36278466199 on Xcode 26 (SDK
+  26.5). Preparation ran from a later `main` that differed only in `Scripts/`
+  (#32 moved the FluidAudio lexicon removal into `sign-app.sh`; #33 fixed a
+  `pipefail` false failure in `verify-release-app.sh`).
+- Developer ID signed (team V2KY59725J, designated requirement and
+  entitlements identical to 1.20.1), notarized, stapled and Gatekeeper
+  accepted. The feed carries deltas from builds 33 to 37.
+- Every public asset (versioned zip, `Nook.zip` and its checksum, update
+  archive, five deltas and the appcast) was re-downloaded and compared with
+  the prepared bytes; archive and feed EdDSA signatures verified. The 1.20.1
+  appcast is retained privately by the maintainer for rollback.
 - The release is available from the
-  [binary releases repository](https://github.com/wrnsnng/nook-releases/releases/tag/v1.20.1).
+  [binary releases repository](https://github.com/wrnsnng/nook-releases/releases/tag/v1.21.0).
 - User-facing changes are mapped in [CHANGELOG.md](../CHANGELOG.md).
 
 ## Remaining issue implementation, September 4
