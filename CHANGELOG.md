@@ -6,6 +6,10 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
+## 1.22.0
+
+[Release notes](Releases/Nook-1.22.0.md)
+
 - The toolbar over a note now holds only that note's actions, Share and More,
   as in Notes. New Note and a menu with Ask Your Library and Create Weekly
   Digest sit over the list, since they act on the whole library. Open actions
