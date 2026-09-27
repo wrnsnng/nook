@@ -511,6 +511,12 @@ struct LibraryView: View {
     @State private var folderPendingRename: String?
     @State private var folderPendingDeletion: String?
     @State private var dropTargetFolder: String?
+    /// Where each root note probably belongs, rebuilt with the grouping
+    /// cache and whenever the folder list changes. Titles only, so cheap.
+    @State private var folderSuggestionIndex: FolderSuggestionIndex?
+    /// Bumped when a suggestion is dismissed or a note is placed by hand.
+    /// The memory lives in preferences, which SwiftUI does not observe.
+    @State private var folderPlacementRevision = 0
 
     init(
         initialNoteID: MeetingNote.ID? = nil,
@@ -559,6 +565,7 @@ struct LibraryView: View {
             libraryURL: store.storageURL
         )
         folderCounts = LibraryNoteGrouping.folderCounts(store.notes, libraryURL: store.storageURL)
+        rebuildFolderSuggestions()
         cachedFilteredNotes = filtered
         cachedGroupedNotes = LibraryNoteGrouping.group(filtered)
     }
@@ -657,6 +664,12 @@ struct LibraryView: View {
             refreshLibraryCacheIfNeeded()
             chooseInitialSelection()
             Task { await openActions.refresh(store: store) }
+            // Filed while no library window was open: still offer Undo, once,
+            // if it happened recently enough to be remembered.
+            if let filing = store.lastAutoFiling,
+               Date().timeIntervalSince(filing.filedAt) < 5 * 60 {
+                announceAutoFiling(filing)
+            }
         }
         .onDisappear {
             invalidateCommandPalette()
@@ -697,6 +710,13 @@ struct LibraryView: View {
         }
         .onChange(of: store.folders) { _, folders in
             scope.keepOnlyFolders(folders)
+            rebuildFolderSuggestions()
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .nookNoteAutoFiled)
+        ) { notification in
+            guard let filing = notification.object as? AutoFiledNote else { return }
+            announceAutoFiling(filing)
         }
         .onReceive(
             NotificationCenter.default.publisher(for: .nookOpenPrepBrief)
@@ -1349,6 +1369,7 @@ struct LibraryView: View {
             folders: store.folders,
             commonFolder: common,
             allInLibraryRoot: locations == [nil],
+            suggestedFolder: notes.count == 1 ? notes.first.flatMap(folderSuggestion(for:))?.folder : nil,
             onMove: { folder in moveNotes(notes.map(\.libraryIdentity), toFolder: folder) },
             onNewFolder: {
                 notesAwaitingNewFolder = notes.map(\.libraryIdentity)
@@ -1626,9 +1647,17 @@ struct LibraryView: View {
                 )
                     .id(selectedNote.libraryIdentity)
             } else {
+                let suggestion = folderSuggestion(for: selectedNote)
                 MeetingDetailView(
                     note: selectedNote,
-                    summarySession: store.summarySessions.session(for: selectedNote)
+                    summarySession: store.summarySessions.session(for: selectedNote),
+                    folderSuggestion: suggestion,
+                    onAcceptFolderSuggestion: { folder in
+                        moveNote(selectedNote, toFolder: folder)
+                    },
+                    onDismissFolderSuggestion: {
+                        dismissFolderSuggestion(for: selectedNote)
+                    }
                 )
                     .id(selectedNote.libraryIdentity)
             }
@@ -1994,10 +2023,11 @@ struct LibraryView: View {
 
     private func showCopyNotice(
         _ message: String,
-        severity: CopyConfirmationBanner.Severity = .success
+        severity: CopyConfirmationBanner.Severity = .success,
+        action: NoticeAction? = nil
     ) {
         let id = withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
-            copyNotice.show(message, severity: severity)
+            copyNotice.show(message, severity: severity, action: action)
         }
         guard let dwell = copyNotice.current?.expirationDelay else { return }
         Task {
@@ -2007,6 +2037,73 @@ struct LibraryView: View {
                 copyNotice.expire(id: id)
             }
         }
+    }
+
+    // MARK: - Folder suggestions
+
+    private func rebuildFolderSuggestions() {
+        folderSuggestionIndex = store.folders.isEmpty
+            ? nil
+            : FolderSuggestionIndex(
+                notes: store.notes, folders: store.folders, libraryURL: store.storageURL
+            )
+    }
+
+    /// The one folder worth suggesting for a note at the library's root.
+    /// Quiet while a write-up is still running (the move would be refused),
+    /// and for notes the person dismissed the hint for or placed themselves.
+    private func folderSuggestion(for note: MeetingNote) -> FolderSuggestion? {
+        _ = folderPlacementRevision
+        guard let index = folderSuggestionIndex,
+              !store.duplicateNoteIDs.contains(note.id) else { return nil }
+        return index.offeredSuggestion(
+            for: note,
+            isInFolder: store.folderName(of: note) != nil,
+            isBusy: store.summarySessions.isRunning(for: note.libraryIdentity),
+            placements: store.folderPlacements
+        )
+    }
+
+    private func dismissFolderSuggestion(for note: MeetingNote) {
+        store.folderPlacements.dismissSuggestion(for: note.id)
+        folderPlacementRevision &+= 1
+    }
+
+    /// A move the person chose. Nook never files or re-files such a note
+    /// on its own, and stops suggesting for it.
+    private func markPlacedByHand(_ ids: [UUID]) {
+        guard !ids.isEmpty else { return }
+        store.folderPlacements.markUserPlaced(ids)
+        folderPlacementRevision &+= 1
+    }
+
+    private func announceAutoFiling(_ filing: AutoFiledNote) {
+        guard store.lastAutoFiling == filing else { return }
+        store.lastAutoFiling = nil
+        showCopyNotice(
+            filing.notice,
+            action: NoticeAction(
+                title: "Undo",
+                accessibilityLabel: "Undo, move \(filing.title) back to Library"
+            ) {
+                undoAutoFiling(filing)
+            }
+        )
+    }
+
+    /// Moves an automatically filed note back through the ordinary move, so
+    /// open editors are settled first, and remembers the choice: a note moved
+    /// back out is never filed again.
+    private func undoAutoFiling(_ filing: AutoFiledNote) {
+        guard let note = store.uniqueNote(id: filing.noteID) else {
+            showCopyNotice(MarkdownStoreError.fileChangedElsewhere.localizedDescription, severity: .failure)
+            return
+        }
+        guard store.folderName(of: note) != nil else {
+            markPlacedByHand([note.id])
+            return
+        }
+        moveNote(note, toFolder: nil)
     }
 
     // MARK: - Folders
@@ -2082,6 +2179,7 @@ struct LibraryView: View {
             }
             if store.folderName(of: current) == folder { return }
             let moved = try store.move(current, toFolder: folder)
+            markPlacedByHand([moved.id])
             selection = selection?.applyingMoves(
                 [note.libraryIdentity: moved.libraryIdentity]
             )
@@ -2118,6 +2216,7 @@ struct LibraryView: View {
             return
         }
         let outcome = LibraryBulkNoteAction.move(identities, toFolder: folder, store: store)
+        markPlacedByHand(outcome.moved.values.map(\.noteID))
         selection = selection?.applyingMoves(outcome.moved)
         let notice = LibraryBulkNoteAction.moveNotice(outcome, toFolder: folder)
         showCopyNotice(notice.message, severity: notice.isFailure ? .failure : .success)
@@ -2540,7 +2639,7 @@ private struct LibraryRecoverySection: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(NookPalette.accent)
                     .frame(minHeight: 28)
                     .contentShape(Rectangle())
@@ -2553,7 +2652,7 @@ private struct LibraryRecoverySection: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(NookPalette.accent)
                     .frame(minHeight: 28)
                     .contentShape(Rectangle())
@@ -2585,16 +2684,12 @@ private struct LibraryRecoverySection: View {
                     .accessibilityElement(children: .combine)
                 }
             } header: {
-                HStack(spacing: NookSpacing.xSmall) {
-                    Label(
-                        "Recordings need attention",
-                        systemImage: "waveform.badge.exclamationmark"
-                    )
-                    Spacer(minLength: NookSpacing.small)
-                    Text(recovery.totalSizeLabel)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
+                // The total size moved to the footer and the spoken value:
+                // each row already names its own size.
+                Label(
+                    "Recordings need attention",
+                    systemImage: "waveform.badge.exclamationmark"
+                )
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Recordings need attention")
                 .accessibilityValue(recoverySummary)
@@ -2625,62 +2720,83 @@ private struct LibraryRecoverySection: View {
         }
     }
 
+    /// Laid out like a note row: when, then how much. Recover is the one
+    /// action worth a button; Show in Finder and Delete live in the row's
+    /// context menu and its ellipsis menu, where three bordered buttons
+    /// used to crowd a 300 point sidebar. Delete still asks first.
     private func recoveryRow(for orphan: OrphanedRecording) -> some View {
-        VStack(alignment: .leading, spacing: NookSpacing.xSmall) {
-            HStack(alignment: .firstTextBaseline, spacing: NookSpacing.small) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(orphan.dateLabel)
-                        .font(.callout)
-                    HStack(spacing: NookSpacing.xSmall) {
-                        Text(orphan.sizeLabel)
-                        if orphan.isAudioOnly {
-                            Text("·")
-                            Text("Audio only")
-                        }
-                    }
-                    .font(.caption2)
+        HStack(alignment: .center, spacing: NookSpacing.small) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(orphan.rowTitle())
+                    .font(.body.weight(.medium))
+                    .lineLimit(1)
+                Text(orphan.rowDetail)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
-                }
-
-                Spacer(minLength: NookSpacing.xSmall)
+                    .monospacedDigit()
+                    .lineLimit(1)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
+            .help(orphan.dateLabel)
 
-            HStack(spacing: NookSpacing.small) {
-                Button("Recover") {
-                    recovery.recover(
-                        orphan,
-                        localeIdentifier: localeIdentifier
-                    )
-                }
-                .controlSize(.small)
-                .disabled(recovery.isWorking)
-                .help("Recover this recording as a note.")
-                .accessibilityLabel(
-                    "Recover recording from \(orphan.dateLabel) as a note"
-                )
-
-                Button("Reveal") {
-                    recovery.reveal(orphan)
-                }
-                .controlSize(.small)
-                .help("Reveal this recording in Finder.")
-                .accessibilityLabel(
-                    "Reveal recording from \(orphan.dateLabel) in Finder"
-                )
-
-                Button("Delete", role: .destructive) {
-                    pendingDeletion = orphan
-                }
-                .controlSize(.small)
-                .disabled(recovery.isWorking)
-                .help("Move this recording to the Trash.")
-                .accessibilityLabel(
-                    "Move recording from \(orphan.dateLabel) to the Trash"
-                )
+            Button("Recover") {
+                recover(orphan)
             }
+            .controlSize(.small)
+            .fixedSize()
+            .disabled(recovery.isWorking)
+            .help("Recover this recording as a note.")
+            .accessibilityLabel(
+                "Recover recording from \(orphan.dateLabel) as a note"
+            )
+
+            Menu {
+                secondaryActions(for: orphan)
+            } label: {
+                Image(systemName: "ellipsis")
+            }
+            .menuStyle(.button)
+            .buttonStyle(.borderless)
+            .menuIndicator(.hidden)
+            .controlSize(.small)
+            .fixedSize()
+            .help("More actions for this recording")
+            .accessibilityLabel("More actions for recording from \(orphan.dateLabel)")
         }
-        .padding(.vertical, NookSpacing.xSmall)
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button("Recover as Note") { recover(orphan) }
+                .disabled(recovery.isWorking)
+            secondaryActions(for: orphan)
+        }
         .accessibilityElement(children: .contain)
+        .accessibilityAction(named: "Show in Finder") {
+            recovery.reveal(orphan)
+        }
+        .accessibilityAction(named: "Move to Trash") {
+            guard !recovery.isWorking else { return }
+            pendingDeletion = orphan
+        }
+    }
+
+    private func recover(_ orphan: OrphanedRecording) {
+        recovery.recover(orphan, localeIdentifier: localeIdentifier)
+    }
+
+    @ViewBuilder
+    private func secondaryActions(for orphan: OrphanedRecording) -> some View {
+        Button("Show in Finder") {
+            recovery.reveal(orphan)
+        }
+        .accessibilityLabel("Show recording from \(orphan.dateLabel) in Finder")
+        Divider()
+        Button("Move to Trash…", role: .destructive) {
+            pendingDeletion = orphan
+        }
+        .disabled(recovery.isWorking)
+        .accessibilityLabel("Move recording from \(orphan.dateLabel) to the Trash")
     }
 
     private func cleanupFailureRow(
@@ -2692,26 +2808,28 @@ private struct LibraryRecoverySection: View {
                     .foregroundStyle(NookPalette.warning)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Saved note: \(failure.noteTitle)")
-                        .font(.callout)
+                        .font(.body.weight(.medium))
+                        .lineLimit(2)
                     Text(
                         "\(failure.dateLabel) · \(failure.sizeLabel) still in Nook"
                     )
-                    .font(.caption2)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                     Text("Some files could not be removed after recovery.")
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: NookSpacing.xSmall)
             }
 
-            Button("Reveal Files") {
+            Button("Show in Finder") {
                 recovery.reveal(failure)
             }
             .controlSize(.small)
             .help("Reveal the files that could not be removed in Finder.")
             .accessibilityLabel(
-                "Reveal files left after recovering \(failure.noteTitle) in Finder"
+                "Show files left after recovering \(failure.noteTitle) in Finder"
             )
         }
         .padding(.vertical, NookSpacing.xSmall)
@@ -2762,10 +2880,10 @@ private struct LibraryRecoverySection: View {
     private var recoveryFooter: String {
         var text = recoveryContext
         if !recovery.orphans.isEmpty {
-            text += " Recover a recording as a note, reveal its files, or move it to the Trash."
+            text += " Recover a recording as a note, or use its menu to show it in Finder or move it to the Trash. \(recovery.totalSizeLabel) in total."
         }
         if !recovery.cleanupFailures.isEmpty {
-            text += " Reveal the remaining files to inspect them in Finder."
+            text += " Show the remaining files in Finder to inspect them."
         }
         return text
     }

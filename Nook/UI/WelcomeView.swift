@@ -105,15 +105,18 @@ struct WelcomeView: View {
                 WelcomeStage(scene: step.stageScene)
                     .padding(.top, 16)
 
-                // Centred between the stage and the footer, so a short step
-                // sits in the middle of its space instead of under a void.
-                ZStack {
+                // Anchored under the stage, as Setup Assistant does: every
+                // step's title starts on the same line, so Continue changes
+                // the words and not where the eye has to look. Centring each
+                // step in its space moved the title on every step.
+                ZStack(alignment: .top) {
                     stepContent
                         .id(step)
                         .transition(stepTransition)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .padding(.top, 34)
+                .padding(.bottom, 12)
 
                 setupFooter
             }
@@ -679,8 +682,10 @@ private enum WelcomeScene: Equatable {
     /// for its checklist. The stage morphs between heights as steps change.
     var stageHeight: CGFloat {
         switch self {
+        // The opening scene is its own moment. Every later step shares one
+        // height so their titles start on the same line; a shorter Ready
+        // stage moved the last title up just as the steps settled.
         case .story: 300
-        case .ready: 176
         default: 214
         }
     }

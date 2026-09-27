@@ -17,6 +17,12 @@ final class MarkdownStore: ObservableObject {
     /// In-place edits to the generated sections, for the same reason: the
     /// words must outlive the detail pane they were typed in.
     let summaryEdits = SummaryEditsController()
+    /// Dismissed folder suggestions and notes the person placed themselves.
+    /// App preferences, never the Markdown. See `FolderPlacementMemory`.
+    var folderPlacements = FolderPlacementMemory()
+    /// The last note Nook filed on its own, kept so a library window that
+    /// opens afterwards can still offer Undo once.
+    var lastAutoFiling: AutoFiledNote?
     typealias LoadPayload = (
         notes: [MeetingNote],
         issues: [MarkdownLoadIssue]

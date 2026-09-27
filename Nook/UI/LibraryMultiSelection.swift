@@ -424,10 +424,24 @@ struct LibraryMoveToMenuItems: View {
     let folders: [String]
     let commonFolder: String?
     let allInLibraryRoot: Bool
+    /// Nook's suggestion for a single note, offered first under its own
+    /// heading, the way Finder lists recent destinations before the rest.
+    var suggestedFolder: String? = nil
     let onMove: (String?) -> Void
     let onNewFolder: () -> Void
 
     var body: some View {
+        if let suggestedFolder, folders.contains(suggestedFolder), commonFolder != suggestedFolder {
+            Section("Suggested") {
+                Button {
+                    onMove(suggestedFolder)
+                } label: {
+                    Label(suggestedFolder, systemImage: "folder")
+                }
+                .accessibilityLabel("\(suggestedFolder), suggested folder")
+            }
+            Divider()
+        }
         Button {
             onMove(nil)
         } label: {

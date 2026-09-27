@@ -330,6 +330,36 @@ struct LibraryInterfaceTests {
         )
     }
 
+    @Test
+    func prepMetadataCarriesThePurposeAndHistoryWithoutALabelAboveTheTitle() {
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        let sitting = MeetingNote(
+            title: "Research synthesis",
+            startedAt: start.addingTimeInterval(-3 * 24 * 60 * 60),
+            endedAt: start.addingTimeInterval(-3 * 24 * 60 * 60 + 39 * 60),
+            sourceApp: "Zoom",
+            summary: "Synthetic."
+        )
+        let brief = PrepBrief(
+            seriesKey: "research synthesis", eventTitle: "Research synthesis",
+            startDate: start, sittings: [sitting], omittedNoteCount: 0
+        )
+        let parts = PrepBriefCopy.metadata(for: brief)
+        #expect(parts.first?.hasPrefix("Starts ") == true)
+        #expect(parts.contains("Before this meeting"))
+        #expect(parts.contains("Met once before, 39m total"))
+        #expect(parts.last?.hasPrefix("Last met ") == true)
+
+        let unreviewed = PrepBrief(
+            seriesKey: "research synthesis", eventTitle: "Research synthesis",
+            startDate: start, sittings: [], omittedNoteCount: 2
+        )
+        #expect(
+            PrepBriefCopy.metadata(for: unreviewed).last
+                == "Earlier notes need review before they can be included"
+        )
+    }
+
     // MARK: - Sidebar grouping
 
     private func timedNote(_ title: String, startedAt: Date) -> MeetingNote {
