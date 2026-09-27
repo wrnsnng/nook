@@ -270,7 +270,7 @@ final class MeetingCoordinator: ObservableObject {
     }
     /// Kept independently of the capture format. A copied UUID or changed
     /// notes folder cannot take ownership while an audio/model await runs.
-    private var activeAttachmentIdentity: LibraryNoteIdentity?
+    private(set) var activeAttachmentIdentity: LibraryNoteIdentity?
     private var liveNotesSaveTask: Task<Void, Never>?
     private var elapsedTask: Task<Void, Never>?
     private var meterTask: Task<Void, Never>?
@@ -395,7 +395,7 @@ final class MeetingCoordinator: ObservableObject {
         libraryURL: URL
     ) -> MeetingNote? {
         guard let file = expected.fileURL,
-              file.deletingLastPathComponent().standardizedFileURL == libraryURL.standardizedFileURL,
+              LibraryFolders.contains(file, in: libraryURL),
               LibraryNoteResolution.resolve(expected.noteID, in: notes) == .unique(expected),
               let target = notes.first(where: { $0.libraryIdentity == expected }),
               target.kind != .digest else { return nil }

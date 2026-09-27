@@ -14,6 +14,10 @@ extension Notification.Name {
     static let nookOpenPrepBrief = Notification.Name(
         "com.localfirst.nook.open-prep-brief"
     )
+    /// File > New Folder: the library window should ask for a folder name.
+    static let nookNewFolder = Notification.Name(
+        "com.localfirst.nook.new-folder"
+    )
 }
 
 enum NookWindowRole: String, Hashable {
@@ -120,6 +124,10 @@ final class AppModel: ObservableObject {
             personalNotesDraft.libraryWillChange()
             quickNote.libraryWillChange()
             draftJournal.flushSynchronously()
+        }
+        store.isNoteBusy = { identity in
+            quickNote.isWriting(to: identity)
+                || meeting.activeAttachmentIdentity == identity
         }
         store.onNoteDeleted = { note in
             markdownDraft.noteWasDeleted(note)
@@ -378,6 +386,16 @@ final class AppModel: ObservableObject {
                 name: .nookOpenPrepBrief,
                 object: nil
             )
+        }
+    }
+
+    /// Opens the library and asks it for a new folder's name, with the same
+    /// delay as a targeted note so a window that is still opening receives it.
+    func requestNewFolder() {
+        openLibrary()
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(140))
+            NotificationCenter.default.post(name: .nookNewFolder, object: nil)
         }
     }
 

@@ -14,6 +14,14 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
   calendar at a moment that was easy to miss by a few seconds, and when it did
   the notch and notification for that meeting never came. It now looks as a
   meeting comes within ten minutes, so the heads-up appears in good time.
+- Group notes into folders. A Folders section in the library sidebar lists
+  them, and choosing one shows only its notes. Each folder is a real folder in
+  your notes folder on disk, so creating, renaming or deleting one in Nook does
+  the same in Finder, and folders made in Finder appear in Nook. Move a note
+  with Move To in its menu or by dragging it onto a folder, and its Markdown
+  file moves too. File, New Folder (Shift-Command-N) makes one, and a new note
+  made while a folder is selected goes into it. Deleting a folder moves its
+  notes back to the library and never deletes them.
 - Type is calmer and more consistent. Nook uses the system text styles
   throughout, with their own spacing, so nothing is squeezed tighter than
   macOS sets it. Bold is kept for page titles, semibold for headings, and

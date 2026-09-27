@@ -26,7 +26,7 @@ final class SummaryRegenerationSession: ObservableObject {
 
         func note(matching identity: LibraryNoteIdentity) -> MeetingNote? {
             guard let file = identity.fileURL,
-                  file.deletingLastPathComponent().standardizedFileURL == directoryURL.standardizedFileURL else {
+                  LibraryFolders.contains(file, in: directoryURL) else {
                 return nil
             }
             let matches = notes.filter { $0.id == identity.noteID }

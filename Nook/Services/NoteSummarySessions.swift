@@ -45,6 +45,12 @@ final class NoteSummarySessions {
         })
     }
 
+    /// A running write-up is committed to the file it started from. Moving
+    /// that file would cancel it, so a move asks first.
+    func isRunning(for identity: LibraryNoteIdentity) -> Bool {
+        sessions[identity]?.isRunning == true
+    }
+
     func reconcile(notes: [MeetingNote], duplicateIDs: Set<UUID>) {
         let owned = Set(notes.filter { !duplicateIDs.contains($0.id) }.map(\.libraryIdentity))
         for identity in Array(sessions.keys) where !owned.contains(identity) {

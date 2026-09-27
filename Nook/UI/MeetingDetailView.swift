@@ -1102,7 +1102,7 @@ struct MeetingDetailView: View {
     }
 
     private var keptAudioURL: URL? {
-        AudioPlaybackController.audioURL(for: note)
+        AudioPlaybackController.audioURL(for: note, libraryURL: store.storageURL)
     }
 
     private var playingSegmentID: UUID? {
@@ -1546,8 +1546,8 @@ struct MeetingDetailView: View {
         switch outcome {
         case .saved(let saved):
             guard saved.libraryIdentity == note.libraryIdentity,
-                  saved.fileURL?.deletingLastPathComponent().standardizedFileURL
-                    == store.storageURL.standardizedFileURL else { return }
+                  let file = saved.fileURL,
+                  LibraryFolders.contains(file, in: store.storageURL) else { return }
             if markdownDraft.libraryIdentity == saved.libraryIdentity {
                 markdownDraft.refresh(for: saved, store: store)
             }
@@ -1743,8 +1743,7 @@ struct MeetingDetailView: View {
             ?? store.uniqueNote(id: note.id)?.fileURL
         else { return false }
         let standardized = fileURL.standardizedFileURL
-        let hasManagedFile = standardized.deletingLastPathComponent()
-            == store.storageURL.standardizedFileURL
+        let hasManagedFile = LibraryFolders.contains(standardized, in: store.storageURL)
             && FileManager.default.fileExists(atPath: standardized.path)
         return DetailRenamePolicy.allowsFileRename(
             hasMarkdownChanges: markdownDraft.hasChanges,

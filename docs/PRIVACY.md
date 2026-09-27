@@ -382,7 +382,9 @@ every entry it added and adds no more until the switch is turned back on.
 ## Files and retention
 
 The default notes folder is `~/Documents/Nook`. A user can select another folder
-in Settings. Each completed note is a plaintext Markdown file containing
+in Settings. Folders created in the library are ordinary folders inside it,
+and moving a note between them moves its file; nothing about folders is stored
+anywhere else. Each completed note is a plaintext Markdown file containing
 timestamps, source application, title, summary, key points, decisions, action
 items, open questions, personal notes, and transcript.
 
@@ -429,7 +431,7 @@ notes folder, its `.recordings` folder, the active installation's draft-recovery
 folder, the shared Ask cache file, the active installation's cache folder and
 event log, and the legacy developer log if present. A separate row counts only
 the known `.nook-write-<UUID>.tmp` and `.nook-recovery-<UUID>.tmp` interrupted-save
-files in the current notes folder. It can reveal up to five of those hidden
+files in the current notes folder and its folders. It can reveal up to five of those hidden
 files in Finder for inspection. File contents are never opened by the inventory.
 Missing folders are not created, symbolic links are not followed, and nothing
 is deleted. Counts are logical file sizes, not a promise of reclaimable disk

@@ -477,7 +477,11 @@ struct EditorDraftOwner: Equatable {
     func validate(note: MeetingNote, store: MarkdownStore) throws {
         guard matches(note), currentNote(in: store) != nil,
               let filePath,
-              Self.canonicalPath(URL(fileURLWithPath: filePath).deletingLastPathComponent()) == libraryPath
+              LibraryFolders.contains(
+                  URL(fileURLWithPath: filePath),
+                  in: URL(fileURLWithPath: libraryPath),
+                  resolvingSymlinks: true
+              )
         else { throw EditorDraftOwnershipError.wrongOwner }
         // Even an older model with no revision cannot recreate a missing file.
         guard FileManager.default.fileExists(atPath: filePath) else {

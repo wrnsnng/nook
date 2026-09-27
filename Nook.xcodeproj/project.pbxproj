@@ -144,6 +144,7 @@
 		6E95FD4FF417B4396D092012 /* VoiceCorrection.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5B0E46E24639E41F925E2B /* VoiceCorrection.swift */; };
 		6FF1E81B046C3BC3288B0050 /* SummaryItemReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD464614A06EB0D1F6835152 /* SummaryItemReviewView.swift */; };
 		705696C8F8B430167F304882 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 5346599FDAB4F3D319434022 /* Sparkle */; };
+		7114033CE5474F0218A1A237 /* LibraryFoldersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A3A93E8515E6665F6E80E33 /* LibraryFoldersTests.swift */; };
 		71729DFA6A47AA5AEACE1E54 /* AudioRetention.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC0E23C2FC082713A666CCCA /* AudioRetention.swift */; };
 		71A55DEA7A1C41127D4DB5ED /* THIRD_PARTY_NOTICES.md in Resources */ = {isa = PBXBuildFile; fileRef = 2DF398889F508D66FA99EB2C /* THIRD_PARTY_NOTICES.md */; };
 		7506B8AB5D548DC1ED680DC4 /* VoiceCorrectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 170AC8D348CA33A2E6B5F43D /* VoiceCorrectionTests.swift */; };
@@ -168,6 +169,7 @@
 		8649F00502AF64153F77952E /* NookPermission.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A877376CD0320074D3AE2B8 /* NookPermission.swift */; };
 		87C4A68E2D4070396043DDFD /* AudioPlaybackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB584873860EFC08BB4979E8 /* AudioPlaybackTests.swift */; };
 		885A73EC7FCCD1E08E938BFA /* PrepBriefView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C690709E84082D9FB8F49E55 /* PrepBriefView.swift */; };
+		8954C603F4B4ADF66CBA333F /* LibraryFolders.swift in Sources */ = {isa = PBXBuildFile; fileRef = 013774C7E34116232B7AE9F0 /* LibraryFolders.swift */; };
 		8BBE249F02F3FD3D109D4639 /* DigestBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = E015C1ABEA632C5CACB87CBB /* DigestBuilder.swift */; };
 		8C146B75382DB7970B460916 /* LiveAnalyzerInputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0DA313E3B4EB1C1104D8D92 /* LiveAnalyzerInputTests.swift */; };
 		8C1B6817DE0453325A307D7F /* DictationShortcut.swift in Sources */ = {isa = PBXBuildFile; fileRef = 449C198A2510B46C85E755A1 /* DictationShortcut.swift */; };
@@ -271,6 +273,7 @@
 		E49477C00487CA7CF5E93130 /* LibraryIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD4E56959164657764E65110 /* LibraryIntents.swift */; };
 		E4BA42603B4DC3A198E386D7 /* FloatingNotesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D5C59EC69ED9C02DCECCCA7 /* FloatingNotesView.swift */; };
 		E4EE9FA5EAED6AADB0868C37 /* LiveShelfControlContrastTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22CA3A6A50DE95BA52DC36C1 /* LiveShelfControlContrastTests.swift */; };
+		E5574252D0D73FECB49BADE9 /* LibraryFolders.swift in Sources */ = {isa = PBXBuildFile; fileRef = 013774C7E34116232B7AE9F0 /* LibraryFolders.swift */; };
 		E569DCFC678E964F97D82050 /* SourceAudioRecordingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0922EE9985AB5B0FA0B9F10 /* SourceAudioRecordingTests.swift */; };
 		E6271473FFF997A64B0977A7 /* DictationStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5008A93BBFF4EE8348B18580 /* DictationStyle.swift */; };
 		E77396AB28F08D6571DC9CC9 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A6655959382556C4DA62D72 /* AppModel.swift */; };
@@ -320,6 +323,7 @@
 
 /* Begin PBXFileReference section */
 		00DF80B9D8531C8ED4F3BF61 /* StorageInventoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageInventoryView.swift; sourceTree = "<group>"; };
+		013774C7E34116232B7AE9F0 /* LibraryFolders.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryFolders.swift; sourceTree = "<group>"; };
 		0216CD1F9BF8CBA79B99EF44 /* LibrarySearchController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibrarySearchController.swift; sourceTree = "<group>"; };
 		04DB60A1C42F72E177BB9160 /* MeetingCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingCoordinator.swift; sourceTree = "<group>"; };
 		06DE20F4ABEC5F79E54C49AC /* PrepBriefTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrepBriefTests.swift; sourceTree = "<group>"; };
@@ -426,6 +430,7 @@
 		84D7501C10A626471D08DFAA /* FollowThroughTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowThroughTests.swift; sourceTree = "<group>"; };
 		851C3C409ACA6E327A1C5D68 /* NookWindowBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookWindowBridge.swift; sourceTree = "<group>"; };
 		8559C0730D47F553693962B4 /* LibraryAnswerService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryAnswerService.swift; sourceTree = "<group>"; };
+		8A3A93E8515E6665F6E80E33 /* LibraryFoldersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryFoldersTests.swift; sourceTree = "<group>"; };
 		8A9FD90AC40A43EB7E5E0674 /* RecordingIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingIntents.swift; sourceTree = "<group>"; };
 		8C84A0C854A07B9D569D1A1E /* LibraryAnswerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryAnswerTests.swift; sourceTree = "<group>"; };
 		909D2C9060AAA9A88209979F /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
@@ -550,6 +555,7 @@
 				E015C1ABEA632C5CACB87CBB /* DigestBuilder.swift */,
 				4853A7CE6EDBD93AD436796B /* FollowThrough.swift */,
 				8559C0730D47F553693962B4 /* LibraryAnswerService.swift */,
+				013774C7E34116232B7AE9F0 /* LibraryFolders.swift */,
 				0216CD1F9BF8CBA79B99EF44 /* LibrarySearchController.swift */,
 				5BE43DCDC9893FE96856CD02 /* LiveTranscriptionService.swift */,
 				9ECD88CCE2B0C67780F060FB /* MarkdownCodec.swift */,
@@ -763,6 +769,7 @@
 				14AEB8FABBA49A9275352D7E /* InterfaceCopyTests.swift */,
 				8C84A0C854A07B9D569D1A1E /* LibraryAnswerTests.swift */,
 				7DE3748D1A2901327482C68C /* LibraryAskLifecycleTests.swift */,
+				8A3A93E8515E6665F6E80E33 /* LibraryFoldersTests.swift */,
 				5748C0883CEF9E5A16384D44 /* LibraryIdentityTests.swift */,
 				D2A46179F16114BCCEF5E967 /* LibraryInterfaceTests.swift */,
 				500496FCB58D7DA215396EBF /* LibrarySearchControllerTests.swift */,
@@ -1069,6 +1076,7 @@
 				E03611B9969AE1D8D7D729F0 /* GlobalShortcutMonitor.swift in Sources */,
 				D9D8F446971FBF1ECCE41881 /* LibraryAnswerService.swift in Sources */,
 				035BEA8CD76D6F110A78C696 /* LibraryAskView.swift in Sources */,
+				E5574252D0D73FECB49BADE9 /* LibraryFolders.swift in Sources */,
 				7C3305D1C99EEDD057DA7514 /* LibraryIntents.swift in Sources */,
 				7D112772095CF2EE9637C448 /* LibraryNoteIdentity.swift in Sources */,
 				B86581F65EEBC9D0E5939666 /* LibrarySearchController.swift in Sources */,
@@ -1182,6 +1190,7 @@
 				CB3A8C43D5E3ECA279A9ED73 /* GlobalShortcutMonitor.swift in Sources */,
 				EE326761C19C93A57CB4B7AD /* LibraryAnswerService.swift in Sources */,
 				79E52D066160901042ECA761 /* LibraryAskView.swift in Sources */,
+				8954C603F4B4ADF66CBA333F /* LibraryFolders.swift in Sources */,
 				E49477C00487CA7CF5E93130 /* LibraryIntents.swift in Sources */,
 				F676B007ED75C1514074F6C4 /* LibraryNoteIdentity.swift in Sources */,
 				E33D95127838E735C246E15E /* LibrarySearchController.swift in Sources */,
@@ -1287,6 +1296,7 @@
 				D70159FD08573AB5AFD40683 /* InterfaceCopyTests.swift in Sources */,
 				D91BF6BD244ABDBF838BA787 /* LibraryAnswerTests.swift in Sources */,
 				CCE8A9613C43FB2B556DB63B /* LibraryAskLifecycleTests.swift in Sources */,
+				7114033CE5474F0218A1A237 /* LibraryFoldersTests.swift in Sources */,
 				8FB573D89075EE89B6897E30 /* LibraryIdentityTests.swift in Sources */,
 				92C46E2C2B942155AE8ABE87 /* LibraryInterfaceTests.swift in Sources */,
 				B62A703FE44B331786915349 /* LibrarySearchControllerTests.swift in Sources */,

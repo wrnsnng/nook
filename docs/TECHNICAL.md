@@ -430,6 +430,38 @@ under the pointer each second.
 Loads and saves portable meeting files. The default directory is
 `~/Documents/Nook`, with an overridable folder in Settings.
 
+Layout inside the notes folder:
+
+```text
+Nook/                      the notes folder (Settings)
+  2026-09-01_0900-planning.md
+  Massimo/                 a folder: any visible directory one level down
+    2026-09-02_1000-1-1.md
+  .recordings/             kept audio and unfinished recordings (hidden)
+```
+
+Notes load from the notes folder itself and from each visible subdirectory
+one level down (`LibraryFolders`). A folder *is* that directory: nothing else
+records which folder a note belongs to, so folders made, renamed or removed in
+Finder appear in the sidebar on the next reload, empty ones included. Hidden
+directories, symbolic links, packages, Nook's reserved `.recordings` directory
+and anything nested more than one level deep are never loaded. Kept audio stays
+at the root in `.recordings` whichever folder its note is in.
+
+Folder actions in the library change the disk directly. New Folder makes the
+directory exclusively (`mkdir`), Rename renames it (`renamex_np` with
+`RENAME_EXCL`; a case-only rename checks that both spellings are the same
+directory first), and Delete moves each note back to the root and then removes
+the directory only if nothing else is left in it (`rmdir`). Notes are never
+deleted with a folder. Move To and drag and drop rename one note's file into
+another directory with `RENAME_EXCL`, after the same changed-elsewhere check as
+a save, and a taken filename gets the same ID suffixes as a new note. A note's
+ID, bytes and revision are unchanged by a move; only its `LibraryNoteIdentity`
+path changes. A move is refused while a summary write-up, an attaching
+recording or an open Quick Note still writes to that file. Ownership checks
+that used to require the notes folder as a file's direct parent
+(`LibraryFolders.contains`) accept the root and its folders.
+
 Files include:
 
 ```markdown

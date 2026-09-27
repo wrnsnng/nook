@@ -45,6 +45,9 @@ final class MarkdownStore: ObservableObject {
         return notes.first { $0.id == id }
     }
     @Published private(set) var loadIssues: [MarkdownLoadIssue] = []
+    /// The folders directly inside the notes folder, empty ones included,
+    /// read from disk rather than remembered. See `LibraryFolders`.
+    @Published private(set) var folders: [String] = []
     @Published private(set) var isLoading = false
     /// A folder can change away and back while an operation awaits a model.
     /// Its URL alone cannot authorize that old operation when it returns.
@@ -69,6 +72,11 @@ final class MarkdownStore: ObservableObject {
     /// run at the mutation boundary, including changes made outside Settings.
     var onStorageDirectoryWillChange: (@MainActor () -> Void)?
     var onNoteDeleted: (@MainActor (MeetingNote) -> Void)?
+    /// Moving a file changes the address every in-flight writer captured.
+    /// Anything still writing to a note (an open Quick Note, a recording
+    /// attaching to it) answers true here, and the move is refused instead
+    /// of leaving that writer pointed at a path that no longer exists.
+    var isNoteBusy: (@MainActor (LibraryNoteIdentity) -> Bool)?
 
     private let fileManager: FileManager
     private let noteLoader: NoteLoader
@@ -106,8 +114,8 @@ final class MarkdownStore: ObservableObject {
         isLoading = true
 
         Task {
-            let result = await Task.detached(priority: .userInitiated) {
-                noteLoader(directory, cache)
+            let (result, folderNames) = await Task.detached(priority: .userInitiated) {
+                (noteLoader(directory, cache), LibraryFolders.folderNames(in: directory))
             }.value
 
             guard generation == reloadGeneration, directory == storageURL else { return }
@@ -116,6 +124,7 @@ final class MarkdownStore: ObservableObject {
             // merely mid-publish.
             switch result {
             case .success(let payload):
+                folders = folderNames
                 notes = payload.notes
                 loadIssues = payload.issues
                 lastError = payload.issues.isEmpty
@@ -423,20 +432,31 @@ final class MarkdownStore: ObservableObject {
     /// work; the prompts remain visible and can be reopened when they become
     /// real follow-ups.
     @discardableResult
-    func createTemplatedNote(from template: NoteTemplate) throws -> MeetingNote {
+    func createTemplatedNote(
+        from template: NoteTemplate,
+        inFolder folder: String? = nil
+    ) throws -> MeetingNote {
         let now = Date()
-        return try save(
-            MeetingNote(
-                title: template.title,
-                startedAt: now,
-                endedAt: now,
-                sourceApp: "Personal",
-                summary: template.summary,
-                actionItems: template.actionItems,
-                completedActionItems: Set(template.actionItems),
-                personalNotes: ""
-            )
+        var note = MeetingNote(
+            title: template.title,
+            startedAt: now,
+            endedAt: now,
+            sourceApp: "Personal",
+            summary: template.summary,
+            actionItems: template.actionItems,
+            completedActionItems: Set(template.actionItems),
+            personalNotes: ""
         )
+        if let folder {
+            // The folder is only an address. Save still creates the file
+            // exclusively, so a name taken meanwhile is never overwritten.
+            guard let directory = existingFolderURL(named: folder) else {
+                refreshFolders()
+                throw LibraryFolderError.folderMissing(folder)
+            }
+            note.fileURL = availableDestination(for: note, in: directory)
+        }
+        return try save(note)
     }
 
     /// Reads the file as it exists right now, or fails visibly.
@@ -538,8 +558,9 @@ final class MarkdownStore: ObservableObject {
         }
 
         let sourceURL = source.standardizedFileURL
-        let managedDirectory = storageURL.standardizedFileURL
-        guard sourceURL.deletingLastPathComponent() == managedDirectory else {
+        // A note in a folder is renamed within that folder; renaming its
+        // file is not a request to move it.
+        guard LibraryFolders.contains(sourceURL, in: storageURL) else {
             lastError = MarkdownStoreError.renameRequiresManagedFile.errorDescription
             throw MarkdownStoreError.renameRequiresManagedFile
         }
@@ -555,7 +576,8 @@ final class MarkdownStore: ObservableObject {
 
         let destination = availableDestination(
             for: note,
-            excluding: sourceURL
+            excluding: sourceURL,
+            in: sourceURL.deletingLastPathComponent()
         )
         let destinationURL = destination.standardizedFileURL
 
@@ -590,6 +612,222 @@ final class MarkdownStore: ObservableObject {
         upsert(renamed, replacingFileURL: sourceURL)
         lastError = nil
         return renamed
+    }
+
+    // MARK: - Folders
+
+    /// Reads the folder list again. Folders made or removed in Finder are
+    /// picked up by every reload; this is for Nook's own folder changes.
+    func refreshFolders() {
+        folders = LibraryFolders.folderNames(in: storageURL, fileManager: fileManager)
+    }
+
+    /// The folder's directory as it is really spelled on disk, matched
+    /// case-insensitively like the default Mac file system matches names.
+    func existingFolderURL(named name: String) -> URL? {
+        let candidates = LibraryFolders.folderNames(in: storageURL, fileManager: fileManager)
+        let match = candidates.first { $0 == name }
+            ?? candidates.first {
+                $0.compare(name, options: .caseInsensitive) == .orderedSame
+            }
+        // Built from the library's own spelling of its path, so every note
+        // address below it compares equal to the ones the loader produced.
+        return match.map { storageURL.appendingPathComponent($0, isDirectory: true) }
+    }
+
+    /// The folder a note's file sits in, or nil at the library's root.
+    func folderName(of note: MeetingNote) -> String? {
+        note.fileURL.flatMap { LibraryFolders.folderName(of: $0, in: storageURL) }
+    }
+
+    @discardableResult
+    func createFolder(named rawName: String) throws -> String {
+        ensureDirectory()
+        do {
+            let name = try LibraryFolders.sanitizedName(rawName)
+            try refuseDuplicateFolderName(name)
+            let url = storageURL.appendingPathComponent(name, isDirectory: true)
+            // Exclusive: mkdir never adopts an item somebody else just made.
+            guard mkdir(url.path, 0o700) == 0 else {
+                if errno == EEXIST { throw LibraryFolderError.duplicateName(name) }
+                throw writeError()
+            }
+            refreshFolders()
+                return name
+        } catch {
+            refreshFolders()
+            throw error
+        }
+    }
+
+    /// Renames the folder's directory on disk. Every note inside keeps its
+    /// file and contents; only the path above it changes.
+    @discardableResult
+    func renameFolder(_ name: String, to rawName: String) throws -> String {
+        let newName = try LibraryFolders.sanitizedName(rawName)
+        guard let source = existingFolderURL(named: name) else {
+            refreshFolders()
+            throw LibraryFolderError.folderMissing(name)
+        }
+        let oldName = source.lastPathComponent
+        guard newName != oldName else { return oldName }
+        let changesOnlyCase = newName.compare(oldName, options: .caseInsensitive) == .orderedSame
+        if !changesOnlyCase { try refuseDuplicateFolderName(newName) }
+        let contained = notes.filter { folderName(of: $0) == oldName }
+        try refuseIfAnyBusy(contained)
+        let destination = storageURL.appendingPathComponent(newName, isDirectory: true)
+        if changesOnlyCase {
+            // A case-only rename names the same directory on the default
+            // file system. On a case-sensitive volume the other spelling can
+            // be a different, empty directory, which rename would replace.
+            var sourceInfo = stat()
+            var destinationInfo = stat()
+            if lstat(destination.path, &destinationInfo) == 0,
+               lstat(source.path, &sourceInfo) == 0,
+               sourceInfo.st_ino != destinationInfo.st_ino || sourceInfo.st_dev != destinationInfo.st_dev {
+                throw LibraryFolderError.duplicateName(newName)
+            }
+        }
+        let flags: UInt32 = changesOnlyCase ? 0 : UInt32(RENAME_EXCL)
+        guard renamex_np(source.path, destination.path, flags) == 0 else {
+            let failure = errno
+            refreshFolders()
+            if failure == EEXIST { throw LibraryFolderError.duplicateName(newName) }
+            throw LibraryFolderError.renameFailed
+        }
+        func relocated(_ url: URL) -> URL {
+            guard LibraryFolders.folderName(of: url, in: storageURL) == oldName else {
+                return url
+            }
+            return destination.appendingPathComponent(url.lastPathComponent)
+        }
+        invalidateReloadSnapshot()
+        notes = notes.map { note in
+            guard let file = note.fileURL else { return note }
+            var moved = note
+            moved.fileURL = relocated(file)
+            return moved
+        }
+        loadIssues = loadIssues.map {
+            MarkdownLoadIssue(fileURL: relocated($0.fileURL), message: $0.message)
+        }
+        refreshFolders()
+        return newName
+    }
+
+    /// Removes a folder after moving its notes back to the library's root.
+    ///
+    /// Notes are never deleted with a folder. Each one moves with the same
+    /// checks as a single move, and the directory itself is only removed
+    /// when nothing else is left in it: a file Nook does not load, or one it
+    /// could not move, keeps the folder and is reported.
+    func deleteFolder(_ name: String) throws {
+        guard let folder = existingFolderURL(named: name) else {
+            refreshFolders()
+            throw LibraryFolderError.folderMissing(name)
+        }
+        let actualName = folder.lastPathComponent
+        let contained = notes.filter { folderName(of: $0) == actualName }
+        try refuseIfAnyBusy(contained)
+        for note in contained {
+            try move(note, toFolder: nil)
+        }
+        let remaining = (try? fileManager.contentsOfDirectory(atPath: folder.path)) ?? ["?"]
+        // Finder's view settings are the only thing safe to discard.
+        guard remaining.allSatisfy({ $0 == ".DS_Store" }) else {
+            refreshFolders()
+            throw LibraryFolderError.folderKeptOtherFiles(actualName)
+        }
+        if !remaining.isEmpty {
+            unlink(folder.appendingPathComponent(".DS_Store").path)
+        }
+        // rmdir removes only an empty directory, so a file that arrived
+        // since the check above keeps the folder rather than being lost.
+        guard rmdir(folder.path) == 0 else {
+            refreshFolders()
+            throw LibraryFolderError.folderKeptOtherFiles(actualName)
+        }
+        refreshFolders()
+    }
+
+    /// Moves a note's Markdown file into a folder, or back to the library's
+    /// root when `folder` is nil. The note keeps its ID and every byte of
+    /// its file; only its address changes. The move is refused when the file
+    /// changed since Nook read it, and a name already taken in the
+    /// destination gets the same suffixes a new note would.
+    @discardableResult
+    func move(_ note: MeetingNote, toFolder folder: String?) throws -> MeetingNote {
+        let known = try knownNote(for: note)
+        guard let source = (note.fileURL ?? known?.fileURL)?.standardizedFileURL else {
+            throw LibraryFolderError.moveRequiresSavedNote
+        }
+        guard LibraryFolders.contains(source, in: storageURL) else {
+            throw LibraryFolderError.noteOutsideLibrary
+        }
+        let current = known ?? note
+        try refuseIfAnyBusy([current])
+        let directory: URL
+        if let folder {
+            guard let url = existingFolderURL(named: folder) else {
+                refreshFolders()
+                throw LibraryFolderError.folderMissing(folder)
+            }
+            directory = url.standardizedFileURL
+        } else {
+            directory = storageURL.standardizedFileURL
+        }
+        if source.deletingLastPathComponent().path == directory.path {
+            return current
+        }
+        guard fileManager.fileExists(atPath: source.path) else {
+            throw changedFileError()
+        }
+        let revision = note.fileRevision ?? known?.fileRevision
+        try refuseIfChangedElsewhere(source, revision: revision)
+
+        var destination = collisionFreeDestination(
+            preferring: directory.appendingPathComponent(source.lastPathComponent),
+            for: current,
+            excluding: source
+        )
+        // Exclusive, so a file created after the collision check is never
+        // replaced. One retry picks the next free name.
+        var moved = renamex_np(source.path, destination.path, UInt32(RENAME_EXCL)) == 0
+        if !moved, errno == EEXIST {
+            destination = collisionFreeDestination(
+                preferring: destination, for: current, excluding: source
+            )
+            moved = renamex_np(source.path, destination.path, UInt32(RENAME_EXCL)) == 0
+        }
+        guard moved else { throw LibraryFolderError.moveFailed }
+
+        protectSensitiveFile(at: destination)
+        var result = current
+        result.fileURL = destination
+        result.fileModified = Self.modificationDate(of: destination)
+        result.fileRevision = revision
+        invalidateReloadSnapshot()
+        upsert(result, replacingFileURL: source)
+        loadIssues.removeAll { $0.fileURL.standardizedFileURL == source }
+        return result
+    }
+
+    private func refuseDuplicateFolderName(_ name: String) throws {
+        refreshFolders()
+        if let existing = folders.first(where: {
+            $0.compare(name, options: .caseInsensitive) == .orderedSame
+        }) {
+            throw LibraryFolderError.duplicateName(existing)
+        }
+    }
+
+    private func refuseIfAnyBusy(_ notes: [MeetingNote]) throws {
+        for note in notes {
+            if summarySessions.isRunning(for: note.libraryIdentity)
+                || isNoteBusy?(note.libraryIdentity) == true {
+                throw LibraryFolderError.noteIsBusy
+            }
+        }
     }
 
     /// Moves a note's Markdown file to the Trash.
@@ -656,7 +894,7 @@ final class MarkdownStore: ObservableObject {
             throw NoteMergeError.ambiguousSource
         }
         guard let url = note.fileURL,
-              url.deletingLastPathComponent().standardizedFileURL == directory.standardizedFileURL,
+              LibraryFolders.contains(url, in: directory),
               let revision = note.fileRevision,
               let current = uniqueNote(id: note.id),
               current.libraryIdentity == note.libraryIdentity,
@@ -697,11 +935,19 @@ final class MarkdownStore: ObservableObject {
             withIntermediateDirectories: true
         )
         if copyExistingMarkdown {
-            let sourceFiles = try markdownFiles(in: oldDirectory)
-            for source in sourceFiles {
+            // Folders travel with their notes, so a copied library keeps the
+            // same shape. An existing folder of the same name is reused.
+            for source in try libraryMarkdownFiles(in: oldDirectory) {
+                var directory = newDirectory
+                if let folder = LibraryFolders.folderName(of: source, in: oldDirectory) {
+                    directory = newDirectory.appendingPathComponent(folder, isDirectory: true)
+                    try fileManager.createDirectory(
+                        at: directory, withIntermediateDirectories: true
+                    )
+                }
                 let destination = availableCopyDestination(
                     named: source.lastPathComponent,
-                    in: newDirectory
+                    in: directory
                 )
                 try fileManager.copyItem(at: source, to: destination)
             }
@@ -713,7 +959,7 @@ final class MarkdownStore: ObservableObject {
     }
 
     var markdownFileCount: Int {
-        (try? markdownFiles(in: storageURL).count) ?? notes.count
+        (try? libraryMarkdownFiles(in: storageURL).count) ?? notes.count
     }
 
     func reveal(_ note: MeetingNote) {
@@ -815,9 +1061,21 @@ final class MarkdownStore: ObservableObject {
 
     private func availableDestination(
         for note: MeetingNote,
-        excluding source: URL? = nil
+        excluding source: URL? = nil,
+        in directory: URL? = nil
     ) -> URL {
-        let preferred = storageURL.appendingPathComponent(filename(for: note))
+        let preferred = (directory ?? storageURL).appendingPathComponent(filename(for: note))
+        return collisionFreeDestination(preferring: preferred, for: note, excluding: source)
+    }
+
+    /// The same collision suffixes for every way a note gains a path: a new
+    /// note, an explicit file rename, and a move into another folder.
+    private func collisionFreeDestination(
+        preferring preferred: URL,
+        for note: MeetingNote,
+        excluding source: URL?
+    ) -> URL {
+        let directory = preferred.deletingLastPathComponent()
         let sourceURL = source?.standardizedFileURL
         guard fileManager.fileExists(atPath: preferred.path),
               preferred.standardizedFileURL != sourceURL else {
@@ -833,14 +1091,14 @@ final class MarkdownStore: ObservableObject {
 
         let stem = preferred.deletingPathExtension().lastPathComponent
         let shortID = note.id.uuidString.prefix(8).lowercased()
-        let unique = storageURL
+        let unique = directory
             .appendingPathComponent("\(stem)-\(shortID)")
             .appendingPathExtension("md")
         guard fileManager.fileExists(atPath: unique.path) else {
             return unique
         }
 
-        let fullID = storageURL
+        let fullID = directory
             .appendingPathComponent("\(stem)-\(note.id.uuidString.lowercased())")
             .appendingPathExtension("md")
         guard fileManager.fileExists(atPath: fullID.path) else {
@@ -849,7 +1107,7 @@ final class MarkdownStore: ObservableObject {
 
         var suffix = 2
         while true {
-            let candidate = storageURL
+            let candidate = directory
                 .appendingPathComponent("\(stem)-\(note.id.uuidString.lowercased()) \(suffix)")
                 .appendingPathExtension("md")
             if !fileManager.fileExists(atPath: candidate.path) {
@@ -865,6 +1123,15 @@ final class MarkdownStore: ObservableObject {
             includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles]
         ).filter { $0.pathExtension.lowercased() == "md" }
+    }
+
+    /// Every note file the library loads: the root and each folder.
+    private func libraryMarkdownFiles(in directory: URL) throws -> [URL] {
+        var files = try markdownFiles(in: directory)
+        for folder in try LibraryFolders.folderURLs(in: directory, fileManager: fileManager) {
+            files += try markdownFiles(in: folder)
+        }
+        return files
     }
 
     private func availableCopyDestination(named filename: String, in directory: URL) -> URL {
@@ -889,13 +1156,28 @@ final class MarkdownStore: ObservableObject {
         cache: NoteDecodeCache? = nil
     ) -> Result<LoadPayload, Error> {
         do {
-            let urls = try FileManager.default.contentsOfDirectory(
-                at: directory,
-                includingPropertiesForKeys: [.contentModificationDateKey],
-                options: [.skipsHiddenFiles]
-            ).filter { $0.pathExtension.lowercased() == "md" }
+            func markdownFiles(in folder: URL) throws -> [URL] {
+                try FileManager.default.contentsOfDirectory(
+                    at: folder,
+                    includingPropertiesForKeys: [.contentModificationDateKey],
+                    options: [.skipsHiddenFiles]
+                ).filter { $0.pathExtension.lowercased() == "md" }
+            }
+            var urls = try markdownFiles(in: directory)
             var notes: [MeetingNote] = []
             var issues: [MarkdownLoadIssue] = []
+            // One level of folders. An unreadable folder is reported like an
+            // unreadable file: the rest of the library still loads.
+            for folder in (try? LibraryFolders.folderURLs(in: directory)) ?? [] {
+                do {
+                    urls += try markdownFiles(in: folder)
+                } catch {
+                    issues.append(MarkdownLoadIssue(
+                        fileURL: folder,
+                        message: "This folder couldn’t be read: \(error.localizedDescription)"
+                    ))
+                }
+            }
 
             for url in urls {
                 let modified = try? url.resourceValues(forKeys: [
