@@ -793,14 +793,14 @@ struct CommandPaletteView: View {
         } label: {
             HStack(spacing: NookSpacing.medium - 2) {
                 Image(systemName: item.symbol)
-                    .font(NookType.bodyEmphasized)
+                    .font(.body)
                     .foregroundStyle(
                         isSelected ? Color.white : NookPalette.accent
                     )
                     .frame(width: 22)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(item.title)
-                        .font(NookType.bodyEmphasized)
+                        .font(.body)
                         .foregroundStyle(
                             isSelected
                                 ? Color.white : Color(nsColor: .labelColor)
@@ -820,7 +820,7 @@ struct CommandPaletteView: View {
                 Spacer(minLength: NookSpacing.small)
                 if let shortcut = item.shortcut {
                     Text(shortcut)
-                        .font(NookType.micro.weight(.medium))
+                        .font(NookType.micro)
                         .foregroundStyle(
                             isSelected
                                 ? Color.white.opacity(0.72)

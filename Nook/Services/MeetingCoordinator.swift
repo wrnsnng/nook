@@ -270,7 +270,7 @@ final class MeetingCoordinator: ObservableObject {
     }
     /// Kept independently of the capture format. A copied UUID or changed
     /// notes folder cannot take ownership while an audio/model await runs.
-    private var activeAttachmentIdentity: LibraryNoteIdentity?
+    private(set) var activeAttachmentIdentity: LibraryNoteIdentity?
     private var liveNotesSaveTask: Task<Void, Never>?
     private var elapsedTask: Task<Void, Never>?
     private var meterTask: Task<Void, Never>?
@@ -395,7 +395,7 @@ final class MeetingCoordinator: ObservableObject {
         libraryURL: URL
     ) -> MeetingNote? {
         guard let file = expected.fileURL,
-              file.deletingLastPathComponent().standardizedFileURL == libraryURL.standardizedFileURL,
+              LibraryFolders.contains(file, in: libraryURL),
               LibraryNoteResolution.resolve(expected.noteID, in: notes) == .unique(expected),
               let target = notes.first(where: { $0.libraryIdentity == expected }),
               target.kind != .digest else { return nil }
@@ -1830,6 +1830,19 @@ final class MeetingCoordinator: ObservableObject {
               current.summaryRecipe == scaffold.summaryRecipe else { return current }
 
         var merged = current
+        // Recording into a note must not quietly rewrite sections the person
+        // edited by hand. New commitments from the added sitting still land
+        // beside theirs; a full rewrite is an explicit, confirmed Regenerate.
+        if current.summaryEditedByUser {
+            if exactStringsMatch(current.actionItems, scaffold.actionItems),
+               exactStringsMatch(current.completedActionItems.sorted(), scaffold.completedActionItems.sorted()) {
+                merged.actionItems = unionedActionItems(
+                    existing: scaffold.actionItems,
+                    proposed: result.insights.actionItems
+                )
+            }
+            return merged
+        }
         if current.title.utf8.elementsEqual(scaffold.title.utf8) {
             merged.title = mergedTitle(
                 existing: scaffold.title,

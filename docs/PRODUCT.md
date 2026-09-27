@@ -129,8 +129,9 @@ only when switched on.
 ### Menu-bar item
 
 Idle state uses the Nook quote-bubble mark. While recording it becomes an
-unmistakable recording or pause symbol plus a fixed-width timer. The native menu
-offers only commands that make sense for the current phase.
+unmistakable recording or pause symbol. The elapsed time lives in the notch,
+which always shows it while recording, so the menu bar does not repeat it. The
+native menu offers only commands that make sense for the current phase.
 
 The menu clock is intentionally isolated from the menu's command model. AppKit
 must not rebuild and move native menu items once per second while the pointer is

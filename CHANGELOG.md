@@ -6,6 +6,53 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
+## 1.22.0
+
+[Release notes](Releases/Nook-1.22.0.md)
+
+- The toolbar over a note now holds only that note's actions, Share and More,
+  as in Notes. New Note and a menu with Ask Your Library and Create Weekly
+  Digest sit over the list, since they act on the whole library. Open actions
+  are no longer shown in the sidebar; action items stay in each note.
+- Meeting reminders from your calendar arrive reliably. Nook checked the
+  calendar at a moment that was easy to miss by a few seconds, and when it did
+  the notch and notification for that meeting never came. It now looks as a
+  meeting comes within ten minutes, so the heads-up appears in good time.
+- Group notes into folders. A Folders section in the library sidebar lists
+  them, and choosing one shows only its notes. Each folder is a real folder in
+  your notes folder on disk, so creating, renaming or deleting one in Nook does
+  the same in Finder, and folders made in Finder appear in Nook. Move a note
+  with Move To in its menu or by dragging it onto a folder, and its Markdown
+  file moves too. File, New Folder (Shift-Command-N) makes one, and a new note
+  made while a folder is selected goes into it. Deleting a folder moves its
+  notes back to the library and never deletes them.
+- The gist, key points, decisions, action items and open questions can be
+  edited right on the Notes tab. Click into the text and type: Return adds an
+  item, Delete in an empty item removes it, and changes save on their own. A
+  ticked action item stays ticked when you reword it and keeps its due date.
+  Regenerate Summary now asks before replacing sections you have edited, and
+  recording more into an edited note keeps your wording.
+- Type is calmer and more consistent. Nook uses the system text styles
+  throughout, with their own spacing, so nothing is squeezed tighter than
+  macOS sets it. Bold is kept for page titles, semibold for headings, and
+  everything else is regular, including row titles, status and metadata. The
+  notch uses the same sizes as the rest of the app, and its text buttons now
+  match the Record button beside them.
+- Summaries of new recordings are kept again. When the library reloaded a
+  just-saved note while its summary was being written, the reload was taken
+  for an edit, the summary was discarded, and the note showed only transcript
+  highlights with a "changed while regeneration ran" message.
+- A summary that cannot be saved is explained once, in the note, beside Retry,
+  instead of also in a banner at the top of the window.
+- While recording, the menu bar shows only the record or pause symbol. The
+  notch already shows the elapsed time, and the two clocks sat side by side.
+- Hiding the notch during a recording shows the small recording pill beside
+  the camera again. It could stay folded inside the camera housing, where it
+  reacted to the pointer but could not be clicked to bring the panel back.
+- Settings, Keyboard lines up again: each row's scope, reset button and
+  shortcut sit in the same columns, centred on the row, and the Recording
+  footer says that Take a Note also works from any app while recording.
+
 ## 1.21.0
 
 [Release notes](Releases/Nook-1.21.0.md)

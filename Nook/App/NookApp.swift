@@ -44,6 +44,13 @@ struct NookApp: App {
         .commands {
             CheckForUpdatesCommand(updater: updater)
 
+            CommandGroup(after: .newItem) {
+                Button("New Folder…") {
+                    appModel.requestNewFolder()
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+            }
+
             CommandMenu("Meeting") {
                 if appModel.meeting.phase.isRecording {
                     Button(
@@ -139,9 +146,8 @@ struct NookApp: App {
 
 /// The `MenuBarExtra` label. Every re-render of this view re-lays out the
 /// status item in the system menu bar, so it must observe nothing faster
-/// than phase and pause changes: the elapsed clock, which ticks once a
-/// second, lives in `MenuBarRecordingClock` below and observes
-/// `MeetingLiveSignals` on its own. Nothing in this view's body or its
+/// than phase and pause changes; while recording it shows only
+/// `MenuBarRecordingMark`, and the notch owns the clock. Nothing in this view's body or its
 /// computed properties may read the coordinator's `elapsed`, `audioLevel`
 /// or `liveTranscript` forwarders; they do not subscribe a view to changes.
 private struct NookMenuBarLabel: View {
@@ -152,11 +158,7 @@ private struct NookMenuBarLabel: View {
         HStack(spacing: 3) {
             Group {
                 if meeting.phase.isRecording {
-                    MenuBarRecordingClock(
-                        live: meeting.live,
-                        isPaused: meeting.isPaused,
-                        name: buildName
-                    )
+                    MenuBarRecordingMark(isPaused: meeting.isPaused, name: buildName)
                 } else {
                     Image(systemName: menuBarSymbol)
                         .accessibilityLabel(idleAccessibilityLabel)
@@ -204,8 +206,8 @@ private struct NookMenuBarLabel: View {
         return meeting.phase.menuBarSymbol
     }
 
-    /// The label while nothing records. The recording label depends on the
-    /// elapsed clock and so is produced inside `MenuBarRecordingClock`.
+    /// The label while nothing records. The recording label is produced by
+    /// `MenuBarRecordingMark`.
     private var idleAccessibilityLabel: String {
         if let version = updater.availableVersion {
             return "\(buildName), version \(version) is ready"
@@ -221,41 +223,20 @@ private struct NookMenuBarLabel: View {
 /// `NookMenuBarLabel` around it. The spoken label is assembled here too,
 /// because it includes the elapsed time and would otherwise drag the parent
 /// back into observing it.
-private struct MenuBarRecordingClock: View {
-    @ObservedObject var live: MeetingLiveSignals
+/// The recording mark in the menu bar: a record or pause symbol, no clock.
+///
+/// The notch shows the elapsed time wherever it is (beside the camera, in the
+/// workspace, in the pill when hidden), so a second clock in the menu bar sat
+/// beside it, often a second apart. Without one this item also no longer
+/// redraws every second.
+private struct MenuBarRecordingMark: View {
     let isPaused: Bool
     /// "Nook" or "Nook, development build"; see `NookMenuBarLabel`.
     let name: String
 
     var body: some View {
-        HStack(spacing: 5) {
-            Image(
-                systemName: isPaused
-                    ? "pause.fill"
-                    : "record.circle.fill"
-            )
-            .frame(width: 13)
-            Text(NookElapsedTime.clock(live.elapsed))
-                .font(.system(.caption, design: .monospaced))
-                .monospacedDigit()
-                .frame(width: elapsedWidth, alignment: .leading)
-        }
-        .accessibilityLabel(accessibilityLabel)
-    }
-
-    private var accessibilityLabel: String {
-        let spoken = NookElapsedTime.spoken(live.elapsed)
-        if isPaused {
-            return "\(name), recording paused, \(spoken)"
-        }
-        return "\(name), recording, \(spoken)"
-    }
-
-    /// Fixed so the clock does not shove the menu-bar item sideways once a
-    /// second, but sized to the format actually on screen. At an hour the
-    /// string grows to "1:05:23" and the old single width clipped it.
-    private var elapsedWidth: CGFloat {
-        live.elapsed >= 3_600 ? 56 : 38
+        Image(systemName: isPaused ? "pause.fill" : "record.circle.fill")
+            .accessibilityLabel(isPaused ? "\(name), recording paused" : "\(name), recording")
     }
 }
 

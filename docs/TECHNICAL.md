@@ -322,6 +322,27 @@ stale-input check. Regeneration keeps the selected value. Merging uses the
 surviving note's selection rather than guessing from the conversation or the
 absorbed note; failed merging retains existing questions.
 
+Generated sections are edited in place on the Notes tab. `SummaryEditsController`
+(owned by `MarkdownStore`, so words outlive the detail view) holds the rows:
+the gist a sentence or balanced paragraph per row, laid out exactly as the
+read-only text was, and each list item a row. `InlineEditableText` is a
+self-sizing TextKit 1 `NSTextView` per row that reports Return, Delete at the
+start of a row and the arrow keys; `SummaryRowEditing` turns those into row
+splits, joins and removals as pure functions. Rows remember the exact
+separator before them, so rewording one sentence rewrites no other byte of the
+summary. Saving is debounced, happens on focus loss, tab change, selection
+change and quit, and goes through `MarkdownStore.updateGeneratedSections`: a
+per-section three-way merge against the baseline the edit started from, a
+Markdown round-trip rehearsal before writing and a read-back after. A section
+changed elsewhere refuses the save and keeps the words. Action item completion
+moves with the row, and a trailing `[due: ...]` suffix is kept out of the
+editable words. A successful edit sets `summaryEditedByUser`
+(`summary_edited: true`, meetings only); Regenerate and Retry confirm before
+replacing edited sections, a confirmed regeneration clears the flag unless a
+section typed into while it ran survives the merge, and recording into an
+edited note keeps its sections and only adds new action items. Edits have no
+crash-recovery journal entry; the debounce bounds what a crash can lose.
+
 `SummaryProvenance` distinguishes retained transcript highlights, partial
 extraction and edited fallback independently of `summaryPending`. The optional
 `summary_origin` field is present only for meeting fallback content. Decode
@@ -429,6 +450,38 @@ under the pointer each second.
 
 Loads and saves portable meeting files. The default directory is
 `~/Documents/Nook`, with an overridable folder in Settings.
+
+Layout inside the notes folder:
+
+```text
+Nook/                      the notes folder (Settings)
+  2026-09-01_0900-planning.md
+  Massimo/                 a folder: any visible directory one level down
+    2026-09-02_1000-1-1.md
+  .recordings/             kept audio and unfinished recordings (hidden)
+```
+
+Notes load from the notes folder itself and from each visible subdirectory
+one level down (`LibraryFolders`). A folder *is* that directory: nothing else
+records which folder a note belongs to, so folders made, renamed or removed in
+Finder appear in the sidebar on the next reload, empty ones included. Hidden
+directories, symbolic links, packages, Nook's reserved `.recordings` directory
+and anything nested more than one level deep are never loaded. Kept audio stays
+at the root in `.recordings` whichever folder its note is in.
+
+Folder actions in the library change the disk directly. New Folder makes the
+directory exclusively (`mkdir`), Rename renames it (`renamex_np` with
+`RENAME_EXCL`; a case-only rename checks that both spellings are the same
+directory first), and Delete moves each note back to the root and then removes
+the directory only if nothing else is left in it (`rmdir`). Notes are never
+deleted with a folder. Move To and drag and drop rename one note's file into
+another directory with `RENAME_EXCL`, after the same changed-elsewhere check as
+a save, and a taken filename gets the same ID suffixes as a new note. A note's
+ID, bytes and revision are unchanged by a move; only its `LibraryNoteIdentity`
+path changes. A move is refused while a summary write-up, an attaching
+recording or an open Quick Note still writes to that file. Ownership checks
+that used to require the notes folder as a file's direct parent
+(`LibraryFolders.contains`) accept the root and its folders.
 
 Files include:
 

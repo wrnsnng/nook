@@ -382,7 +382,9 @@ every entry it added and adds no more until the switch is turned back on.
 ## Files and retention
 
 The default notes folder is `~/Documents/Nook`. A user can select another folder
-in Settings. Each completed note is a plaintext Markdown file containing
+in Settings. Folders created in the library are ordinary folders inside it,
+and moving a note between them moves its file; nothing about folders is stored
+anywhere else. Each completed note is a plaintext Markdown file containing
 timestamps, source application, title, summary, key points, decisions, action
 items, open questions, personal notes, and transcript.
 
@@ -402,6 +404,13 @@ fallback output receives this classification when read; opening does not write
 the file, and a later explicit save can persist the field. Reviewed item changes
 retain an edited-fallback classification; only an accepted replacement of the
 summary clears it. No model runs merely because a fallback note is opened.
+
+When the gist, key points, decisions, action items or open questions are
+edited in place on the Notes tab, or a reviewed correction is applied, a meeting
+note stores `summary_edited: true` in the same frontmatter. It records only that
+the person rewrote generated sections, so Regenerate can ask before replacing
+them. It is absent from notes nobody edited, and a confirmed regeneration
+removes it. Editing runs no model and sends nothing anywhere.
 
 Summary item review derives exact passage references from the saved transcript,
 using local word matching and, when available, the on-device sentence embedding.
@@ -429,7 +438,7 @@ notes folder, its `.recordings` folder, the active installation's draft-recovery
 folder, the shared Ask cache file, the active installation's cache folder and
 event log, and the legacy developer log if present. A separate row counts only
 the known `.nook-write-<UUID>.tmp` and `.nook-recovery-<UUID>.tmp` interrupted-save
-files in the current notes folder. It can reveal up to five of those hidden
+files in the current notes folder and its folders. It can reveal up to five of those hidden
 files in Finder for inspection. File contents are never opened by the inventory.
 Missing folders are not created, symbolic links are not followed, and nothing
 is deleted. Counts are logical file sizes, not a promise of reclaimable disk

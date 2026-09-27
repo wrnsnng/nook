@@ -197,7 +197,7 @@ enum NookShortcutSection: String, CaseIterable, Identifiable {
     var footer: String {
         switch self {
         case .recording:
-            "Flag This Moment is global. The other recording controls work in Nook while a meeting is recording."
+            "Flag This Moment and Take a Note work from any app while a meeting is recording. The other recording controls work in Nook."
         case .libraryAndNotes:
             "These shortcuts work while a Nook library or note window is active."
         case .quickNote:

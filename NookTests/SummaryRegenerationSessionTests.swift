@@ -319,7 +319,11 @@ struct SummaryRegenerationSessionTests {
         #expect(session.completion == nil)
     }
 
-    @Test(arguments: ["text", "timing", "duration", "source", "guidance", "flag"],
+    // No "duration" case: a note's file stores when each line starts, never
+    // how long it lasted, and the model sees stamps and words. A duration-only
+    // difference is what a reload of a just-recorded note looks like, not an
+    // edit; see SummaryReloadStalenessTests.
+    @Test(arguments: ["text", "timing", "source", "guidance", "flag"],
           [SummaryRegenerationSession.Purpose.regeneration, .initial, .appended])
     func changedGenerationInputKeepsTheCurrentNoteAndExplainsWhy(
         change: String, purpose: SummaryRegenerationSession.Purpose

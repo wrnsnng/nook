@@ -93,12 +93,11 @@ struct PrepBriefView: View {
             // is for says itself; how often this has happened is context, so
             // it reads as a sentence underneath.
             Label("Before this meeting", systemImage: "cup.and.saucer.fill")
-                .font(NookType.caption.weight(.semibold))
+                .font(NookType.label)
                 .foregroundStyle(NookPalette.accent)
 
             Text(brief.eventTitle)
                 .font(NookType.title)
-                .tracking(-0.45)
                 .lineLimit(2)
 
             HStack(spacing: 15) {

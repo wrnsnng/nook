@@ -430,8 +430,9 @@ final class OpenActionsController: ObservableObject {
               let sourceRevision = entry.sourceRevision,
               let currentURL = note.fileURL?.standardizedFileURL.resolvingSymlinksInPath(),
               currentURL == sourceURL,
-              currentURL.deletingLastPathComponent()
-                == store.storageURL.standardizedFileURL.resolvingSymlinksInPath(),
+              LibraryFolders.contains(
+                  currentURL, in: store.storageURL, resolvingSymlinks: true
+              ),
               note.fileRevision == sourceRevision else {
             throw OpenActionMutationError.changed
         }
@@ -567,8 +568,9 @@ final class OpenActionsController: ObservableObject {
               let sourceURL = entry.sourceFileURL,
               let revision = entry.sourceRevision,
               note.fileURL?.standardizedFileURL.resolvingSymlinksInPath() == sourceURL,
-              sourceURL.deletingLastPathComponent()
-                == library.directoryURL.standardizedFileURL.resolvingSymlinksInPath(),
+              LibraryFolders.contains(
+                  sourceURL, in: library.directoryURL, resolvingSymlinks: true
+              ),
               note.fileRevision == revision,
               let bytes = try? Data(contentsOf: sourceURL),
               MeetingNote.contentRevision(bytes) == revision,

@@ -171,6 +171,9 @@ enum SummaryRegenerator {
         updated.summary = preservingRecoveryNotice(result.insights.summary, from: note)
         updated.summaryPending = nil
         updated.summaryProvenance = nil
+        // The sections are the model's again. The person confirmed that before
+        // this ran, so nothing of theirs is left in them to protect.
+        updated.summaryEditedByUser = false
         updated.keyPoints = result.insights.keyPoints
         updated.decisions = result.insights.decisions
         updated.actionItems = result.insights.actionItems
@@ -203,6 +206,9 @@ enum SummaryRegenerator {
         else { return latest }
 
         var merged = latest
+        // Sections typed into while the model ran stay the person's, so the
+        // edited flag survives exactly when one of them does.
+        var keptNewerEdit = false
         // A Unicode normalization edit is still a deliberate source edit.
         // Swift's canonical String equality would give the model ownership
         // of that newer text again, including strings inside an array.
@@ -212,19 +218,30 @@ enum SummaryRegenerator {
         if latest.summary.utf8.elementsEqual(starting.summary.utf8) {
             merged.summary = regenerated.summary
             merged.summaryProvenance = regenerated.summaryProvenance
+        } else {
+            keptNewerEdit = true
         }
         if exactStringsEqual(latest.keyPoints, starting.keyPoints) {
             merged.keyPoints = regenerated.keyPoints
+        } else {
+            keptNewerEdit = true
         }
         if exactStringsEqual(latest.decisions, starting.decisions) {
             merged.decisions = regenerated.decisions
+        } else {
+            keptNewerEdit = true
         }
         if exactStringsEqual(latest.actionItems, starting.actionItems) {
             merged.actionItems = regenerated.actionItems
+        } else {
+            keptNewerEdit = true
         }
         if exactStringsEqual(latest.openQuestions, starting.openQuestions) {
             merged.openQuestions = regenerated.openQuestions
+        } else {
+            keptNewerEdit = true
         }
+        merged.summaryEditedByUser = latest.summaryEditedByUser && keptNewerEdit
         // Checkbox state is user-owned rather than model-owned. Keep the
         // freshest ticks, dropping only items that the accepted action-item
         // rewrite no longer contains.
@@ -238,7 +255,9 @@ enum SummaryRegenerator {
     /// Transcript wording/timing/source and the bounded guidance actually sent
     /// to the summarizer do. Never label old-input output as a fresh write-up.
     static func hasSameGenerationInput(_ starting: MeetingNote, _ latest: MeetingNote) -> Bool {
-        guard hasSameTranscriptInput(starting.transcript, latest.transcript) else { return false }
+        let starting = portable(starting)
+        let latest = portable(latest)
+        guard sameSegments(starting.transcript, latest.transcript) else { return false }
         return SummaryAttention(note: starting).rendered.utf8.elementsEqual(
             SummaryAttention(note: latest).rendered.utf8
         )
@@ -247,8 +266,40 @@ enum SummaryRegenerator {
     /// Initial, appended and explicit regeneration must agree on source
     /// equivalence. Segment row IDs are presentation identity, not model input.
     static func hasSameTranscriptInput(_ starting: [TranscriptSegment], _ latest: [TranscriptSegment]) -> Bool {
-        starting.count == latest.count
-            && zip(starting, latest).allSatisfy { left, right in
+        sameSegments(portableTranscript(starting), portableTranscript(latest))
+    }
+
+    /// Both sides are compared as the file holds them, never as one process
+    /// happened to hold them in memory.
+    ///
+    /// A note just written keeps its in-memory transcript: sub-second start
+    /// times and real durations. The library reloads the file whenever the
+    /// folder changes, and that copy has whole-second stamps, no durations,
+    /// and paragraphs rejoined by the reader. Comparing the two directly made
+    /// every reload that landed during a summary look like an edit, so new
+    /// recordings kept only their transcript highlights and reported that
+    /// the transcript had changed. Round-tripping both through Markdown keeps
+    /// a real edit (a changed line, My notes, a new flag) a change, and a
+    /// reload not.
+    static func portable(_ note: MeetingNote) -> MeetingNote {
+        MarkdownCodec.decode(MarkdownCodec.encode(note), fileURL: note.fileURL) ?? note
+    }
+
+    static func portableTranscript(_ transcript: [TranscriptSegment]) -> [TranscriptSegment] {
+        let probe = MeetingNote(
+            title: "Transcript",
+            startedAt: Date(timeIntervalSince1970: 0),
+            endedAt: Date(timeIntervalSince1970: 0),
+            sourceApp: "",
+            summary: "",
+            transcript: transcript
+        )
+        return MarkdownCodec.decode(MarkdownCodec.encode(probe))?.transcript ?? transcript
+    }
+
+    private static func sameSegments(_ left: [TranscriptSegment], _ right: [TranscriptSegment]) -> Bool {
+        left.count == right.count
+            && zip(left, right).allSatisfy { left, right in
                 left.startTime == right.startTime && left.duration == right.duration
                     && left.source == right.source && left.text.utf8.elementsEqual(right.text.utf8)
             }

@@ -113,6 +113,16 @@ struct SnapshotRenderer {
             throw SnapshotError.fixtureValidationFailed
         }
 
+        if mode.hasPrefix("library") {
+            // Folders are real directories in the notes folder; one note
+            // lives in a folder so the sidebar shows the section populated.
+            _ = try store.createFolder(named: "1:1 Massimo".replacingOccurrences(of: ":", with: ""))
+            _ = try store.createFolder(named: "Design reviews")
+            if let note = store.notes.first(where: { $0.id == fixtures[1].id }) {
+                _ = try store.move(note, toFolder: "Design reviews")
+            }
+        }
+
         let detector = MeetingDetector()
         let meeting = MeetingCoordinator(store: store, detector: detector)
         let markdownDraft = MarkdownDraftController()

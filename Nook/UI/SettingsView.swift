@@ -516,7 +516,7 @@ struct SettingsView: View {
                             ? "Accessibility access allowed"
                             : "Accessibility access required"
                     )
-                    .font(NookType.caption.weight(.semibold))
+                    .font(NookType.label)
                     Text("Typing into another app is something only macOS can permit. Nook uses it to place your dictated text and nothing else.")
                         .font(NookType.caption)
                         .foregroundStyle(.secondary)
@@ -648,7 +648,7 @@ struct SettingsView: View {
                 HStack(alignment: .top, spacing: NookSpacing.medium) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Restore keyboard shortcuts")
-                            .font(NookType.bodyEmphasized)
+                            .font(.body)
                         Text(
                             "Return every Nook shortcut to its original binding."
                         )
@@ -761,10 +761,15 @@ struct SettingsView: View {
 
     private func keyboardShortcutRow(for id: NookShortcutID) -> some View {
         VStack(alignment: .leading, spacing: NookSpacing.small) {
-            HStack(alignment: .top, spacing: NookSpacing.medium) {
+            // Every row has the same columns: scope, a reset slot that is
+            // always reserved, then the recorder, all centred on the row.
+            // Showing the reset button only when needed used to push that
+            // row's scope label sideways, and top alignment left the labels
+            // riding above the recorders.
+            HStack(alignment: .center, spacing: NookSpacing.medium) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(id.title)
-                        .font(NookType.bodyEmphasized)
+                        .font(.body)
                     Text(id.detail)
                         .font(NookType.caption)
                         .foregroundStyle(.secondary)
@@ -772,30 +777,32 @@ struct SettingsView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                HStack(alignment: .top, spacing: NookSpacing.small) {
+                HStack(alignment: .center, spacing: NookSpacing.small) {
                     Text(id.scopeLabel)
                         .font(NookType.metadata)
                         .foregroundStyle(.secondary)
+                        .frame(width: 72, alignment: .trailing)
                         .accessibilityLabel("\(id.title) scope")
                         .accessibilityValue(id.scopeDescription)
 
-                    if shortcuts.isOverridden(id) {
-                        Button {
-                            shortcuts.set(nil, for: id)
-                        } label: {
-                            Image(systemName: "arrow.counterclockwise")
-                                .font(NookType.caption)
-                                .frame(width: 24, height: 24)
-                        }
-                        .buttonStyle(.borderless)
-                        .help(
-                            "Restore \(id.title) to \(id.defaultShortcut.spokenDescription)."
-                        )
-                        .accessibilityLabel("Reset \(id.title) to default")
-                        .accessibilityValue(
-                            "Default \(id.defaultShortcut.displayString)"
-                        )
+                    Button {
+                        shortcuts.set(nil, for: id)
+                    } label: {
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(NookType.caption)
+                            .frame(width: 24, height: 24)
                     }
+                    .buttonStyle(.borderless)
+                    .opacity(shortcuts.isOverridden(id) ? 1 : 0)
+                    .disabled(!shortcuts.isOverridden(id))
+                    .accessibilityHidden(!shortcuts.isOverridden(id))
+                    .help(
+                        "Restore \(id.title) to \(id.defaultShortcut.spokenDescription)."
+                    )
+                    .accessibilityLabel("Reset \(id.title) to default")
+                    .accessibilityValue(
+                        "Default \(id.defaultShortcut.displayString)"
+                    )
 
                     ShortcutRecorderView(
                         shortcut: shortcuts.binding(for: id),
@@ -970,7 +977,7 @@ struct SettingsView: View {
                 // want to be able to trust.
                 if let signature {
                     Label(signature.label, systemImage: signature.symbol)
-                        .font(NookType.micro.weight(.semibold))
+                        .font(NookType.label)
                         .foregroundStyle(signature.tint)
                         .accessibilityLabel(signature.label)
                 } else {
@@ -980,7 +987,7 @@ struct SettingsView: View {
                     // is being verified reads as a warning about the very
                     // thing it is about to confirm.
                     Label("Checking", systemImage: "checkmark.seal")
-                        .font(NookType.micro.weight(.semibold))
+                        .font(NookType.label)
                         .opacity(0)
                         .accessibilityHidden(true)
                 }
@@ -1009,7 +1016,7 @@ struct SettingsView: View {
                     "Common Tools Co.",
                     destination: URL(string: "https://www.common-tools.co/")!
                 )
-                .font(.caption.weight(.semibold))
+                .font(NookType.label)
 
                 HStack(spacing: 6) {
                     Link(
@@ -1321,7 +1328,7 @@ private struct PrivacyFeatureRow: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
-                    .font(.caption.weight(.semibold))
+                    .font(NookType.label)
                 Text(detail)
                     .font(.caption)
                     .foregroundStyle(.secondary)

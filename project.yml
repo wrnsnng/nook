@@ -15,8 +15,8 @@ settings:
     SWIFT_VERSION: "6.0"
     MACOSX_DEPLOYMENT_TARGET: "26.0"
     CODE_SIGN_STYLE: Automatic
-    MARKETING_VERSION: "1.21.0"
-    CURRENT_PROJECT_VERSION: "38"
+    MARKETING_VERSION: "1.22.0"
+    CURRENT_PROJECT_VERSION: "39"
 packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
@@ -157,3 +157,9 @@ schemes:
     test:
       targets:
         - NookTests
+      # The test host is the app, and every MarkdownStore first scans the
+      # configured library. Without this that is ~/Documents/Nook: a fresh
+      # build then waits on the Documents privacy prompt and the whole test
+      # run stalls, and tests would read the developer's real notes.
+      commandLineArguments:
+        "-storageDirectory $(TARGET_TEMP_DIR)/TestLibrary": true

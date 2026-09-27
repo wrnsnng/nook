@@ -14,6 +14,10 @@ extension Notification.Name {
     static let nookOpenPrepBrief = Notification.Name(
         "com.localfirst.nook.open-prep-brief"
     )
+    /// File > New Folder: the library window should ask for a folder name.
+    static let nookNewFolder = Notification.Name(
+        "com.localfirst.nook.new-folder"
+    )
 }
 
 enum NookWindowRole: String, Hashable {
@@ -115,15 +119,23 @@ final class AppModel: ObservableObject {
         self.prep = prep
         self.audioInputCheck = audioInputCheck
         self.spotlight = MeetingSpotlightIndexer()
-        store.onStorageDirectoryWillChange = {
+        store.onStorageDirectoryWillChange = { [weak store] in
             markdownDraft.libraryWillChange()
             personalNotesDraft.libraryWillChange()
+            // Written while the old folder is still current, so the edits
+            // land in the file they were typed against.
+            if let store { _ = store.summaryEdits.saveIfNeeded(store: store) }
             quickNote.libraryWillChange()
             draftJournal.flushSynchronously()
         }
-        store.onNoteDeleted = { note in
+        store.isNoteBusy = { identity in
+            quickNote.isWriting(to: identity)
+                || meeting.activeAttachmentIdentity == identity
+        }
+        store.onNoteDeleted = { [weak store] note in
             markdownDraft.noteWasDeleted(note)
             personalNotesDraft.noteWasDeleted(note)
+            store?.summaryEdits.noteWasDeleted(note)
             quickNote.noteWasDeleted(note)
             for id in Self.recoveryIDs(forDeleted: note, in: draftJournal.recoveredDrafts) {
                 draftJournal.resolve(id)
@@ -378,6 +390,16 @@ final class AppModel: ObservableObject {
                 name: .nookOpenPrepBrief,
                 object: nil
             )
+        }
+    }
+
+    /// Opens the library and asks it for a new folder's name, with the same
+    /// delay as a targeted note so a window that is still opening receives it.
+    func requestNewFolder() {
+        openLibrary()
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(140))
+            NotificationCenter.default.post(name: .nookNewFolder, object: nil)
         }
     }
 

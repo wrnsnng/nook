@@ -211,7 +211,10 @@ struct LibraryInterfaceTests {
     @Test(arguments: [
         "/synthetic/Other/meeting.md",
         "/synthetic/Notes Copy/meeting.md",
-        "/synthetic/Notes/archive/meeting.md"
+        // One level down is a folder and belongs to the library. Deeper, or
+        // inside Nook's hidden storage, is not something the loader reads.
+        "/synthetic/Notes/archive/2025/meeting.md",
+        "/synthetic/Notes/.recordings/meeting.md"
     ])
     func librarySheetsRefuseSavedNotesFromOtherFoldersEvenWithMatchingIDs(
         otherPath: String
