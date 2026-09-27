@@ -89,8 +89,7 @@ enum AudioRetention {
         in directory: URL
     ) -> Bool {
         guard let file = note.fileURL,
-              file.deletingLastPathComponent().standardizedFileURL
-                == directory.standardizedFileURL,
+              LibraryFolders.contains(file, in: directory),
               let revision = note.fileRevision,
               let contents = try? Data(contentsOf: file)
         else { return false }

@@ -44,6 +44,13 @@ struct NookApp: App {
         .commands {
             CheckForUpdatesCommand(updater: updater)
 
+            CommandGroup(after: .newItem) {
+                Button("New Folder…") {
+                    appModel.requestNewFolder()
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+            }
+
             CommandMenu("Meeting") {
                 if appModel.meeting.phase.isRecording {
                     Button(

@@ -97,19 +97,24 @@ struct StorageInventoryTests {
     }
 
     @Test
-    func notesCountOnlyDirectVisibleMarkdownFilesWithoutReadingTheirContents() throws {
+    func notesCountVisibleMarkdownFilesInTheLibraryAndItsFoldersWithoutReadingTheirContents() throws {
         let fixture = try InventoryFixture()
         defer { fixture.remove() }
         try fixture.file("one.md", bytes: 12, mode: 0o000)
         try fixture.file("two.MD", bytes: 23)
         try fixture.file(".hidden.md", bytes: 300)
         try fixture.file("other.txt", bytes: 400)
-        try fixture.directory("nested")
-        try fixture.file("nested/not-in-library.md", bytes: 500)
+        try fixture.directory("Massimo")
+        try fixture.file("Massimo/in-a-folder.md", bytes: 5)
+        try fixture.file("Massimo/agenda.txt", bytes: 600)
+        try fixture.directory("Massimo/Archive")
+        try fixture.file("Massimo/Archive/too-deep.md", bytes: 700)
+        try fixture.directory(".recordings")
+        try fixture.file(".recordings/not-a-note.md", bytes: 800)
         let entry = try #require(scan(fixture.location(.notes, scope: .markdownFiles)).first)
         #expect(entry.status == .complete)
-        #expect(entry.fileCount == 2)
-        #expect(entry.bytes == 35)
+        #expect(entry.fileCount == 3)
+        #expect(entry.bytes == 40)
         #expect(entry.warnings.isEmpty)
         // The unreadable file is deliberately not even valid Markdown. Its
         // metadata alone must be enough, and inventory must not change mode.

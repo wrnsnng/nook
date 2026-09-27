@@ -796,8 +796,7 @@ final class QuickNoteController: ObservableObject {
             guard recoveryLibraryPath == nil
                     || recoveryLibraryPath == Self.libraryPath(store.storageURL),
                   let file = saved.fileURL,
-                  Self.libraryPath(file.deletingLastPathComponent())
-                    == Self.libraryPath(store.storageURL),
+                  LibraryFolders.contains(file, in: store.storageURL, resolvingSymlinks: true),
                   let revision = saved.fileRevision,
                   let current = try? Data(contentsOf: file),
                   MeetingNote.contentRevision(current) == revision else {
@@ -983,7 +982,7 @@ final class QuickNoteController: ObservableObject {
         guard target.id != recoveryNoteID,
               target.libraryIdentity != savedNote?.libraryIdentity,
               let file = target.fileURL, file.isFileURL,
-              Self.libraryPath(file.deletingLastPathComponent()) == Self.libraryPath(store.storageURL),
+              LibraryFolders.contains(file, in: store.storageURL, resolvingSymlinks: true),
               let current = store.note(matching: target.libraryIdentity),
               current.kind == target.kind else {
             message = "That note is no longer available in this notes folder. Choose a note again. Your words are still here."
@@ -1078,7 +1077,7 @@ final class QuickNoteController: ObservableObject {
             $0.id != recoveryNoteID && $0.libraryIdentity != savedNote?.libraryIdentity
                 && !store.duplicateNoteIDs.contains($0.id)
                 && $0.fileURL?.isFileURL == true
-                && $0.fileURL?.deletingLastPathComponent().standardizedFileURL == directory
+                && $0.fileURL.map { LibraryFolders.contains($0, in: directory) } == true
         }.sorted {
             if $0.startedAt != $1.startedAt { return $0.startedAt > $1.startedAt }
             return ($0.libraryIdentity.filePath ?? "") < ($1.libraryIdentity.filePath ?? "")
@@ -1421,6 +1420,15 @@ final class QuickNoteController: ObservableObject {
 
     /// Called only after an explicit deletion succeeded. It cannot allow a
     /// later autosave or assistant completion to recreate that deleted note.
+    /// Whether the pad still writes to this note's file. Its saved note is
+    /// an address captured at the first save, so moving that file away
+    /// would leave the pad's next save aimed at a path that is gone.
+    func isWriting(to identity: LibraryNoteIdentity) -> Bool {
+        // A dismissed pad starts over with a new note on its next
+        // presentation, unless a failed save kept its text on screen.
+        (isPresenting || hasUnsavedFailure) && savedNote?.libraryIdentity == identity
+    }
+
     func noteWasDeleted(_ note: MeetingNote) {
         guard savedNote?.id == note.id,
               savedNote?.fileURL?.standardizedFileURL

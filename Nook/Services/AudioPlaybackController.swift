@@ -18,9 +18,13 @@ final class AudioPlaybackController: NSObject, ObservableObject,
     private var playingURL: URL?
 
     /// Whether kept audio exists for a note, without starting anything.
-    static func audioURL(for note: MeetingNote) -> URL? {
+    ///
+    /// Kept audio lives at the library's root even when the note has been
+    /// moved into a folder, so the library the note belongs to is passed in
+    /// rather than guessed from the note's own directory.
+    static func audioURL(for note: MeetingNote, libraryURL: URL? = nil) -> URL? {
         guard let fileURL = note.fileURL else { return nil }
-        let candidate = fileURL.deletingLastPathComponent()
+        let candidate = LibraryFolders.libraryRoot(for: fileURL, expected: libraryURL)
             .appendingPathComponent(".recordings", isDirectory: true)
             .appendingPathComponent("\(note.id.uuidString).m4a")
         let values = try? candidate.resourceValues(forKeys: [.isRegularFileKey])

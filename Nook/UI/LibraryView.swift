@@ -70,11 +70,27 @@ enum LibraryDateRange: CaseIterable, Equatable {
     }
 }
 
+/// Which folder the note list shows. Folders are real directories inside
+/// the notes folder; `all` includes the root and every folder.
+enum LibraryFolderChoice: Hashable {
+    case all
+    case folder(String)
+
+    var name: String? {
+        if case .folder(let name) = self { return name }
+        return nil
+    }
+}
+
 /// A scope change must not hide the editor before its leave decision settles.
 /// Keeping the old range until confirmation makes Cancel a true no-op.
 struct LibraryScopeState: Equatable {
     private(set) var range: LibraryDateRange = .all
     private(set) var pendingRange: LibraryDateRange?
+    private(set) var folder: LibraryFolderChoice = .all
+    private(set) var pendingFolder: LibraryFolderChoice?
+
+    var hasPendingChange: Bool { pendingRange != nil || pendingFolder != nil }
 
     mutating func request(_ value: LibraryDateRange, needsConfirmation: Bool) {
         if needsConfirmation {
@@ -85,9 +101,33 @@ struct LibraryScopeState: Equatable {
         }
     }
 
+    mutating func requestFolder(_ value: LibraryFolderChoice, needsConfirmation: Bool) {
+        if needsConfirmation {
+            pendingFolder = value
+        } else {
+            folder = value
+            pendingFolder = nil
+        }
+    }
+
     mutating func settle(confirmed: Bool) {
         if confirmed, let pendingRange { range = pendingRange }
+        if confirmed, let pendingFolder { folder = pendingFolder }
         pendingRange = nil
+        pendingFolder = nil
+    }
+
+    /// A folder renamed in Nook keeps being the one on screen. One removed
+    /// anywhere widens the list back to every note, which never hides the
+    /// note being edited.
+    mutating func folderWasRenamed(from oldName: String, to newName: String) {
+        if folder == .folder(oldName) { folder = .folder(newName) }
+        if pendingFolder == .folder(oldName) { pendingFolder = .folder(newName) }
+    }
+
+    mutating func keepOnlyFolders(_ names: [String]) {
+        if let name = folder.name, !names.contains(name) { folder = .all }
+        if let name = pendingFolder?.name, !names.contains(name) { pendingFolder = .all }
     }
 
     static func visibleSelection(
@@ -105,6 +145,7 @@ enum LibraryPlaceholderState: Equatable {
     case loading
     case loadFailure
     case emptyDay(LibraryDateRange)
+    case emptyFolder(String)
     case noSearchMatches
     case emptyLibrary
     case noSelection
@@ -115,26 +156,27 @@ enum LibraryPlaceholderState: Equatable {
         range: LibraryDateRange,
         hasVisibleNotes: Bool,
         hasSearch: Bool,
-        hasLoadError: Bool
+        hasLoadError: Bool,
+        folder: String? = nil
     ) -> Self {
         if isLoading { return .loading }
         if !hasNotes, hasLoadError { return .loadFailure }
         if range != .all, !hasVisibleNotes { return .emptyDay(range) }
+        if let folder, !hasSearch, !hasVisibleNotes { return .emptyFolder(folder) }
         if hasSearch, !hasVisibleNotes { return .noSearchMatches }
         return hasNotes ? .noSelection : .emptyLibrary
     }
 }
 
 /// A failed or pending folder reload can leave the previous models visible.
-/// The loader reads direct Markdown children, so saved addresses must belong
-/// to this exact parent before a new Ask or palette session can use them.
+/// The loader reads Markdown in the notes folder and its folders, so saved
+/// addresses must belong to this library before a new Ask or palette session
+/// can use them.
 enum LibrarySheetOwnership {
     static func matchesCurrentFolder(_ notes: [MeetingNote], directoryURL: URL) -> Bool {
-        let directoryPath = directoryURL.standardizedFileURL.path
-        return notes.allSatisfy { note in
+        notes.allSatisfy { note in
             guard let fileURL = note.fileURL else { return true }
-            return fileURL.deletingLastPathComponent().standardizedFileURL.path
-                == directoryPath
+            return LibraryFolders.contains(fileURL, in: directoryURL)
         }
     }
 }
@@ -170,14 +212,38 @@ enum LibraryNoteGrouping {
         _ notes: [MeetingNote],
         range: LibraryDateRange,
         matchingIDs: Set<LibraryNoteIdentity>?,
+        folder: LibraryFolderChoice = .all,
+        libraryURL: URL? = nil,
         calendar: Calendar = .current,
         referenceDate: Date = Date()
     ) -> [MeetingNote] {
         let result = notes.filter {
             range.contains($0.startedAt, relativeTo: referenceDate, calendar: calendar)
+                && isInFolder($0, folder, libraryURL: libraryURL)
         }
         guard let matchingIDs else { return result }
         return result.filter { matchingIDs.contains($0.libraryIdentity) }
+    }
+
+    static func isInFolder(
+        _ note: MeetingNote,
+        _ folder: LibraryFolderChoice,
+        libraryURL: URL?
+    ) -> Bool {
+        guard let name = folder.name else { return true }
+        guard let file = note.fileURL, let libraryURL else { return false }
+        return LibraryFolders.folderName(of: file, in: libraryURL) == name
+    }
+
+    /// Notes per folder, for the sidebar's folder rows.
+    static func folderCounts(_ notes: [MeetingNote], libraryURL: URL) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for note in notes {
+            guard let file = note.fileURL,
+                  let name = LibraryFolders.folderName(of: file, in: libraryURL) else { continue }
+            counts[name, default: 0] += 1
+        }
+        return counts
     }
 
     static func group(
@@ -259,12 +325,14 @@ struct LibraryGroupingCacheKey: Equatable {
     let notesFingerprint: Int
     let matchingIDs: Set<LibraryNoteIdentity>?
     let range: LibraryDateRange
+    let folder: LibraryFolderChoice
     let day: Date
 
     init(
         notes: [MeetingNote],
         matchingIDs: Set<LibraryNoteIdentity>?,
         range: LibraryDateRange,
+        folder: LibraryFolderChoice = .all,
         now: Date = Date(),
         calendar: Calendar = .current
     ) {
@@ -272,6 +340,7 @@ struct LibraryGroupingCacheKey: Equatable {
         self.notesFingerprint = Self.fingerprint(of: notes)
         self.matchingIDs = matchingIDs
         self.range = range
+        self.folder = folder
         self.day = calendar.startOfDay(for: now)
     }
 
@@ -419,6 +488,18 @@ struct LibraryView: View {
     private var openActionsExpanded = true
     @AppStorage("library.openActionsShowAll")
     private var openActionsShowAll = false
+    @AppStorage("library.foldersExpanded") private var foldersExpanded = true
+    /// Notes per folder, refreshed with the grouping cache rather than on
+    /// every render of the sidebar.
+    @State private var folderCounts: [String: Int] = [:]
+    @State private var folderNameDraft = ""
+    @State private var showsNewFolderAlert = false
+    /// A note waiting to move into the folder being named, when New Folder
+    /// was chosen from its Move To menu.
+    @State private var noteAwaitingNewFolder: MeetingNote?
+    @State private var folderPendingRename: String?
+    @State private var folderPendingDeletion: String?
+    @State private var dropTargetFolder: String?
 
     init(initialNoteID: MeetingNote.ID? = nil) {
         _selection = State(
@@ -443,7 +524,8 @@ struct LibraryView: View {
         LibraryGroupingCacheKey(
             notes: store.notes,
             matchingIDs: searchController.matchingIDs,
-            range: range
+            range: range,
+            folder: scope.folder
         )
     }
 
@@ -458,8 +540,11 @@ struct LibraryView: View {
         let filtered = LibraryNoteGrouping.filter(
             store.notes,
             range: range,
-            matchingIDs: searchController.matchingIDs
+            matchingIDs: searchController.matchingIDs,
+            folder: scope.folder,
+            libraryURL: store.storageURL
         )
+        folderCounts = LibraryNoteGrouping.folderCounts(store.notes, libraryURL: store.storageURL)
         cachedFilteredNotes = filtered
         cachedGroupedNotes = LibraryNoteGrouping.group(filtered)
     }
@@ -603,6 +688,14 @@ struct LibraryView: View {
             }
         }
         .onReceive(
+            NotificationCenter.default.publisher(for: .nookNewFolder)
+        ) { _ in
+            presentNewFolder()
+        }
+        .onChange(of: store.folders) { _, folders in
+            scope.keepOnlyFolders(folders)
+        }
+        .onReceive(
             NotificationCenter.default.publisher(for: .nookOpenPrepBrief)
         ) { _ in
             guard prep.current != nil else { return }
@@ -676,7 +769,7 @@ struct LibraryView: View {
 
     /// The sheets and alerts the library can raise over itself.
     private var librarySheets: some View {
-        libraryEvents
+        libraryFolderAlerts
         .sheet(item: $mergeTarget) { target in
             NoteMergePickerView(
                 target: target,
@@ -740,6 +833,49 @@ struct LibraryView: View {
             }
         } message: {
             Text("This meeting has edits that haven’t been written to its Markdown file.")
+        }
+    }
+
+    /// Naming, renaming and removing folders. Split from `librarySheets` for
+    /// the same type-check budget reason as the body.
+    private var libraryFolderAlerts: some View {
+        libraryEvents
+        .alert("New Folder", isPresented: $showsNewFolderAlert) {
+            TextField("Name", text: $folderNameDraft)
+            Button("Create") { createFolderFromDraft() }
+            Button("Cancel", role: .cancel) { noteAwaitingNewFolder = nil }
+        } message: {
+            Text("The folder is created inside your notes folder on this Mac.")
+        }
+        .alert(
+            "Rename Folder",
+            isPresented: Binding(
+                get: { folderPendingRename != nil },
+                set: { if !$0 { folderPendingRename = nil } }
+            )
+        ) {
+            TextField("Name", text: $folderNameDraft)
+            Button("Rename") { renameFolderFromDraft() }
+            Button("Cancel", role: .cancel) { folderPendingRename = nil }
+        } message: {
+            Text("The folder is renamed on disk too. The notes inside it are not changed.")
+        }
+        .alert(
+            "Delete “\(folderPendingDeletion ?? "")”?",
+            isPresented: Binding(
+                get: { folderPendingDeletion != nil },
+                set: { if !$0 { folderPendingDeletion = nil } }
+            )
+        ) {
+            Button("Delete Folder", role: .destructive) {
+                if let name = folderPendingDeletion { deleteFolder(name) }
+                folderPendingDeletion = nil
+            }
+            Button("Cancel", role: .cancel) { folderPendingDeletion = nil }
+        } message: {
+            Text(LibraryFolderCopy.deletionMessage(
+                noteCount: folderPendingDeletion.map { folderCounts[$0] ?? 0 } ?? 0
+            ))
         }
     }
 
@@ -927,6 +1063,8 @@ struct LibraryView: View {
 
             LibraryLiveSection(selection: selection)
 
+            foldersSection
+
             if let lastError = store.lastError {
                 Section("Library status") {
                     VStack(alignment: .leading, spacing: 8) {
@@ -1015,10 +1153,12 @@ struct LibraryView: View {
                             showsFileIdentity: store.duplicateNoteIDs.contains(note.id)
                         )
                         .tag(LibrarySelection.note(note.libraryIdentity))
+                        .draggable(LibraryNoteDrag.payload(for: note))
                         .contextMenu {
                             Button("Show in Finder") {
                                 store.reveal(note)
                             }
+                            moveToMenu(for: note)
                             Button("Copy Markdown") {
                                 NSPasteboard.general.clearContents()
                                 NSPasteboard.general.setString(
@@ -1067,6 +1207,113 @@ struct LibraryView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             sidebarFooter
         }
+    }
+
+    /// Folders, like the folder list in Notes. Each is a real directory in
+    /// the notes folder; choosing one narrows the notes below to it.
+    private var foldersSection: some View {
+        Section(isExpanded: $foldersExpanded) {
+            LibraryFolderRow(
+                title: "All Notes",
+                systemImage: "tray.full",
+                count: nil,
+                isSelected: scope.folder == .all,
+                isDropTarget: false
+            ) {
+                requestFolderChange(.all)
+            }
+            ForEach(store.folders, id: \.self) { name in
+                LibraryFolderRow(
+                    title: name,
+                    systemImage: "folder",
+                    count: folderCounts[name] ?? 0,
+                    isSelected: scope.folder == .folder(name),
+                    isDropTarget: dropTargetFolder == name
+                ) {
+                    requestFolderChange(.folder(name))
+                }
+                .dropDestination(for: String.self) { items, _ in
+                    moveDroppedNotes(items, toFolder: name)
+                } isTargeted: { isTargeted in
+                    if isTargeted {
+                        dropTargetFolder = name
+                    } else if dropTargetFolder == name {
+                        dropTargetFolder = nil
+                    }
+                }
+                .contextMenu {
+                    Button("Rename Folder…") {
+                        folderNameDraft = name
+                        folderPendingRename = name
+                    }
+                    Button("Show in Finder") {
+                        if let url = store.existingFolderURL(named: name) {
+                            NSWorkspace.shared.activateFileViewerSelecting([url])
+                        }
+                    }
+                    Divider()
+                    Button("New Folder…", action: presentNewFolder)
+                    Divider()
+                    Button("Delete Folder…", role: .destructive) {
+                        folderPendingDeletion = name
+                    }
+                }
+            }
+        } header: {
+            HStack(spacing: 4) {
+                Text("Folders")
+                Spacer(minLength: 0)
+                Button(action: presentNewFolder) {
+                    Image(systemName: "folder.badge.plus")
+                }
+                .buttonStyle(.borderless)
+                .help("New Folder")
+                .accessibilityLabel("New Folder")
+            }
+            .contextMenu {
+                Button("New Folder…", action: presentNewFolder)
+            }
+        }
+    }
+
+    /// Move To lists every folder and the library's root. The note's own
+    /// location is shown checked rather than offered as a no-op move.
+    @ViewBuilder
+    private func moveToMenu(for note: MeetingNote) -> some View {
+        let current = store.folderName(of: note)
+        Menu("Move To") {
+            Button {
+                moveNote(note, toFolder: nil)
+            } label: {
+                if current == nil {
+                    Label("Library", systemImage: "checkmark")
+                } else {
+                    Text("Library")
+                }
+            }
+            .disabled(current == nil)
+            if !store.folders.isEmpty {
+                Divider()
+                ForEach(store.folders, id: \.self) { name in
+                    Button {
+                        moveNote(note, toFolder: name)
+                    } label: {
+                        if current == name {
+                            Label(name, systemImage: "checkmark")
+                        } else {
+                            Text(name)
+                        }
+                    }
+                    .disabled(current == name)
+                }
+            }
+            Divider()
+            Button("New Folder…") {
+                noteAwaitingNewFolder = note
+                presentNewFolder()
+            }
+        }
+        .disabled(note.fileURL == nil || store.duplicateNoteIDs.contains(note.id))
     }
 
     private func sidebarSectionHeader(_ title: String) -> some View {
@@ -1253,7 +1500,8 @@ struct LibraryView: View {
             range: range,
             hasVisibleNotes: !filteredNotes.isEmpty,
             hasSearch: !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-            hasLoadError: store.lastError != nil
+            hasLoadError: store.lastError != nil,
+            folder: scope.folder.name
         ) {
         case .loading:
             VStack(spacing: 12) {
@@ -1284,6 +1532,14 @@ struct LibraryView: View {
                 Text("Change the range to All to see your whole library.")
             } actions: {
                 Button("Show All Notes") { requestScopeChange(.all) }
+            }
+        case .emptyFolder(let name):
+            ContentUnavailableView {
+                Label("No notes in \(name)", systemImage: "folder")
+            } description: {
+                Text("Drag a note onto this folder in the sidebar, or choose Move To from a note’s menu.")
+            } actions: {
+                Button("Show All Notes") { requestFolderChange(.all) }
             }
         case .noSearchMatches:
             ContentUnavailableView.search(text: searchText)
@@ -1359,7 +1615,7 @@ struct LibraryView: View {
 
     private func requestScopeChange(_ requestedScope: LibraryDateRange) {
         guard requestedScope != range, !showsUnsavedChangesAlert else { return }
-        let target = selectionForScope(requestedScope)
+        let target = selectionForScope(requestedScope, folder: scope.folder)
         // The editor can stay put when its file also belongs to the new range.
         // There is no leave decision to ask about in that case.
         if target == selection {
@@ -1370,7 +1626,23 @@ struct LibraryView: View {
         }
     }
 
-    private func selectionForScope(_ requestedScope: LibraryDateRange) -> LibrarySelection? {
+    /// Narrows the list to one folder through the same leave decision as
+    /// the date range, so an unsaved edit is never hidden without asking.
+    private func requestFolderChange(_ requestedFolder: LibraryFolderChoice) {
+        guard requestedFolder != scope.folder, !showsUnsavedChangesAlert else { return }
+        let target = selectionForScope(range, folder: requestedFolder)
+        if target == selection {
+            scope.requestFolder(requestedFolder, needsConfirmation: false)
+            refreshLibraryCacheIfNeeded()
+        } else {
+            requestSelection(target, changingFolderTo: requestedFolder)
+        }
+    }
+
+    private func selectionForScope(
+        _ requestedScope: LibraryDateRange,
+        folder requestedFolder: LibraryFolderChoice
+    ) -> LibrarySelection? {
         switch selection {
         case .live, .prep:
             // These standing sections are visible in every date range.
@@ -1378,7 +1650,9 @@ struct LibraryView: View {
         default:
             let visible = LibraryNoteGrouping.filter(
                 store.notes, range: requestedScope,
-                matchingIDs: searchController.matchingIDs
+                matchingIDs: searchController.matchingIDs,
+                folder: requestedFolder,
+                libraryURL: store.storageURL
             )
             let current: LibraryNoteIdentity?
             if case .note(let identity) = selection { current = identity }
@@ -1390,7 +1664,8 @@ struct LibraryView: View {
 
     private func requestSelection(
         _ requestedSelection: LibrarySelection?,
-        changingScopeTo requestedScope: LibraryDateRange? = nil
+        changingScopeTo requestedScope: LibraryDateRange? = nil,
+        changingFolderTo requestedFolder: LibraryFolderChoice? = nil
     ) {
         // A background reload must not replace the destination of a question
         // the user is already answering, including its pending date range.
@@ -1407,10 +1682,7 @@ struct LibraryView: View {
         ) else { return }
         switch decision {
         case .leave:
-            if let requestedScope {
-                scope.request(requestedScope, needsConfirmation: false)
-                refreshLibraryCacheIfNeeded()
-            }
+            applyScopeRequest(requestedScope, requestedFolder, needsConfirmation: false)
             selection = requestedSelection
         case .saveFirst:
             // Written rather than queried: this field has one destination and
@@ -1421,18 +1693,28 @@ struct LibraryView: View {
                 showCopyNotice(failure, severity: .failure)
                 return
             }
-            if let requestedScope {
-                scope.request(requestedScope, needsConfirmation: false)
-                refreshLibraryCacheIfNeeded()
-            }
+            applyScopeRequest(requestedScope, requestedFolder, needsConfirmation: false)
             selection = requestedSelection
         case .askAboutMarkdown:
             pendingSelection = requestedSelection
-            if let requestedScope {
-                scope.request(requestedScope, needsConfirmation: true)
-            }
+            applyScopeRequest(requestedScope, requestedFolder, needsConfirmation: true)
             showsUnsavedChangesAlert = true
         }
+    }
+
+    private func applyScopeRequest(
+        _ requestedScope: LibraryDateRange?,
+        _ requestedFolder: LibraryFolderChoice?,
+        needsConfirmation: Bool
+    ) {
+        guard requestedScope != nil || requestedFolder != nil else { return }
+        if let requestedScope {
+            scope.request(requestedScope, needsConfirmation: needsConfirmation)
+        }
+        if let requestedFolder {
+            scope.requestFolder(requestedFolder, needsConfirmation: needsConfirmation)
+        }
+        if !needsConfirmation { refreshLibraryCacheIfNeeded() }
     }
 
     private func saveDraftAndContinue() {
@@ -1474,7 +1756,7 @@ struct LibraryView: View {
         // blocking the selection the user already confirmed.
         if let failure = personalNotesDraft.saveIfNeeded(store: store) {
             showCopyNotice(failure, severity: .failure)
-            if scope.pendingRange != nil || pendingMergeTarget != nil {
+            if scope.hasPendingChange || pendingMergeTarget != nil {
                 scope.settle(confirmed: false)
                 pendingSelection = nil
                 pendingMergeTarget = nil
@@ -1493,8 +1775,11 @@ struct LibraryView: View {
         // Saving can publish a different library snapshot. Resolve the range
         // again instead of selecting a file removed while the alert was open.
         let next: LibrarySelection?
-        if let requestedScope = scope.pendingRange {
-            next = selectionForScope(requestedScope)
+        if scope.hasPendingChange {
+            next = selectionForScope(
+                scope.pendingRange ?? range,
+                folder: scope.pendingFolder ?? scope.folder
+            )
         } else {
             next = pendingSelection
         }
@@ -1534,13 +1819,123 @@ struct LibraryView: View {
         }
     }
 
+    // MARK: - Folders
+
+    private func presentNewFolder() {
+        guard !showsNewFolderAlert else { return }
+        folderNameDraft = ""
+        foldersExpanded = true
+        showsNewFolderAlert = true
+    }
+
+    private func createFolderFromDraft() {
+        let pendingNote = noteAwaitingNewFolder
+        noteAwaitingNewFolder = nil
+        do {
+            let name = try store.createFolder(named: folderNameDraft)
+            if let pendingNote {
+                moveNote(pendingNote, toFolder: name)
+            } else {
+                showCopyNotice("Folder “\(name)” created")
+            }
+        } catch {
+            showCopyNotice(error.localizedDescription, severity: .failure)
+        }
+    }
+
+    private func renameFolderFromDraft() {
+        guard let oldName = folderPendingRename else { return }
+        folderPendingRename = nil
+        do {
+            try settleDraftsBeforeMoving()
+            let newName = try store.renameFolder(oldName, to: folderNameDraft)
+            scope.folderWasRenamed(from: oldName, to: newName)
+            followMovedSelection()
+            refreshLibraryCacheIfNeeded()
+        } catch {
+            showCopyNotice(error.localizedDescription, severity: .failure)
+        }
+    }
+
+    private func deleteFolder(_ name: String) {
+        do {
+            try settleDraftsBeforeMoving()
+            try store.deleteFolder(name)
+            followMovedSelection()
+            showCopyNotice("Folder “\(name)” deleted")
+        } catch {
+            followMovedSelection()
+            showCopyNotice(error.localizedDescription, severity: .failure)
+        }
+    }
+
+    private func moveDroppedNotes(_ items: [String], toFolder name: String) -> Bool {
+        dropTargetFolder = nil
+        let identities = items.compactMap(LibraryNoteDrag.identity(from:))
+        guard !identities.isEmpty else { return false }
+        for identity in identities {
+            guard let note = store.note(matching: identity) else { continue }
+            moveNote(note, toFolder: name)
+        }
+        return true
+    }
+
+    /// Moves a note's file between folders. The editors are settled first,
+    /// as for a merge: a Markdown source edit needs its own Save or Discard,
+    /// and My notes are written to the file before the file moves.
+    private func moveNote(_ note: MeetingNote, toFolder folder: String?) {
+        guard mergeTask == nil else {
+            showCopyNotice(LibraryFolderError.noteIsBusy.localizedDescription, severity: .info)
+            return
+        }
+        do {
+            try settleDraftsBeforeMoving(note)
+            guard let current = store.note(matching: note.libraryIdentity) else {
+                throw MarkdownStoreError.fileChangedElsewhere
+            }
+            if store.folderName(of: current) == folder { return }
+            let moved = try store.move(current, toFolder: folder)
+            if selection == .note(note.libraryIdentity) {
+                selection = .note(moved.libraryIdentity)
+            }
+            showCopyNotice("Moved to \(folder ?? "Library")")
+        } catch {
+            showCopyNotice(error.localizedDescription, severity: .failure)
+        }
+    }
+
+    /// Only the Markdown source for the note being moved blocks a move; any
+    /// other unsaved source edit keeps its own owner and its own question.
+    private func settleDraftsBeforeMoving(_ note: MeetingNote? = nil) throws {
+        if markdownDraft.hasChanges {
+            let affected = note.map { markdownDraft.libraryIdentity == $0.libraryIdentity } ?? true
+            if affected { throw LibraryFolderError.unfinishedMarkdown }
+        }
+        if let reason = personalNotesDraft.saveIfNeeded(store: store) {
+            throw LibraryFolderError.draftSaveFailed(reason)
+        }
+    }
+
+    /// A folder rename or removal moves every file inside it. The selected
+    /// note follows its file rather than falling back to the first note.
+    private func followMovedSelection() {
+        guard case .note(let identity) = selection,
+              store.note(matching: identity) == nil,
+              let moved = store.uniqueNote(id: identity.noteID) else { return }
+        selection = .note(moved.libraryIdentity)
+    }
+
     private func createBlankNote() {
         createNote(from: .blank)
     }
 
     private func createNote(from template: NoteTemplate) {
         do {
-            let note = try store.createTemplatedNote(from: template)
+            // A note made while a folder is on screen belongs in it, the
+            // way a new note lands in the selected folder in Notes.
+            let note = try store.createTemplatedNote(
+                from: template, inFolder: scope.folder.name
+            )
             requestSelection(.note(note.libraryIdentity))
         } catch {
             store.lastError = error.localizedDescription
@@ -2461,5 +2856,83 @@ private struct NoteMergePickerView: View {
         }
         .padding(22)
         .frame(width: 460)
+    }
+}
+
+/// What a dragged note row carries. A private text form rather than the
+/// file's URL: a file URL dropped on Finder would move or copy the Markdown
+/// behind Nook's back, while this names the note only to Nook's own folders.
+enum LibraryNoteDrag {
+    private static let prefix = "nook-note:"
+
+    static func payload(for note: MeetingNote) -> String {
+        prefix + note.libraryIdentity.noteID.uuidString + ":" + (note.libraryIdentity.filePath ?? "")
+    }
+
+    static func identity(from payload: String) -> LibraryNoteIdentity? {
+        guard payload.hasPrefix(prefix) else { return nil }
+        let body = payload.dropFirst(prefix.count)
+        guard let separator = body.firstIndex(of: ":"),
+              let id = UUID(uuidString: String(body[..<separator])) else { return nil }
+        let path = String(body[body.index(after: separator)...])
+        guard path.hasPrefix("/") else { return nil }
+        return LibraryNoteIdentity(noteID: id, fileURL: URL(fileURLWithPath: path))
+    }
+}
+
+enum LibraryFolderCopy {
+    static func deletionMessage(noteCount: Int) -> String {
+        switch noteCount {
+        case 0:
+            "The empty folder is removed from your notes folder."
+        case 1:
+            "Its note moves back to your library. No notes are deleted."
+        default:
+            "Its \(noteCount) notes move back to your library. No notes are deleted."
+        }
+    }
+}
+
+/// A folder in the sidebar. A button rather than a list selection: the
+/// sidebar's selection is the open note, and a folder only narrows the list.
+private struct LibraryFolderRow: View {
+    let title: String
+    let systemImage: String
+    let count: Int?
+    let isSelected: Bool
+    let isDropTarget: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Label {
+                    Text(title)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                } icon: {
+                    Image(systemName: isSelected ? "\(systemImage).fill" : systemImage)
+                        .foregroundStyle(NookPalette.accent)
+                }
+                Spacer(minLength: 4)
+                if let count {
+                    Text(count, format: .number)
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 2)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .fontWeight(isSelected ? .semibold : .regular)
+        .listRowBackground(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(NookPalette.accent.opacity(isDropTarget ? 0.28 : isSelected ? 0.14 : 0))
+                .padding(.horizontal, 8)
+        )
+        .accessibilityLabel(count.map { "\(title), \($0) notes" } ?? title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }

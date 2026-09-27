@@ -34,7 +34,7 @@ struct StorageInventoryLocation: Identifiable, Hashable, Sendable {
 
     var detail: String {
         switch id {
-        case .notes: "Markdown files directly in the current notes folder."
+        case .notes: "Markdown files in the current notes folder and its folders."
         case .interruptedSaves: "Known temporary save files in this notes folder. They may contain unfinished writing. Review them before deciding what to keep."
         case .recordings: "Kept audio, unfinished recordings, and their recovery files."
         case .drafts: "Recovery copies of unfinished writing, including current drafts."
@@ -159,7 +159,7 @@ enum StorageInventoryScanner {
                     var metadata = stat()
                     guard fstat(directory, &metadata) == 0 else { throw MetadataError(code: errno) }
                     walk(
-                        directory, rootDevice: metadata.st_dev, depth: 0,
+                        directory, url: location.url, rootDevice: metadata.st_dev, depth: 0,
                         entry: &entry, budget: &budget, cancellation: cancellation
                     )
                 }
@@ -191,6 +191,7 @@ enum StorageInventoryScanner {
 
     private static func walk(
         _ descriptor: Int32,
+        url directoryURL: URL,
         rootDevice: dev_t,
         depth: Int,
         entry: inout StorageInventoryEntry,
@@ -221,18 +222,23 @@ enum StorageInventoryScanner {
             }
             guard name != ".", name != ".." else { continue }
             budget.visited += 1
-            if entry.location.scope == .markdownFiles,
-               (name.hasPrefix(".") || !(name as NSString).pathExtension.lowercased().elementsEqual("md")) {
-                continue
-            }
-            if entry.location.scope == .interruptedSaveFiles, !isSaveStage(name) { continue }
+            let scope = entry.location.scope
+            let isMarkdown = !name.hasPrefix(".")
+                && (name as NSString).pathExtension.lowercased().elementsEqual("md")
+            // Notes, and the save stages written beside them, also live one
+            // level down in the library's folders. Nothing deeper is loaded.
+            let mayBeLibraryFolder = depth == 0
+                && (scope == .markdownFiles || scope == .interruptedSaveFiles)
+                && LibraryFolders.isFolderName(name)
+            if scope == .markdownFiles, !isMarkdown, !mayBeLibraryFolder { continue }
+            if scope == .interruptedSaveFiles, !isSaveStage(name), !mayBeLibraryFolder { continue }
             var metadata = stat()
             guard fstatat(descriptor, name, &metadata, AT_SYMLINK_NOFOLLOW) == 0 else {
                 entry.warnings.insert(.metadata)
                 continue
             }
             if metadata.st_mode & S_IFMT == S_IFDIR {
-                guard entry.location.scope == .directoryTree else { continue }
+                guard scope == .directoryTree || mayBeLibraryFolder else { continue }
                 guard depth < budget.limits.depth else { entry.warnings.insert(.scanLimit); continue }
                 guard metadata.st_dev == rootDevice else { entry.warnings.insert(.mountedFolder); continue }
                 let child = openat(descriptor, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
@@ -240,17 +246,20 @@ enum StorageInventoryScanner {
                 var opened = stat()
                 if fstat(child, &opened) == 0,
                    opened.st_ino == metadata.st_ino, opened.st_dev == metadata.st_dev {
-                    walk(child, rootDevice: rootDevice, depth: depth + 1,
+                    walk(child, url: directoryURL.appendingPathComponent(name, isDirectory: true),
+                         rootDevice: rootDevice, depth: depth + 1,
                          entry: &entry, budget: &budget, cancellation: cancellation)
                 } else {
                     entry.warnings.insert(.metadata)
                 }
                 close(child)
             } else {
+                if scope == .markdownFiles, !isMarkdown { continue }
+                if scope == .interruptedSaveFiles, !isSaveStage(name) { continue }
                 count(metadata, into: &entry)
-                if entry.location.scope == .interruptedSaveFiles,
+                if scope == .interruptedSaveFiles,
                    metadata.st_mode & S_IFMT == S_IFREG, entry.sampleFiles.count < 5 {
-                    entry.sampleFiles.append(entry.location.url.appendingPathComponent(name))
+                    entry.sampleFiles.append(directoryURL.appendingPathComponent(name))
                 }
             }
         }
