@@ -45,6 +45,9 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 - Hiding the notch during a recording shows the small recording pill beside
   the camera again. It could stay folded inside the camera housing, where it
   reacted to the pointer but could not be clicked to bring the panel back.
+- Settings, Keyboard lines up again: each row's scope, reset button and
+  shortcut sit in the same columns, centred on the row, and the Recording
+  footer says that Take a Note also works from any app while recording.
 
 ## 1.21.0
 
