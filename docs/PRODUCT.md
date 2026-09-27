@@ -163,6 +163,20 @@ does not silently cover neighbouring menu-bar items.
 The library groups meetings by date and searches across titles, summaries,
 structured outcomes, personal notes, transcript text, and metadata.
 
+Folders are real directories in the notes folder. Nook suggests one, and only
+one, for a note at the library's root when the evidence is clear: earlier
+sittings of the same series are filed there, the folder's name (such as the
+person in "1:1 Massimo") is in the title or is a named speaker, or the title's
+distinctive words belong to that folder's notes. The suggestion is a quiet line
+under the title with Move and a dismiss button; a dismissed suggestion does not
+come back. Nook moves a note by itself in exactly one case: a newly recorded
+meeting that continues a recurring series whose earlier sittings are
+consistently in one folder. It says so in a notice with Undo, and "File
+recurring meetings automatically" in Settings > General turns that off (the
+meeting then gets the suggestion instead). A note the person moved, including
+one moved back with Undo, is never filed again. No suggestion is better than a
+wrong one, so weak or conflicting evidence produces nothing.
+
 The detail surface has three views:
 
 - **Notes:** the summary ("In summary", set apart as the lead of the page), key

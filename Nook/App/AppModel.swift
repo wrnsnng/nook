@@ -64,6 +64,7 @@ final class AppModel: ObservableObject {
     let recovery: RecordingRecovery
     let audioInputCheck: AudioInputCheckService
     let spotlight: MeetingSpotlightIndexer
+    let folderFiler: FolderAutoFiler
     private let dictationIndicator = DictationIndicatorController()
     private var openLibraryAction: (@MainActor () -> Void)?
     private var openWelcomeAction: (@MainActor () -> Void)?
@@ -131,6 +132,22 @@ final class AppModel: ObservableObject {
         store.isNoteBusy = { identity in
             quickNote.isWriting(to: identity)
                 || meeting.activeAttachmentIdentity == identity
+        }
+        let folderFiler = FolderAutoFiler(store: store)
+        folderFiler.calendarRecurrence = { [weak calendar] title, startedAt in
+            await calendar?.isRecurringEvent(titled: title, startedAt: startedAt) ?? false
+        }
+        folderFiler.hasUnsavedEdits = { [weak store] note in
+            (markdownDraft.hasChanges && markdownDraft.libraryIdentity == note.libraryIdentity)
+                || (personalNotesDraft.hasChanges && personalNotesDraft.noteID == note.id)
+                || store?.summaryEdits.hasChanges(for: note) == true
+        }
+        folderFiler.onFiled = { filing in
+            NotificationCenter.default.post(name: .nookNoteAutoFiled, object: filing)
+        }
+        self.folderFiler = folderFiler
+        meeting.onNewMeetingSaved = { note, summary in
+            folderFiler.newMeetingSaved(note, after: summary)
         }
         store.onNoteDeleted = { [weak store] note in
             markdownDraft.noteWasDeleted(note)

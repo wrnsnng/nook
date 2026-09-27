@@ -72,9 +72,11 @@ access at that moment, then:
 
 - names a detected meeting after its nearby event, instead of an app window
   title; and
-- posts one quiet notification shortly before an event starts.
+- posts one quiet notification shortly before an event starts; and
+- after a new recording is saved, checks whether its event repeats, so a
+  recurring meeting can be filed with its earlier sittings.
 
-Event titles, attendee counts, and times are read from the Mac's local
+Event titles, attendee counts, times, and whether an event repeats are read from the Mac's local
 calendar store (which includes every account signed in under Internet
 Accounts, such as iCloud, Google, or Exchange), used in memory, and never sent
 anywhere. Nothing about events
@@ -384,7 +386,11 @@ every entry it added and adds no more until the switch is turned back on.
 The default notes folder is `~/Documents/Nook`. A user can select another folder
 in Settings. Folders created in the library are ordinary folders inside it,
 and moving a note between them moves its file; nothing about folders is stored
-anywhere else. Each completed note is a plaintext Markdown file containing
+anywhere else. Folder suggestions are worked out on this Mac from note titles,
+series and named speakers, and are never sent anywhere. To remember choices
+without writing to notes, Nook keeps two lists of note identifiers (UUIDs only,
+no titles or folder names, at most 2,000 each) in its preferences: notes whose
+folder suggestion was dismissed, and notes the user placed by hand. Each completed note is a plaintext Markdown file containing
 timestamps, source application, title, summary, key points, decisions, action
 items, open questions, personal notes, and transcript.
 

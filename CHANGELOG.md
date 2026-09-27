@@ -6,6 +6,16 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
+- Nook suggests a folder for notes that are not in one yet, under the title,
+  with the reason: earlier sittings of the same meeting, a folder named in the
+  title or after a speaker, or notes like it. Move it there with one click, or
+  dismiss the suggestion and it stays dismissed.
+- A new recording of a recurring meeting is filed with its earlier sittings
+  automatically, with a notice and Undo. Nothing else is ever moved without
+  asking, and a meeting you move back stays where you put it. Turn it off with
+  "File recurring meetings automatically" in Settings > General.
+- A note's Move To menu lists the suggested folder first.
+
 ## 1.22.2
 
 [Release notes](Releases/Nook-1.22.2.md)

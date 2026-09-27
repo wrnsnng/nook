@@ -885,6 +885,13 @@ final class MeetingCoordinator: ObservableObject {
     /// calendar calls it rather than what the app's window title says.
     weak var calendarContext: CalendarContextService?
 
+    /// A recording has just created a new note, and its background summary
+    /// (if any) has started. Owned by AppModel, which files a recurring
+    /// meeting with its earlier sittings once that summary settles. Not
+    /// called when a recording joins an existing note: that note is already
+    /// wherever the person keeps it.
+    var onNewMeetingSaved: (@MainActor (MeetingNote, Task<Void, Never>?) -> Void)?
+
     private func handleDetection(_ detection: DetectedMeeting) {
         guard activeDraft == nil, processingTask == nil, dismissedDetection != detection else { return }
         var detection = detection
@@ -1377,7 +1384,8 @@ final class MeetingCoordinator: ObservableObject {
                 preserving: keepAudio ? Set([audioURL]) : []
             )
 
-            store.summarySessions.enrich(saved, purpose: .initial, store: store)
+            let summary = store.summarySessions.enrich(saved, purpose: .initial, store: store)
+            onNewMeetingSaved?(saved, summary)
 
             completeSuccessfulProcessing(
                 cleanupFailures: cleanupFailures,
@@ -1548,10 +1556,13 @@ final class MeetingCoordinator: ObservableObject {
                 )
             }
             NookEventLog.write(.meetingSavedFromLiveCaptions)
-            store.summarySessions.enrich(
+            let summary = store.summarySessions.enrich(
                 saved, purpose: draft.attachedNoteID == nil ? .initial : .appended,
                 store: store
             )
+            if draft.attachedNoteID == nil {
+                onNewMeetingSaved?(saved, summary)
+            }
             completeSuccessfulProcessing(
                 cleanupFailures: [],
                 title: saved.title,

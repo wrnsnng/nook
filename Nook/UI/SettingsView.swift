@@ -42,6 +42,7 @@ struct SettingsView: View {
     @AppStorage(NotchPeekPreference.key) private var notchPeekEnabled = true
     @AppStorage(SpeakerSeparationPreference.key) private var separateSpeakers = true
     @AppStorage(SpotlightIndexPreference.key) private var spotlightEnabled = true
+    @AppStorage(AutoFilingPreference.key) private var fileRecurringMeetings = true
     /// Nil until the bundle's signature has been read, which happens off the
     /// main thread the first time About is shown.
     @State private var signature: NookCodeSignature?
@@ -158,10 +159,22 @@ struct SettingsView: View {
                 Text("Rest the pointer on the notch, or the middle of the menu bar on a display without one, to record, write a quick note or open the library. Nothing is recorded until you choose to.")
             }
 
+            foldersSection
             calendarSection
             spotlightSection
         }
         .formStyle(.grouped)
+    }
+
+    /// The only folder change Nook makes by itself, so it has a switch.
+    private var foldersSection: some View {
+        Section {
+            Toggle("File recurring meetings automatically", isOn: $fileRecurringMeetings)
+        } header: {
+            Text("Folders")
+        } footer: {
+            Text("When a new meeting continues a series whose earlier sittings are filed in one folder, Nook moves it there and offers Undo. Other notes show a suggested folder that you can accept or dismiss. Suggestions are worked out on this Mac from your own titles and folders.")
+        }
     }
 
     private var listeningPane: some View {

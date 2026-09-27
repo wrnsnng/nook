@@ -123,14 +123,25 @@ struct MeetingDetailView: View {
     @State private var focusedGeneratedRow: UUID?
     /// Regenerate is about to replace sections the person rewrote.
     @State private var confirmsRegeneration = false
+    /// Where the library thinks this note belongs, if anywhere. Computed by
+    /// the library, which owns folders and the move; this pane only offers it.
+    private let folderSuggestion: FolderSuggestion?
+    private let onAcceptFolderSuggestion: ((String) -> Void)?
+    private let onDismissFolderSuggestion: (() -> Void)?
 
     init(
         note: MeetingNote,
         initialTab: DetailTab = .notes,
         initialTranscriptSearch: String = "",
-        summarySession: SummaryRegenerationSession? = nil
+        summarySession: SummaryRegenerationSession? = nil,
+        folderSuggestion: FolderSuggestion? = nil,
+        onAcceptFolderSuggestion: ((String) -> Void)? = nil,
+        onDismissFolderSuggestion: (() -> Void)? = nil
     ) {
         self.note = note
+        self.folderSuggestion = folderSuggestion
+        self.onAcceptFolderSuggestion = onAcceptFolderSuggestion
+        self.onDismissFolderSuggestion = onDismissFolderSuggestion
         keepsSummaryOnNavigation = summarySession != nil
         _regeneration = StateObject(wrappedValue: summarySession ?? SummaryRegenerationSession())
         let startingTab = note.kind == .spoken
@@ -502,6 +513,15 @@ struct MeetingDetailView: View {
             }
 
             detailMetadata
+
+            if !isEditingTitle, let folderSuggestion, let onAcceptFolderSuggestion {
+                FolderSuggestionLine(
+                    suggestion: folderSuggestion,
+                    onMove: { onAcceptFolderSuggestion(folderSuggestion.folder) },
+                    onDismiss: onDismissFolderSuggestion
+                )
+                .transition(.opacity)
+            }
         }
     }
 
@@ -3020,5 +3040,58 @@ private struct RevealedOnRowHover: ViewModifier {
         content
             .opacity(isHovered || isFocused ? 1 : 0)
             .animation(reduceMotion ? nil : NookMotion.quick, value: isHovered)
+    }
+}
+
+/// A quiet hint under the title: where this note probably belongs, why, and
+/// the two answers to it. Written like Mail's "Move to" suggestion: a glyph,
+/// one line of text and small controls, no card competing with the note.
+struct FolderSuggestionLine: View {
+    let suggestion: FolderSuggestion
+    let onMove: () -> Void
+    let onDismiss: (() -> Void)?
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "folder")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text("Suggested folder:")
+                    .foregroundStyle(.secondary)
+                Text(suggestion.folder)
+                    .fontWeight(.semibold)
+                    .lineLimit(1)
+                // Secondary, not tertiary: the reason is what makes the
+                // hint trustworthy, so it has to stay readable.
+                Text("· \(suggestion.reason)")
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .layoutPriority(-1)
+            }
+            .font(.callout)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Suggested folder: \(suggestion.folder). \(suggestion.reason).")
+            Button("Move", action: onMove)
+                .controlSize(.small)
+                .padding(.leading, 4)
+                .help("Move this note to \(suggestion.folder)")
+                .accessibilityLabel("Move to \(suggestion.folder)")
+            if let onDismiss {
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .controlSize(.small)
+                .help("Don’t suggest a folder for this note")
+                .accessibilityLabel("Dismiss folder suggestion")
+            }
+            Spacer(minLength: 0)
+        }
+        .accessibilityElement(children: .contain)
     }
 }

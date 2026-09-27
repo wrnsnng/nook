@@ -488,6 +488,37 @@ recording or an open Quick Note still writes to that file. Ownership checks
 that used to require the notes folder as a file's direct parent
 (`LibraryFolders.contains`) accept the root and its folders.
 
+Folder suggestions (`FolderSuggester.swift`) are deterministic and read only
+titles, series keys and named speakers. `FolderSuggestionIndex` is rebuilt by
+the library with its grouping cache and whenever the folder list changes; it
+tokenizes each title once (lowercased, possessives and plurals folded, stop
+words and dates dropped). For a root note it tries, in order: the series signal
+(`SeriesMatcher` key, placeholder titles excluded, two thirds of the filed
+sittings in one folder; a split answers nothing rather than falling through),
+the name signal (every key word of a folder's name, or only the owner of a
+possessive name, in the title or among named speakers; ties answer nothing),
+and a TF-IDF-like similarity score (coverage times specificity, floor 0.6,
+margin 0.25, at least two supporting notes and two matched words). Dismissed
+suggestions and notes the person placed by hand are two capped sets of note
+UUIDs in `UserDefaults` (`FolderPlacementMemory`), not frontmatter, so a hint
+never changes a note's bytes or revision.
+
+Automatic filing (`FolderAutoFiler`, owned by `AppModel`) starts from
+`MeetingCoordinator.onNewMeetingSaved`, only for recordings that created a note.
+It waits for the background summary task, asks calendar context (when on)
+whether the matching event has recurrence rules, then applies
+`FolderSuggestionIndex.autoFilingFolder`: a meeting kind note at the root, not
+placed by hand, whose series has a filed sitting and either a repeating event
+or at least two earlier sittings, with the filed sittings all in one folder (or
+three quarters with the latest filed one there) and the most recent earlier
+sitting in that folder. It moves through `MarkdownStore.move`, so every busy
+and changed-elsewhere check applies; while the note is busy or an editor holds
+unsaved words for it, it retries every three seconds up to twenty times, then
+leaves the note at the root, where the suggestion shows. A library generation
+change abandons it. The result is posted as `.nookNoteAutoFiled` and kept once
+in `MarkdownStore.lastAutoFiling`, and the library shows it as a notice whose
+Undo moves the note back through the ordinary move and marks it placed by hand.
+
 Files include:
 
 ```markdown

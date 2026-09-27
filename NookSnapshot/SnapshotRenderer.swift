@@ -9,7 +9,7 @@ struct SnapshotRenderer {
         guard (2...4).contains(arguments.count),
               arguments.count < 4 || arguments[3] == "--interactive" else {
             FileHandle.standardError.write(
-                Data("Usage: NookSnapshot <output.png> [library|library-light|library-compact|welcome-light|welcome-dark|welcome-permission-light|welcome-permission-dark|welcome-ready-light|welcome-ready-dark|welcome-microphone-light|welcome-microphone-dark|welcome-speech-light|welcome-speech-dark|welcome-calendar-light|welcome-calendar-dark|welcome-dictation-light|welcome-dictation-dark|detail-transcript-light|detail-transcript-dark|detail-transcript-partial-light|detail-transcript-partial-dark|detail-transcript-no-matches-light|detail-transcript-no-matches-dark|detail-markdown-light|detail-markdown-dark|detail-markdown-conflict-light|detail-markdown-conflict-dark|detail-summary-pending-light|detail-summary-pending-dark|detail-summary-running-light|detail-summary-running-dark|detail-notes-light|detail-notes-dark|detail-notes-long-light|detail-notes-long-dark|detail-notes-long-focus-light|detail-notes-long-focus-dark|detail-notes-long-row-focus-light|detail-notes-long-row-focus-dark|copy-failure-long-light|copy-failure-long-dark|copy-failure-pathological-light|copy-failure-pathological-dark|settings-about-light|settings-about-dark|settings-general-light|settings-general-dark|settings-listening-light|settings-listening-dark|settings-dictation-light|settings-dictation-dark|settings-assistant-unavailable-light|settings-assistant-unavailable-dark|settings-keyboard-light|settings-keyboard-dark|settings-privacy-light|settings-privacy-dark|settings-updates-light|settings-updates-dark|storage-light|storage-dark|storage-long-light|storage-long-dark|quick-note-light|quick-note-dark|quick-note-filled-light|quick-note-filled-dark|quick-note-codex-light|quick-note-codex-dark|quick-note-conflict-light|quick-note-conflict-dark|quick-note-conflict-codex-light|quick-note-conflict-codex-dark|quick-note-assistant-unavailable-light|quick-note-assistant-unavailable-dark|quick-note-assistant-running-light|quick-note-assistant-running-dark|quick-note-assistant-stopping-light|quick-note-assistant-stopping-dark|quick-note-voice-conflict-codex-light|quick-note-voice-conflict-codex-dark|quick-note-voice-scratch-light|quick-note-voice-scratch-dark|quick-note-voice-item-light|quick-note-voice-item-dark|quick-note-voice-stale-light|quick-note-voice-stale-dark|quick-note-filing-light|quick-note-filing-dark|quick-note-filing-copy-retained-light|quick-note-filing-copy-retained-dark|draft-recovery-light|draft-recovery-dark|draft-recovery-minimum-light|draft-recovery-long-light|draft-recovery-invalid-light|draft-recovery-stale-light|draft-recovery-unavailable-light|recovery-section-light|recovery-section-dark|recovery-section-minimum-light|recovery-section-failure-light|recovery-section-failure-dark|recovery-section-library-light|library-draft-recovery-light|library-draft-recovery-dark|prep-light|prep-dark|ask-light|ask-dark|ask-answer-light|ask-answer-dark|ask-refusal-light|ask-refusal-dark|ask-long-light|ask-long-dark|ask-long-question-light|ask-long-question-dark|palette-light|palette-dark|floating-notes-light|floating-notes-dark|library-recording-light|library-recording-dark|live-follow-light|live-follow-dark|live|notch|external-panel|panel-compact-idle|panel-compact-flagged|panel-hidden-recording|panel-hidden-paused|summary-light|summary-dark|summary-regeneration-light|summary-regeneration-dark|notes-light|notes-dark|detected-light|detected-dark|detected-compact-light|detected-compact-dark|processing-light|processing-dark|completed-light|completed-dark|failure-light|failure-dark] [--interactive]\n".utf8)
+                Data("Usage: NookSnapshot <output.png> [library|library-light|library-compact|welcome-light|welcome-dark|welcome-permission-light|welcome-permission-dark|welcome-ready-light|welcome-ready-dark|welcome-microphone-light|welcome-microphone-dark|welcome-speech-light|welcome-speech-dark|welcome-calendar-light|welcome-calendar-dark|welcome-dictation-light|welcome-dictation-dark|detail-transcript-light|detail-transcript-dark|detail-transcript-partial-light|detail-transcript-partial-dark|detail-transcript-no-matches-light|detail-transcript-no-matches-dark|detail-markdown-light|detail-markdown-dark|detail-markdown-conflict-light|detail-markdown-conflict-dark|detail-summary-pending-light|detail-summary-pending-dark|detail-summary-running-light|detail-summary-running-dark|detail-notes-light|detail-notes-dark|detail-notes-long-light|detail-notes-long-dark|detail-notes-long-focus-light|detail-notes-long-focus-dark|detail-notes-long-row-focus-light|detail-notes-long-row-focus-dark|detail-folder-suggestion-light|detail-folder-suggestion-dark|detail-folder-filed-light|detail-folder-filed-dark|copy-failure-long-light|copy-failure-long-dark|copy-failure-pathological-light|copy-failure-pathological-dark|settings-about-light|settings-about-dark|settings-general-light|settings-general-dark|settings-listening-light|settings-listening-dark|settings-dictation-light|settings-dictation-dark|settings-assistant-unavailable-light|settings-assistant-unavailable-dark|settings-keyboard-light|settings-keyboard-dark|settings-privacy-light|settings-privacy-dark|settings-updates-light|settings-updates-dark|storage-light|storage-dark|storage-long-light|storage-long-dark|quick-note-light|quick-note-dark|quick-note-filled-light|quick-note-filled-dark|quick-note-codex-light|quick-note-codex-dark|quick-note-conflict-light|quick-note-conflict-dark|quick-note-conflict-codex-light|quick-note-conflict-codex-dark|quick-note-assistant-unavailable-light|quick-note-assistant-unavailable-dark|quick-note-assistant-running-light|quick-note-assistant-running-dark|quick-note-assistant-stopping-light|quick-note-assistant-stopping-dark|quick-note-voice-conflict-codex-light|quick-note-voice-conflict-codex-dark|quick-note-voice-scratch-light|quick-note-voice-scratch-dark|quick-note-voice-item-light|quick-note-voice-item-dark|quick-note-voice-stale-light|quick-note-voice-stale-dark|quick-note-filing-light|quick-note-filing-dark|quick-note-filing-copy-retained-light|quick-note-filing-copy-retained-dark|draft-recovery-light|draft-recovery-dark|draft-recovery-minimum-light|draft-recovery-long-light|draft-recovery-invalid-light|draft-recovery-stale-light|draft-recovery-unavailable-light|recovery-section-light|recovery-section-dark|recovery-section-minimum-light|recovery-section-failure-light|recovery-section-failure-dark|recovery-section-library-light|library-draft-recovery-light|library-draft-recovery-dark|prep-light|prep-dark|ask-light|ask-dark|ask-answer-light|ask-answer-dark|ask-refusal-light|ask-refusal-dark|ask-long-light|ask-long-dark|ask-long-question-light|ask-long-question-dark|palette-light|palette-dark|floating-notes-light|floating-notes-dark|library-recording-light|library-recording-dark|live-follow-light|live-follow-dark|live|notch|external-panel|panel-compact-idle|panel-compact-flagged|panel-hidden-recording|panel-hidden-paused|summary-light|summary-dark|summary-regeneration-light|summary-regeneration-dark|notes-light|notes-dark|detected-light|detected-dark|detected-compact-light|detected-compact-dark|processing-light|processing-dark|completed-light|completed-dark|failure-light|failure-dark] [--interactive]\n".utf8)
             )
             Foundation.exit(64)
         }
@@ -428,6 +428,44 @@ struct SnapshotRenderer {
                 detailNote.openQuestions = []
                 detailNote = try store.save(detailNote)
             }
+            var folderSuggestion: FolderSuggestion?
+            var folderNotice: CopyNoticeState.Notice?
+            if mode.contains("folder-") {
+                // Two earlier sittings of the series are filed, so the
+                // suggester has its strongest signal. Synthetic titles only.
+                for name in ["11 Massimo", "Design reviews", "Drafts"] {
+                    _ = try store.createFolder(named: name)
+                }
+                for weeksAgo in [1.0, 2.0] {
+                    let start = detailNote.startedAt.addingTimeInterval(-weeksAgo * 7 * 86_400)
+                    let earlier = try store.save(MeetingNote(
+                        title: "Onboarding design review",
+                        startedAt: start,
+                        endedAt: start.addingTimeInterval(1_800),
+                        sourceApp: "Teams",
+                        summary: "A synthetic earlier sitting."
+                    ))
+                    _ = try store.move(earlier, toFolder: "Design reviews")
+                }
+                detailNote.title = "Onboarding design review"
+                detailNote = try store.save(detailNote)
+                if mode.contains("filed") {
+                    detailNote = try store.move(detailNote, toFolder: "Design reviews")
+                    folderNotice = CopyNoticeState.Notice(
+                        id: UUID(),
+                        message: "Filed in Design reviews with earlier sittings",
+                        severity: .success,
+                        action: NoticeAction(title: "Undo", accessibilityLabel: "Undo filing") {}
+                    )
+                } else {
+                    folderSuggestion = FolderSuggestionIndex(
+                        notes: store.notes, folders: store.folders, libraryURL: store.storageURL
+                    ).suggestion(for: detailNote, isInFolder: false)
+                    guard folderSuggestion?.folder == "Design reviews" else {
+                        throw SnapshotError.fixtureValidationFailed
+                    }
+                }
+            }
             if mode.contains("row-focus") {
                 focusedTextViewLabel = "Key point 2"
             } else if mode.contains("notes-long-focus") {
@@ -513,8 +551,12 @@ struct SnapshotRenderer {
                         note: detailNote,
                         initialTab: initialTab,
                         initialTranscriptSearch: hasNoMatchingTranscript ? "This phrase is absent" : "",
-                        summarySession: summarySession
+                        summarySession: summarySession,
+                        folderSuggestion: folderSuggestion,
+                        onAcceptFolderSuggestion: folderSuggestion.map { _ in { _ in } },
+                        onDismissFolderSuggestion: folderSuggestion.map { _ in {} }
                     )
+                    .nookNotice(folderNotice) { _ in }
                     .frame(width: hasSaveConflict ? 595 : canvasSize.width)
                 }
                 .environmentObject(store)
