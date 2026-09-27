@@ -1896,7 +1896,7 @@ struct LibraryView: View {
 
     /// Moves a note's file between folders. The editors are settled first,
     /// as for a merge: a Markdown source edit needs its own Save or Discard,
-    /// and My notes are written to the file before the file moves.
+    /// and My notes and summary edits are written before the file moves.
     private func moveNote(_ note: MeetingNote, toFolder folder: String?) {
         guard mergeTask == nil else {
             showCopyNotice(LibraryFolderError.noteIsBusy.localizedDescription, severity: .info)
@@ -1926,6 +1926,11 @@ struct LibraryView: View {
             if affected { throw LibraryFolderError.unfinishedMarkdown }
         }
         if let reason = personalNotesDraft.saveIfNeeded(store: store) {
+            throw LibraryFolderError.draftSaveFailed(reason)
+        }
+        // Edited summary sections are written to the file before it moves,
+        // so a pending save never aims at the old path.
+        if let reason = store.summaryEdits.saveIfNeeded(store: store) {
             throw LibraryFolderError.draftSaveFailed(reason)
         }
     }

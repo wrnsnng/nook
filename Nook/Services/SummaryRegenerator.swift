@@ -171,6 +171,9 @@ enum SummaryRegenerator {
         updated.summary = preservingRecoveryNotice(result.insights.summary, from: note)
         updated.summaryPending = nil
         updated.summaryProvenance = nil
+        // The sections are the model's again. The person confirmed that before
+        // this ran, so nothing of theirs is left in them to protect.
+        updated.summaryEditedByUser = false
         updated.keyPoints = result.insights.keyPoints
         updated.decisions = result.insights.decisions
         updated.actionItems = result.insights.actionItems
@@ -203,6 +206,9 @@ enum SummaryRegenerator {
         else { return latest }
 
         var merged = latest
+        // Sections typed into while the model ran stay the person's, so the
+        // edited flag survives exactly when one of them does.
+        var keptNewerEdit = false
         // A Unicode normalization edit is still a deliberate source edit.
         // Swift's canonical String equality would give the model ownership
         // of that newer text again, including strings inside an array.
@@ -212,19 +218,30 @@ enum SummaryRegenerator {
         if latest.summary.utf8.elementsEqual(starting.summary.utf8) {
             merged.summary = regenerated.summary
             merged.summaryProvenance = regenerated.summaryProvenance
+        } else {
+            keptNewerEdit = true
         }
         if exactStringsEqual(latest.keyPoints, starting.keyPoints) {
             merged.keyPoints = regenerated.keyPoints
+        } else {
+            keptNewerEdit = true
         }
         if exactStringsEqual(latest.decisions, starting.decisions) {
             merged.decisions = regenerated.decisions
+        } else {
+            keptNewerEdit = true
         }
         if exactStringsEqual(latest.actionItems, starting.actionItems) {
             merged.actionItems = regenerated.actionItems
+        } else {
+            keptNewerEdit = true
         }
         if exactStringsEqual(latest.openQuestions, starting.openQuestions) {
             merged.openQuestions = regenerated.openQuestions
+        } else {
+            keptNewerEdit = true
         }
+        merged.summaryEditedByUser = latest.summaryEditedByUser && keptNewerEdit
         // Checkbox state is user-owned rather than model-owned. Keep the
         // freshest ticks, dropping only items that the accepted action-item
         // rewrite no longer contains.

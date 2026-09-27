@@ -191,6 +191,13 @@ enum NookType {
     static let label = Font.subheadline.weight(.medium)
 }
 
+/// AppKit twins of the `NookType` styles that are edited in place, so an
+/// editor measures the same as the `Text` it stands in for.
+enum NookInlineFont {
+    /// `NookType.transcript` and `NookType.editorialSummary`.
+    @MainActor static var body: NSFont { .preferredFont(forTextStyle: .body) }
+}
+
 enum NookSpacing {
     static let hairline: CGFloat = 1
     static let xSmall: CGFloat = 4

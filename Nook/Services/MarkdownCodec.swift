@@ -47,6 +47,11 @@ enum MarkdownCodec {
         if note.kind == .meeting, note.summaryRecipe != .general {
             frontmatterLines.append("summary_recipe: \(note.summaryRecipe.rawValue)")
         }
+        // Written only when true, so notes nobody edited keep the exact bytes
+        // they always had.
+        if note.kind == .meeting, note.summaryEditedByUser {
+            frontmatterLines.append("summary_edited: true")
+        }
         // A single-sitting note is the ordinary case, so its sessions stay
         // out of the file entirely.
         if note.sessions.count > 1 {
@@ -258,6 +263,8 @@ enum MarkdownCodec {
                 ? SummaryProvenance(rawValue: unquote(metadata["summary_origin"] ?? "")) : nil,
             summaryRecipe: kind == .meeting
                 ? SummaryRecipe(rawValue: unquote(metadata["summary_recipe"] ?? "")) ?? .general : .general,
+            summaryEditedByUser: kind == .meeting
+                && unquote(metadata["summary_edited"] ?? "").lowercased() == "true",
             keyPoints: keyPoints,
             decisions: decisions,
             actionItems: actionItems,

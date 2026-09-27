@@ -106,6 +106,15 @@ struct MeetingNote: Identifiable, Hashable, Sendable {
     var summaryPending: PendingSummaryKind?
     var summaryProvenance: SummaryProvenance?
     var summaryRecipe: SummaryRecipe
+    /// Whether the person has rewritten any generated section (the gist, key
+    /// points, decisions, action items or open questions) since the model
+    /// last wrote them.
+    ///
+    /// Stored because regeneration replaces exactly those sections. Knowing
+    /// only from the current session would let a relaunch turn Regenerate
+    /// back into a silent overwrite of somebody's edits. Absent in every file
+    /// written before inline editing existed, which reads as false.
+    var summaryEditedByUser = false
     var keyPoints: [String]
     var decisions: [String]
     var actionItems: [String]
@@ -176,6 +185,7 @@ struct MeetingNote: Identifiable, Hashable, Sendable {
         summaryPending: PendingSummaryKind? = nil,
         summaryProvenance: SummaryProvenance? = nil,
         summaryRecipe: SummaryRecipe = .general,
+        summaryEditedByUser: Bool = false,
         keyPoints: [String] = [],
         decisions: [String] = [],
         actionItems: [String] = [],
@@ -201,6 +211,7 @@ struct MeetingNote: Identifiable, Hashable, Sendable {
         self.summaryPending = summaryPending
         self.summaryProvenance = summaryProvenance
         self.summaryRecipe = summaryRecipe
+        self.summaryEditedByUser = summaryEditedByUser
         self.keyPoints = keyPoints
         self.decisions = decisions
         self.actionItems = actionItems

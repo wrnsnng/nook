@@ -114,6 +114,12 @@ struct MeetingDetailView: View {
     @State private var reviewSentences: [SummaryReviewItem] = []
     @FocusState private var summaryReviewFocus: String?
     @AccessibilityFocusState private var summaryReviewAccessibilityFocus: String?
+    /// Where the keyboard goes after Return, Delete or an arrow key moves it
+    /// between rows of the generated sections.
+    @State private var generatedFocus: InlineFocusRequest?
+    @State private var generatedFocusToken = 0
+    /// Regenerate is about to replace sections the person rewrote.
+    @State private var confirmsRegeneration = false
 
     init(
         note: MeetingNote,
@@ -173,6 +179,7 @@ struct MeetingDetailView: View {
             reviewSentences = SummaryReviewItem.sentences(in: note.summary)
             markdownDraft.prepare(for: note, store: store)
             personalNotes.prepare(for: note, store: store)
+            summaryEdits.prepare(for: note, store: store)
             markdownCharacterCount = markdownDraft.rawMarkdown.count
             contentWordCount = note.detailContentWordCount
             transcriptSourceBadgeIDs = TranscriptBadgeGroupingPolicy.visibleBadgeIDs(
@@ -185,6 +192,7 @@ struct MeetingDetailView: View {
             markdownCharacterCount = markdown.count
         }
         .onChange(of: note) { _, newValue in
+            summaryEdits.refresh(for: newValue)
             reviewSentences = SummaryReviewItem.sentences(in: newValue.summary)
             contentWordCount = newValue.detailContentWordCount
             transcriptSourceBadgeIDs = TranscriptBadgeGroupingPolicy.visibleBadgeIDs(
@@ -220,6 +228,7 @@ struct MeetingDetailView: View {
             lastSummaryReview = nil
         }
         .onChange(of: note.libraryIdentity) { _, _ in
+            summaryEdits.prepare(for: note, store: store)
             regeneration.cancel()
             reviewingSummaryItem?.cancel()
             reviewingSummaryItem = nil
@@ -248,6 +257,11 @@ struct MeetingDetailView: View {
             guard !focused else { return }
             savePersonalNotes()
         }
+        // The Markdown source is read from the file. Words still waiting on
+        // the debounce go there first, so the source never starts stale.
+        .onChange(of: tab) { _, _ in
+            saveSummaryEdits()
+        }
         // Backstop for navigation that races focus loss: the view keeps its
         // own note, so committing here always writes the right file.
         .onDisappear {
@@ -255,6 +269,7 @@ struct MeetingDetailView: View {
             if !keepsSummaryOnNavigation { regeneration.cancel() }
             saveTitle()
             savePersonalNotes()
+            saveSummaryEdits()
         }
         .animation(
             reduceMotion ? nil : .easeOut(duration: 0.24),
@@ -279,6 +294,17 @@ struct MeetingDetailView: View {
         }
         .sheet(item: $reviewingSummaryItem, onDismiss: returnFromSummaryReview) { session in
             SummaryItemReviewView(session: session)
+        }
+        .confirmationDialog(
+            "Replace your edits?",
+            isPresented: $confirmsRegeneration
+        ) {
+            Button("Regenerate Summary", role: .destructive) {
+                startSummaryRegeneration()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Regenerating writes the gist, key points, decisions, action items and open questions again from the transcript. Your changes to those sections will be replaced. My notes are kept.")
         }
     }
 
@@ -546,21 +572,18 @@ struct MeetingDetailView: View {
                     personalNotesSection
                 }
 
-                if note.kind != .spoken, !note.keyPoints.isEmpty {
+                if note.kind != .spoken, !keyPointRows.isEmpty {
                     EditorialSection(
                         title: "Key points",
                         symbol: "sparkles",
                         tint: NookPalette.accent
                     ) {
                         VStack(alignment: .leading, spacing: 17) {
-                            ForEach(Array(note.keyPoints.enumerated()), id: \.offset) { index, item in
+                            ForEach(Array(keyPointRows.enumerated()), id: \.element.id) { index, row in
                                 HStack(alignment: .firstTextBaseline, spacing: 14) {
                                     NookBullet()
-                                    Text(item)
-                                        .font(NookType.transcript)
-                                        .lineSpacing(4)
-                                        .textSelection(.enabled)
-                                    summaryReviewButton(.list(.keyPoint, index: index, in: note))
+                                    editableItem(\.keyPoints, row: row, index: index, label: "Key point", lineSpacing: 4)
+                                    summaryReviewButton(listReviewItem(.keyPoint, index: index, row: row))
                                 }
                                 .accessibilityElement(children: .contain)
                                 .modifier(PublishesRowHover())
@@ -569,14 +592,14 @@ struct MeetingDetailView: View {
                     }
                 }
 
-                if note.kind != .spoken, !note.decisions.isEmpty {
+                if note.kind != .spoken, !decisionRows.isEmpty {
                     EditorialSection(
                         title: "Decisions",
                         symbol: "checkmark.seal",
                         tint: NookPalette.accent
                     ) {
                         VStack(alignment: .leading, spacing: 16) {
-                            ForEach(Array(note.decisions.enumerated()), id: \.offset) { index, decision in
+                            ForEach(Array(decisionRows.enumerated()), id: \.element.id) { index, row in
                                 HStack(alignment: .top, spacing: 13) {
                                     // Not a tick in a circle. That is exactly
                                     // the action-item control one section
@@ -587,12 +610,9 @@ struct MeetingDetailView: View {
                                         .foregroundStyle(.secondary)
                                         .frame(width: 20, height: 20)
                                         .accessibilityHidden(true)
-                                    Text(decision)
-                                        .font(NookType.transcript)
-                                        .lineSpacing(4)
-                                        .textSelection(.enabled)
+                                    editableItem(\.decisions, row: row, index: index, label: "Decision", lineSpacing: 4)
                                         .frame(maxWidth: .infinity, alignment: .leading)
-                                    summaryReviewButton(.list(.decision, index: index, in: note))
+                                    summaryReviewButton(listReviewItem(.decision, index: index, row: row))
                                 }
                                 .padding(.vertical, 2)
                                 .accessibilityElement(children: .contain)
@@ -602,22 +622,23 @@ struct MeetingDetailView: View {
                     }
                 }
 
-                if !checklistLines.isEmpty {
-                    actionItemsSection
+                if note.kind == .spoken {
+                    if !checklistLines.isEmpty {
+                        actionItemsSection
+                    }
+                } else if !actionRows.isEmpty {
+                    editableActionItemsSection
                 }
 
-                if note.kind == .meeting, !note.openQuestions.isEmpty {
+                if note.kind == .meeting, !openQuestionRows.isEmpty {
                     EditorialSection(title: "Open questions", symbol: "questionmark.bubble",
                                      tint: NookPalette.accent) {
                         VStack(alignment: .leading, spacing: 16) {
-                            ForEach(Array(note.openQuestions.enumerated()), id: \.offset) { index, question in
+                            ForEach(Array(openQuestionRows.enumerated()), id: \.element.id) { index, row in
                                 HStack(alignment: .top) {
-                                    Text(question)
-                                        .font(NookType.transcript)
-                                        .textSelection(.enabled)
-                                        .accessibilityLabel("Open question \(index + 1): \(question)")
+                                    editableItem(\.openQuestions, row: row, index: index, label: "Open question", lineSpacing: 0)
                                     Spacer(minLength: 0)
-                                    summaryReviewButton(.list(.question, index: index, in: note))
+                                    summaryReviewButton(listReviewItem(.question, index: index, row: row))
                                 }
                                 .modifier(PublishesRowHover())
                             }
@@ -626,10 +647,9 @@ struct MeetingDetailView: View {
                 }
 
                 if note.kind != .spoken,
-                   checklistLines.isEmpty,
-                   note.keyPoints.isEmpty,
-                   note.decisions.isEmpty,
-                   note.actionItems.isEmpty {
+                   actionRows.isEmpty,
+                   keyPointRows.isEmpty,
+                   decisionRows.isEmpty {
                     Label(
                         SummaryFallback.emptyStructuredMessage(provenance: note.summaryProvenance, pending: note.summaryPending),
                         systemImage: "leaf"
@@ -738,6 +758,113 @@ struct MeetingDetailView: View {
                 }
             }
         }
+    }
+
+    /// A meeting's action items, editable in place. Same row as the spoken
+    /// note's list above; the words are a text field instead of a label, and
+    /// a tick survives an edit because it moves with the row.
+    private var editableActionItemsSection: some View {
+        EditorialSection(
+            title: "Action items",
+            symbol: "checklist",
+            tint: NookPalette.accent
+        ) {
+            VStack(spacing: 0) {
+                if markdownDraft.hasChanges {
+                    Label(
+                        "Save or revert Markdown edits before ticking items",
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .font(NookType.caption)
+                    .foregroundStyle(NookPalette.warning)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.bottom, 10)
+                }
+
+                ForEach(Array(actionRows.enumerated()), id: \.element.id) { index, row in
+                    HStack(alignment: .top, spacing: 13) {
+                        Button {
+                            toggleActionRow(row)
+                        } label: {
+                            Image(
+                                systemName: row.isCompleted
+                                    ? "checkmark.circle.fill" : "circle"
+                            )
+                            .font(.system(size: 15))
+                            .foregroundStyle(
+                                row.isCompleted
+                                    ? AnyShapeStyle(NookPalette.accent)
+                                    : AnyShapeStyle(.secondary)
+                            )
+                            // The glyph stays small; the frame is the hit target.
+                            .frame(width: 30, height: 30)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(markdownDraft.hasChanges || !editsBelongHere)
+                        .help(row.isCompleted ? "Reopen item" : "Mark as done")
+                        .accessibilityLabel(
+                            "\(row.isCompleted ? "Reopen" : "Complete"): \(row.text)"
+                        )
+
+                        let parsed = ActionItemOwner.parse(row.text)
+                        VStack(alignment: .leading, spacing: 2) {
+                            editableItem(
+                                \.actions, row: row, index: index, label: "Action item", lineSpacing: 4,
+                                // The task reads without its owner, who is
+                                // shown below; the full wording appears while
+                                // the row has the keyboard.
+                                displayText: parsed.owner == nil ? nil : parsed.displayTask,
+                                textColor: row.isCompleted ? .secondaryLabelColor : .labelColor,
+                                strikethrough: row.isCompleted
+                            )
+                            // The owner, read from the item's own wording.
+                            if let owner = parsed.owner {
+                                Label(owner, systemImage: "person.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .labelStyle(.titleAndIcon)
+                                    .accessibilityLabel("Owner: \(owner)")
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        if let dueDate = ActionItemLine.dueDate(in: row.dueSuffix) {
+                            Text("Due \(dueDate.formatted(.dateTime.month().day()))")
+                                .font(NookType.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        summaryReviewButton(listReviewItem(.action, index: index, row: row))
+                    }
+                    .padding(.vertical, 8)
+                    .accessibilityElement(children: .contain)
+                    .modifier(PublishesRowHover())
+
+                    if index < actionRows.count - 1 {
+                        Divider()
+                            .padding(.leading, 43)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Ticks through the same one-line file rewrite as before, after any
+    /// unsaved words are written, so the line it finds is the line on screen.
+    private func toggleActionRow(_ row: SummaryListRow) {
+        if summaryEdits.hasChanges(for: note) {
+            saveSummaryEdits()
+            guard !summaryEdits.hasChanges(for: note) else { return }
+        }
+        reloadChecklist()
+        guard let index = summaryEdits.draft.actions.firstIndex(where: { $0.id == row.id }) else { return }
+        let stored = summaryEdits.draft.actions[index].storedText
+        guard let line = checklistLines.first(where: { $0.index == index && $0.text == stored })
+                ?? checklistLines.first(where: { $0.text == stored }) else {
+            showCopyNotice("That item changed on disk.", severity: .info)
+            return
+        }
+        toggleChecklistLine(line)
     }
 
     /// Re-reads checkbox truth from the file. The store republishes after a
@@ -977,13 +1104,16 @@ struct MeetingDetailView: View {
                     )
                 }
             }
+            summaryEditsStatus
             summaryProse
         }
     }
 
     @ViewBuilder
     private var summaryProse: some View {
-        if note.kind == .meeting, !reviewSentences.isEmpty {
+        if note.kind != .spoken {
+            editableSummaryProse
+        } else if note.kind == .meeting, !reviewSentences.isEmpty {
             VStack(alignment: .leading, spacing: 14) {
                 ForEach(reviewSentences) { item in
                     HStack(alignment: .top, spacing: 12) {
@@ -1009,6 +1139,262 @@ struct MeetingDetailView: View {
             // VoiceOver's reading order identical to the source prose while
             // the visible spacing makes long summaries easier to scan.
             .accessibilityElement(children: .combine)
+        }
+    }
+
+    /// The gist, a row per sentence or paragraph exactly as it has always
+    /// been laid out, with every row an editor.
+    private var editableSummaryProse: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            ForEach(Array(summaryRows.enumerated()), id: \.element.id) { index, row in
+                HStack(alignment: .top, spacing: 12) {
+                    InlineEditableText(
+                        text: summaryRowBinding(row),
+                        placeholder: "Write what this meeting was about",
+                        font: NookInlineFont.body,
+                        lineSpacing: 7,
+                        isEditable: canEditGenerated,
+                        accessibilityLabel: summaryRows.count > 1
+                            ? "\(summaryTitle), paragraph \(index + 1)" : summaryTitle,
+                        accessibilityHelp: "Editable. Return starts a new paragraph.",
+                        focusRequest: generatedFocus?.rowID == row.id ? generatedFocus : nil,
+                        onFocusChange: generatedFocusChanged,
+                        onReturn: { caret in
+                            editSummaryRows { SummaryRowEditing.split(&$0, at: row.id, caret: caret) }
+                        },
+                        onDeleteAtStart: {
+                            editSummaryRows { SummaryRowEditing.deleteBackward(&$0, at: row.id) }
+                        },
+                        onMoveUp: { moveGeneratedFocus(in: summaryRows.map { ($0.id, $0.text) }, from: row.id, by: -1) },
+                        onMoveDown: { moveGeneratedFocus(in: summaryRows.map { ($0.id, $0.text) }, from: row.id, by: 1) }
+                    )
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    summaryReviewButton(summaryReviewItem(at: index, row: row))
+                }
+                .accessibilityElement(children: .contain)
+                .modifier(PublishesRowHover())
+            }
+        }
+    }
+
+    private var summaryTitle: String {
+        note.summaryProvenance != nil ? "Fallback write-up" : "The gist"
+    }
+
+    // MARK: Editing the generated sections
+
+    private var summaryEdits: SummaryEditsController { store.summaryEdits }
+
+    /// The shared rows describe this note. Until `prepare` has run they may
+    /// still hold the previous note's, which must never be shown or edited
+    /// here, so the note's own values are drawn read-only for that moment.
+    private var editsBelongHere: Bool {
+        summaryEdits.owner == note.libraryIdentity
+    }
+
+    private var canEditGenerated: Bool {
+        editsBelongHere && note.kind != .spoken && !markdownDraft.hasChanges
+    }
+
+    private var summaryRows: [SummaryProseRow] {
+        editsBelongHere ? summaryEdits.draft.summary : SummaryEditsController.summaryRows(for: note)
+    }
+
+    private var keyPointRows: [SummaryListRow] {
+        editsBelongHere ? summaryEdits.draft.keyPoints : SummaryListRow.rows(from: note.keyPoints)
+    }
+
+    private var decisionRows: [SummaryListRow] {
+        editsBelongHere ? summaryEdits.draft.decisions : SummaryListRow.rows(from: note.decisions)
+    }
+
+    private var actionRows: [SummaryListRow] {
+        editsBelongHere
+            ? summaryEdits.draft.actions
+            : SummaryListRow.actionRows(from: note.actionItems, completed: note.completedActionItems)
+    }
+
+    private var openQuestionRows: [SummaryListRow] {
+        editsBelongHere ? summaryEdits.draft.openQuestions : SummaryListRow.rows(from: note.openQuestions)
+    }
+
+    private typealias ListRows = WritableKeyPath<SummaryEditsController.Draft, [SummaryListRow]>
+
+    private func editableItem(
+        _ path: ListRows,
+        row: SummaryListRow,
+        index: Int,
+        label: String,
+        lineSpacing: CGFloat,
+        displayText: String? = nil,
+        textColor: NSColor = .labelColor,
+        strikethrough: Bool = false
+    ) -> some View {
+        let ascender = NookInlineFont.body.ascender
+        return InlineEditableText(
+            text: Binding(
+                get: { summaryEdits.draft[keyPath: path].first { $0.id == row.id }?.text ?? row.text },
+                set: { value in
+                    guard editsBelongHere,
+                          let position = summaryEdits.draft[keyPath: path].firstIndex(where: { $0.id == row.id })
+                    else { return }
+                    summaryEdits.draft[keyPath: path][position].text = value
+                    scheduleSummaryEditsSave()
+                }
+            ),
+            displayText: displayText,
+            placeholder: label,
+            font: NookInlineFont.body,
+            lineSpacing: lineSpacing,
+            textColor: textColor,
+            strikethrough: strikethrough,
+            isEditable: canEditGenerated,
+            accessibilityLabel: "\(label) \(index + 1)",
+            accessibilityHelp: "Editable. Return adds an item below. Delete in an empty item removes it.",
+            focusRequest: generatedFocus?.rowID == row.id ? generatedFocus : nil,
+            onFocusChange: generatedFocusChanged,
+            onReturn: { caret in
+                editListRows(path) { SummaryRowEditing.split(&$0, at: row.id, caret: caret) }
+            },
+            onDeleteAtStart: {
+                editListRows(path) { SummaryRowEditing.deleteBackward(&$0, at: row.id) }
+            },
+            onMoveUp: {
+                moveGeneratedFocus(in: summaryEdits.draft[keyPath: path].map { ($0.id, $0.text) }, from: row.id, by: -1)
+            },
+            onMoveDown: {
+                moveGeneratedFocus(in: summaryEdits.draft[keyPath: path].map { ($0.id, $0.text) }, from: row.id, by: 1)
+            }
+        )
+        // The whole line is the click target, as in Notes: a click right of
+        // the last word puts the caret at its end.
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // The bullet sits on the first line's baseline, as it did beside Text.
+        .alignmentGuide(.firstTextBaseline) { _ in ascender }
+    }
+
+    private func summaryRowBinding(_ row: SummaryProseRow) -> Binding<String> {
+        Binding(
+            get: { summaryEdits.draft.summary.first { $0.id == row.id }?.text ?? row.text },
+            set: { value in
+                guard editsBelongHere,
+                      let position = summaryEdits.draft.summary.firstIndex(where: { $0.id == row.id })
+                else { return }
+                summaryEdits.draft.summary[position].text = value
+                scheduleSummaryEditsSave()
+            }
+        )
+    }
+
+    /// Applies a keyboard edit to a list and moves the caret where it says.
+    /// Returns whether the keystroke was used, so an unused one falls through
+    /// to the text view's own behaviour.
+    private func editListRows(
+        _ path: ListRows,
+        _ edit: (inout [SummaryListRow]) -> SummaryRowEditing.Focus?
+    ) -> Bool {
+        guard canEditGenerated else { return false }
+        var rows = summaryEdits.draft[keyPath: path]
+        let before = rows
+        let focus = edit(&rows)
+        guard rows != before else { return false }
+        summaryEdits.draft[keyPath: path] = rows
+        if let focus { requestGeneratedFocus(focus) }
+        scheduleSummaryEditsSave()
+        return true
+    }
+
+    private func editSummaryRows(
+        _ edit: (inout [SummaryProseRow]) -> SummaryRowEditing.Focus?
+    ) -> Bool {
+        guard canEditGenerated else { return false }
+        var rows = summaryEdits.draft.summary
+        let before = rows
+        let focus = edit(&rows)
+        guard rows != before else { return false }
+        summaryEdits.draft.summary = rows
+        if let focus { requestGeneratedFocus(focus) }
+        scheduleSummaryEditsSave()
+        return true
+    }
+
+    private func requestGeneratedFocus(_ focus: SummaryRowEditing.Focus) {
+        generatedFocusToken += 1
+        generatedFocus = InlineFocusRequest(rowID: focus.rowID, caret: focus.caret, token: generatedFocusToken)
+    }
+
+    /// Up from a row's first line goes to the end of the row above; down
+    /// from its last line goes to the start of the row below.
+    private func moveGeneratedFocus(in rows: [(UUID, String)], from id: UUID, by step: Int) -> Bool {
+        guard let index = rows.firstIndex(where: { $0.0 == id }),
+              rows.indices.contains(index + step) else { return false }
+        let target = rows[index + step]
+        requestGeneratedFocus(.init(rowID: target.0, caret: step < 0 ? target.1.utf16.count : 0))
+        return true
+    }
+
+    /// Leaving a row writes it, as leaving My notes does. Moving between rows
+    /// writes too, which costs one small save and keeps nothing waiting.
+    private func generatedFocusChanged(_ focused: Bool) {
+        guard !focused else { return }
+        saveSummaryEdits()
+    }
+
+    private func scheduleSummaryEditsSave() {
+        let markdownDraft = markdownDraft
+        let store = store
+        summaryEdits.scheduleSave(store: store, onSaved: { saved in
+            // The Markdown tab reads the file; keep it in step with the save.
+            markdownDraft.refresh(for: saved, store: store)
+        }, onFailure: { reason in
+            showCopyNotice(reason, severity: .failure)
+        })
+    }
+
+    /// Writes pending edits to the generated sections now.
+    private func saveSummaryEdits() {
+        guard summaryEdits.hasChanges(for: note) else { return }
+        do {
+            let current = store.note(matching: note.libraryIdentity) ?? note
+            let saved = try summaryEdits.save(note: current, store: store)
+            markdownDraft.refresh(for: saved, store: store)
+        } catch {
+            summaryEdits.statusMessage = error.localizedDescription
+            showCopyNotice(error.localizedDescription, severity: .failure)
+        }
+    }
+
+    /// Review buttons address the saved note by position. A row whose words
+    /// differ from the saved item at that position has no review to offer
+    /// until its edit is written.
+    private func listReviewItem(_ kind: SummaryReviewItem.Kind, index: Int, row: SummaryListRow) -> SummaryReviewItem? {
+        guard let item = SummaryReviewItem.list(kind, index: index, in: note),
+              item.text.utf8.elementsEqual(row.storedText.utf8) else { return nil }
+        return item
+    }
+
+    private func summaryReviewItem(at index: Int, row: SummaryProseRow) -> SummaryReviewItem? {
+        guard note.kind == .meeting, reviewSentences.indices.contains(index),
+              summaryRows.count == reviewSentences.count,
+              reviewSentences[index].text.utf8.elementsEqual(row.text.utf8) else { return nil }
+        return reviewSentences[index]
+    }
+
+    /// Shown only when a save of the sections was refused, with the one way
+    /// out that does not write over somebody else's change.
+    @ViewBuilder
+    private var summaryEditsStatus: some View {
+        if editsBelongHere, let message = summaryEdits.statusMessage {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Label(message, systemImage: "exclamationmark.circle")
+                    .font(NookType.caption)
+                    .foregroundStyle(NookPalette.danger)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button("Try Again") { saveSummaryEdits() }
+                Button("Use Saved Version") { summaryEdits.discardChanges(for: note) }
+                    .help("Replace your unsaved changes to these sections with what the note file holds")
+            }
+            .controlSize(.small)
         }
     }
 
@@ -1450,11 +1836,38 @@ struct MeetingDetailView: View {
         }
     }
 
+    /// Every Regenerate and Retry arrives here. Sections the person rewrote
+    /// are replaced by a new run, so that is asked about first, in a native
+    /// confirmation rather than discovered afterwards.
     private func regenerateSummary() {
         guard SummaryRegenerator.isAvailable(for: note),
               !markdownDraft.hasChanges,
               !regeneration.isRunning
         else { return }
+        let current = store.note(matching: note.libraryIdentity) ?? note
+        if SummaryRegenerationGuard.needsConfirmation(
+            note: current,
+            hasUnsavedEdits: summaryEdits.hasChanges(for: note)
+        ) {
+            confirmsRegeneration = true
+            return
+        }
+        startSummaryRegeneration()
+    }
+
+    private func startSummaryRegeneration() {
+        guard SummaryRegenerator.isAvailable(for: note),
+              !markdownDraft.hasChanges,
+              !regeneration.isRunning
+        else { return }
+
+        // Typed words are written before the run starts from the file. They
+        // are about to be replaced, as the person just agreed, but a refused
+        // save means the file is not what they think, so nothing runs.
+        if summaryEdits.hasChanges(for: note) {
+            saveSummaryEdits()
+            guard !summaryEdits.hasChanges(for: note) else { return }
+        }
 
         // The save below rewrites the whole file from the store's freshest
         // copy of the note. Words still sitting in the My notes draft would
@@ -1481,9 +1894,15 @@ struct MeetingDetailView: View {
         // Capture the store itself, not this view and its StateObject, so a
         // noncooperative runner cannot keep a disappeared editor alive.
         let store = store
+        // An appended sitting's retry keeps edited sections and only adds new
+        // action items. Once the person has confirmed a full rewrite, the
+        // edited note is regenerated as a whole instead.
+        let purpose: SummaryRegenerationSession.Purpose = current.summaryEditedByUser
+            && current.summaryPending == .appended
+            ? .regeneration : .forRetry(of: current)
         regeneration.start(
             note: current,
-            purpose: .forRetry(of: current),
+            purpose: purpose,
             library: { [weak store] in
                 guard let store else {
                     return .init(directoryURL: URL(fileURLWithPath: "/"), generation: -1, notes: [])

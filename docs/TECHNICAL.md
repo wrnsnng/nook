@@ -322,6 +322,27 @@ stale-input check. Regeneration keeps the selected value. Merging uses the
 surviving note's selection rather than guessing from the conversation or the
 absorbed note; failed merging retains existing questions.
 
+Generated sections are edited in place on the Notes tab. `SummaryEditsController`
+(owned by `MarkdownStore`, so words outlive the detail view) holds the rows:
+the gist a sentence or balanced paragraph per row, laid out exactly as the
+read-only text was, and each list item a row. `InlineEditableText` is a
+self-sizing TextKit 1 `NSTextView` per row that reports Return, Delete at the
+start of a row and the arrow keys; `SummaryRowEditing` turns those into row
+splits, joins and removals as pure functions. Rows remember the exact
+separator before them, so rewording one sentence rewrites no other byte of the
+summary. Saving is debounced, happens on focus loss, tab change, selection
+change and quit, and goes through `MarkdownStore.updateGeneratedSections`: a
+per-section three-way merge against the baseline the edit started from, a
+Markdown round-trip rehearsal before writing and a read-back after. A section
+changed elsewhere refuses the save and keeps the words. Action item completion
+moves with the row, and a trailing `[due: ...]` suffix is kept out of the
+editable words. A successful edit sets `summaryEditedByUser`
+(`summary_edited: true`, meetings only); Regenerate and Retry confirm before
+replacing edited sections, a confirmed regeneration clears the flag unless a
+section typed into while it ran survives the merge, and recording into an
+edited note keeps its sections and only adds new action items. Edits have no
+crash-recovery journal entry; the debounce bounds what a crash can lose.
+
 `SummaryProvenance` distinguishes retained transcript highlights, partial
 extraction and edited fallback independently of `summaryPending`. The optional
 `summary_origin` field is present only for meeting fallback content. Decode

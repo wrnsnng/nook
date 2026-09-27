@@ -14,6 +14,9 @@ final class MarkdownStore: ObservableObject {
     /// The store outlives every detail pane. Navigating away must not abandon
     /// a write-up, and reopening the file must find the same cancellable job.
     let summarySessions = NoteSummarySessions()
+    /// In-place edits to the generated sections, for the same reason: the
+    /// words must outlive the detail pane they were typed in.
+    let summaryEdits = SummaryEditsController()
     typealias LoadPayload = (
         notes: [MeetingNote],
         issues: [MarkdownLoadIssue]
@@ -145,6 +148,7 @@ final class MarkdownStore: ObservableObject {
     /// that floor stay in place without also refusing an ordinary edit.
     enum DeliberateEdit {
         case personalNotes
+        case generatedSections
     }
 
     @discardableResult
@@ -267,6 +271,61 @@ final class MarkdownStore: ObservableObject {
                 fileURL: destination
             ),
             persisted.personalNotes.utf8.elementsEqual(saved.personalNotes.utf8)
+        else {
+            throw MarkdownStoreError.saveReadBackFailed
+        }
+        return saved
+    }
+
+    /// Writes in-place edits to the generated sections: the gist, key points,
+    /// decisions, action items and open questions.
+    ///
+    /// A three-way merge by section. Only a section the person changed is
+    /// written, and only when the freshest copy of it still reads the way it
+    /// did when their edit began. A tick made in the sidebar or a correction
+    /// applied from a review while they typed elsewhere is kept, and a section
+    /// changed under their edit refuses the save instead of overwriting it.
+    /// The round-trip is rehearsed before anything is written, and the file is
+    /// read back afterwards, as for My notes.
+    @discardableResult
+    func updateGeneratedSections(
+        _ proposed: GeneratedSections,
+        expected baseline: GeneratedSections,
+        for note: MeetingNote
+    ) throws -> MeetingNote {
+        let latest = try knownNote(for: note) ?? note
+        let current = GeneratedSections(latest)
+        var merged = current
+        var changed = false
+        for field in GeneratedSections.Field.allCases {
+            guard !proposed.matches(baseline, in: field),
+                  !current.matches(proposed, in: field) else { continue }
+            guard current.matches(baseline, in: field) else {
+                lastError = MarkdownStoreError.summaryChangedElsewhere.errorDescription
+                throw MarkdownStoreError.summaryChangedElsewhere
+            }
+            merged.take(field, from: proposed)
+            changed = true
+        }
+        guard changed else { return latest }
+
+        var updated = merged.applied(to: latest)
+        if updated.kind == .meeting { updated.summaryEditedByUser = true }
+        // Fallback content that has been rewritten is no longer the sample
+        // Nook took from the transcript, and must not be described as one.
+        if updated.summaryProvenance != nil { updated.summaryProvenance = .editedFallback }
+
+        guard let rehearsed = MarkdownCodec.decode(MarkdownCodec.encode(updated)),
+              GeneratedSections(rehearsed).matches(GeneratedSections(updated)) else {
+            lastError = MarkdownStoreError.writeVerificationFailed.errorDescription
+            throw MarkdownStoreError.writeVerificationFailed
+        }
+
+        let saved = try save(updated, deliberatelyEditing: .generatedSections)
+        guard let destination = saved.fileURL,
+              let markdown = try? String(contentsOf: destination, encoding: .utf8),
+              let persisted = MarkdownCodec.decode(markdown, fileURL: destination),
+              GeneratedSections(persisted).matches(GeneratedSections(saved))
         else {
             throw MarkdownStoreError.saveReadBackFailed
         }
@@ -403,6 +462,13 @@ final class MarkdownStore: ObservableObject {
         else { return }
         if deliberatelyEditing == .personalNotes,
            decoded.hasNoContentBesidesPersonalNotes {
+            return
+        }
+        // Clearing the last generated words of a note that holds nothing
+        // else is the same kind of deliberate edit.
+        if deliberatelyEditing == .generatedSections,
+           decoded.transcript.isEmpty, decoded.extraSections.isEmpty,
+           decoded.personalNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return
         }
         lastError = MarkdownStoreError.wouldEmptyNote.errorDescription
@@ -1244,6 +1310,7 @@ enum MarkdownStoreError: LocalizedError {
     case saveReadBackFailed
     case fileChangedElsewhere
     case personalNotesChangedElsewhere
+    case summaryChangedElsewhere
     case wouldEmptyNote
     case renameRequiresSavedNote
     case renameRequiresManagedFile
@@ -1268,6 +1335,8 @@ enum MarkdownStoreError: LocalizedError {
             "This file changed outside Nook. Nothing was written. Review the current file before applying your changes."
         case .personalNotesChangedElsewhere:
             "My notes changed since this edit began. Nothing was written. Compare your draft with the current file before continuing."
+        case .summaryChangedElsewhere:
+            "This section changed since your edit began. Nothing was written. Your words are still here to compare with the current note."
         case .wouldEmptyNote:
             "Saving would have emptied this note, so nothing was written. Open the file to check it."
         case .renameRequiresSavedNote:
