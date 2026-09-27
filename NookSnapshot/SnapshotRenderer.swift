@@ -488,7 +488,7 @@ struct SnapshotRenderer {
                     detailNote = try store.move(detailNote, toFolder: "Design reviews")
                     folderNotice = CopyNoticeState.Notice(
                         id: UUID(),
-                        message: "Filed in Design reviews with earlier sittings",
+                        message: "Filed in Design reviews with earlier meetings",
                         severity: .success,
                         action: NoticeAction(title: "Undo", accessibilityLabel: "Undo filing") {}
                     )

@@ -117,8 +117,8 @@ struct FolderSuggestionIndex: Sendable {
             let reason = note.kind == .spoken
                 ? "Earlier notes with this title are there"
                 : (filedCount == 1
-                    ? "An earlier sitting is filed there"
-                    : "Earlier sittings are filed there")
+                    ? "An earlier meeting is filed there"
+                    : "Earlier meetings are filed there")
             return FolderSuggestion(folder: folder, reason: reason, signal: .series)
         case .conflicting:
             // Earlier sittings disagree. Any other signal would be a guess

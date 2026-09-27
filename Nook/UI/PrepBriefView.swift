@@ -67,7 +67,7 @@ struct PrepBriefView: View {
 
                 if !brief.mentionedActions.isEmpty {
                     PrepSection(
-                        title: "Actions mentioned across \(brief.sittings.count) sitting\(brief.sittings.count == 1 ? "" : "s")"
+                        title: "Actions mentioned across \(brief.sittings.count) meeting\(brief.sittings.count == 1 ? "" : "s")"
                     ) {
                         VStack(alignment: .leading, spacing: 0) {
                             let actions = Array(brief.mentionedActions.enumerated())
@@ -86,7 +86,7 @@ struct PrepBriefView: View {
                 }
 
                 if brief.sittings.count > 1 {
-                    PrepSection(title: "Earlier sittings") {
+                    PrepSection(title: "Earlier meetings") {
                         VStack(alignment: .leading, spacing: 0) {
                             let shown = Array(brief.sittings.prefix(Self.visibleSittings))
                             ForEach(Array(shown.enumerated()), id: \.element.libraryIdentity) { index, sitting in
@@ -152,7 +152,7 @@ struct PrepBriefView: View {
         if onRecordSitting != nil || lastSitting != nil {
             HStack(spacing: NookSpacing.small) {
                 if let onRecordSitting {
-                    Button("Record This Sitting", action: onRecordSitting)
+                    Button("Record This Meeting", action: onRecordSitting)
                         .buttonStyle(.borderedProminent)
                         .help("Start recording and file it under this meeting")
                 }
@@ -245,7 +245,7 @@ struct PrepBriefView: View {
         }
         .buttonStyle(NookLinkRowButtonStyle())
         .help("Open \(sitting.title)")
-        .accessibilityHint("Opens the note from this sitting")
+        .accessibilityHint("Opens the note from this meeting")
     }
 }
 
@@ -391,7 +391,7 @@ struct PrepCard: View {
         .accessibilityLabel(
             "Prep brief for \(brief.eventTitle)"
         )
-        .accessibilityHint("Opens notes from earlier sittings of this meeting")
+        .accessibilityHint("Opens notes from earlier meetings in this series")
     }
 
     private var subtitle: String {

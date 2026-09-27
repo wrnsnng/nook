@@ -173,7 +173,7 @@ struct SettingsView: View {
         } header: {
             Text("Folders")
         } footer: {
-            Text("When a new meeting continues a series whose earlier sittings are filed in one folder, Nook moves it there and offers Undo. Other notes show a suggested folder that you can accept or dismiss. Suggestions are worked out on this Mac from your own titles and folders.")
+            Text("When a new meeting continues a series whose earlier meetings are filed in one folder, Nook moves it there and offers Undo. Other notes show a suggested folder that you can accept or dismiss. Suggestions are worked out on this Mac from your own titles and folders.")
         }
     }
 

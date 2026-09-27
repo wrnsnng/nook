@@ -91,7 +91,7 @@ struct FolderSuggestionTests {
 
         #expect(result?.folder == "Team")
         #expect(result?.signal == .series)
-        #expect(result?.reason == "Earlier sittings are filed there")
+        #expect(result?.reason == "Earlier meetings are filed there")
     }
 
     @Test
@@ -392,7 +392,7 @@ struct FolderSuggestionTests {
         let moved = try #require(store.uniqueNote(id: new.id))
         #expect(store.folderName(of: moved) == "11 Massimo")
         #expect(FileManager.default.fileExists(atPath: try #require(moved.fileURL).path))
-        #expect(filing.notice == "Filed in 11 Massimo with earlier sittings")
+        #expect(filing.notice == "Filed in 11 Massimo with earlier meetings")
         #expect(announced.value == [filing])
         #expect(store.lastAutoFiling == filing)
 
@@ -581,7 +581,7 @@ struct FolderSuggestionTests {
         state.show("Moved", severity: .success)
         let plain = state.current?.expirationDelay
         state.show(
-            "Filed in 11 Massimo with earlier sittings",
+            "Filed in 11 Massimo with earlier meetings",
             severity: .success,
             action: NoticeAction(title: "Undo", accessibilityLabel: "Undo filing") {}
         )

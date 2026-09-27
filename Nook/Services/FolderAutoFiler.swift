@@ -19,7 +19,7 @@ struct AutoFiledNote: Hashable, Sendable {
     let to: LibraryNoteIdentity
     let filedAt: Date
 
-    var notice: String { "Filed in \(folder) with earlier sittings" }
+    var notice: String { "Filed in \(folder) with earlier meetings" }
 }
 
 extension Notification.Name {
