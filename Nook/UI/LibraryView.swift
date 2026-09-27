@@ -2529,7 +2529,7 @@ private struct MeetingRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(note.title)
-                .font(.headline)
+                .font(.body.weight(.medium))
                 .lineLimit(1)
 
             if showsFileIdentity, let file = note.fileURL {
@@ -2572,7 +2572,7 @@ private struct LiveSidebarRow: View {
         Label {
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.headline)
+                    .font(.body.weight(.medium))
                 Text(detail)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)

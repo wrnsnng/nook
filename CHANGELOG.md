@@ -6,6 +6,8 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
+- Note titles in the sidebar are medium weight instead of bold, so the list
+  reads calmer and the note you are reading stands out by its highlight.
 - Nook no longer quits when you point at the hidden recording pill beside the
   camera on macOS 27. The pill's tooltip set off a layout loop that macOS
   stopped by closing the app; the pill has no tooltip now, and hiding the notch
