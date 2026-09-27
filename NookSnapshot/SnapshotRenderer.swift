@@ -998,8 +998,16 @@ struct SnapshotRenderer {
                 liveTranscript: .empty,
                 audioLevel: 0
             )
+            // Three notes selected at once, one of them in a folder, so the
+            // pane's Move To has no single common location to check. The
+            // pair variant shows Merge, which needs exactly two.
+            let multiSelection = mode.hasPrefix("library-multiselect")
+                ? LibrarySelection.forNotes(
+                    store.notes.prefix(mode.contains("-pair") ? 2 : 3).map(\.libraryIdentity)
+                )
+                : nil
             content = AnyView(
-                LibraryView(initialNoteID: fixtures[0].id)
+                LibraryView(initialNoteID: fixtures[0].id, initialSelection: multiSelection)
                     .environmentObject(store)
                     .environmentObject(meeting)
                     .environmentObject(markdownDraft)

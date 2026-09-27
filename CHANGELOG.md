@@ -10,6 +10,10 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
   depends on finding it in a menu.
 - The All, Today and Yesterday control keeps its size when a notice appears,
   instead of briefly widening "All".
+- Select several notes at once: Shift-click or Shift-arrow for a range,
+  Command-click to add or remove one, Command-A for every note in the list.
+  Move them to a folder, drag them onto one, or move them to the Trash
+  together, and merge two selected notes into one.
 ## 1.22.1
 
 [Release notes](Releases/Nook-1.22.1.md)
