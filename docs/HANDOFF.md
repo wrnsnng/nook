@@ -6,11 +6,14 @@ contribute.
 
 ## Current release
 
-Nook 1.22.2 (build 41) is the current public release, published September 27,
-2026: multi-selection of notes and a New Folder row, built locally on Xcode 27
+Nook 1.23.0 (build 42) is the current public release, published September 27,
+2026: folder suggestions and automatic filing of recurring meetings, plus a UX
+sweep, built locally on Xcode 27 from
+[04dec1d](https://github.com/wrnsnng/nook/commit/04dec1dd3656426b577cb765048d757a8907d081)
+(PRs #43 and #44) the same way as 1.22.1. Before it, 1.22.2 (build 41): multi-selection of notes and a New Folder row, built locally on Xcode 27
 from [e987f64](https://github.com/wrnsnng/nook/commit/e987f64a1ab36f7fdcdb0dd6d2b71b9c50d602b9)
 (PR #42) the same way as 1.22.1. Earlier the same day came 1.22.1 (build 40)
-and 1.22.0 (build 39). All three were released at the maintainer's direction **without** the
+and 1.22.0 (build 39). All four were released at the maintainer's direction **without** the
 hands-on acceptance described under
 [Manual release acceptance](#manual-release-acceptance).
 
