@@ -24,6 +24,40 @@ struct OrphanedRecording: Identifiable, Hashable, Sendable {
         recordedAt.formatted(date: .abbreviated, time: .shortened)
     }
 
+    /// The sidebar row's title: when it was recorded, relative to today the
+    /// way Finder and Mail name recent days, so a row reads like a note row
+    /// rather than a timestamp with a year nobody needs.
+    func rowTitle(now: Date = Date(), calendar: Calendar = .current) -> String {
+        OrphanedRecording.relativeLabel(for: recordedAt, now: now, calendar: calendar)
+    }
+
+    /// "Today, 4:43 PM", "Yesterday, 4:43 PM", "Sep 24, 4:43 PM", with the
+    /// year only when it is not the current one. Shared with recovered
+    /// drafts so both sidebar sections date their rows alike.
+    static func relativeLabel(for date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+        var time = Date.FormatStyle.dateTime.hour().minute()
+        time.calendar = calendar
+        time.timeZone = calendar.timeZone
+        let clock = date.formatted(time)
+        if calendar.isDate(date, inSameDayAs: now) { return "Today, \(clock)" }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
+           calendar.isDate(date, inSameDayAs: yesterday) {
+            return "Yesterday, \(clock)"
+        }
+        var day = Date.FormatStyle.dateTime.month(.abbreviated).day()
+        if calendar.component(.year, from: date) != calendar.component(.year, from: now) {
+            day = day.year()
+        }
+        day.calendar = calendar
+        day.timeZone = calendar.timeZone
+        return "\(date.formatted(day)), \(clock)"
+    }
+
+    /// Size, and whether only extracted audio is left.
+    var rowDetail: String {
+        isAudioOnly ? "Audio only · \(sizeLabel)" : sizeLabel
+    }
+
     /// Audio already extracted from the capture, if a previous attempt got
     /// that far. Any remaining captures require a fresh matching playback export.
     var extractedAudio: URL? {
