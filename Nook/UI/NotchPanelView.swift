@@ -939,6 +939,19 @@ struct NotchPanelView: View {
                     meeting.revealPermissions()
                 }
                 .buttonStyle(IslandCapsuleButtonStyle())
+            } else if Self.failureNamesPermission(message) {
+                // The capture layer reported a permission problem without a
+                // typed permission. The copy already names the setting, so
+                // the panel must also offer the way there, not only Dismiss.
+                Button("Dismiss") {
+                    meeting.resetStatus()
+                }
+                .buttonStyle(PanelTextButtonStyle())
+
+                Button("Open Settings") {
+                    meeting.revealPermissions()
+                }
+                .buttonStyle(IslandCapsuleButtonStyle())
             } else {
                 Button("Dismiss") {
                     meeting.resetStatus()
@@ -946,6 +959,12 @@ struct NotchPanelView: View {
                 .buttonStyle(PanelTextButtonStyle())
             }
         }
+    }
+
+    static func failureNamesPermission(_ message: String) -> Bool {
+        let normalized = message.lowercased()
+        return normalized.contains("screen") || normalized.contains("system audio")
+            || normalized.contains("microphone") || normalized.contains("permission")
     }
 
     // MARK: Hidden

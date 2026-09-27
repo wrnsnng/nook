@@ -23,22 +23,23 @@ enum MeetingPhase: Equatable, Sendable {
         ///
         /// The panel and the live workspace used to word these independently
         /// and drift apart; both now read from here.
+        /// Short enough for one line in the notch's processing card.
         var displaySentence: String {
             switch self {
             case .preparing:
-                "Securing the recording before Nook shapes it into notes."
+                "Securing the recording on this Mac."
             case .refining:
-                "Cleaning up the live captions while preserving what was actually said."
+                "Tidying the captions, keeping every word said."
             case .transcribing:
-                "Giving the saved audio a careful second listen, entirely on this Mac."
+                "Listening to the saved audio again, on this Mac."
             case .separatingSpeakers:
-                "Working out who said what on the meeting side, entirely on this Mac."
+                "Working out who said what, on this Mac."
             case .summarizing:
-                "Finding the useful shape of the conversation: themes, decisions, and next steps."
+                "Finding the themes, decisions and next steps."
             case .saving:
-                "Writing a durable Markdown note you can read with any editor."
+                "Writing a Markdown note any editor can open."
             case .discarding:
-                "Removing the accidental recording without creating a note."
+                "Removing the recording without making a note."
             }
         }
     }

@@ -981,7 +981,8 @@ struct SettingsView: View {
 
             VStack(spacing: 7) {
                 Text("Version \(appVersion)")
-                    .font(.caption.monospaced())
+                    .font(.caption)
+                    .monospacedDigit()
                     .foregroundStyle(.secondary)
 
                 // Read from the running bundle rather than written here. A
@@ -1044,6 +1045,9 @@ struct SettingsView: View {
                 }
                 .font(.caption)
             }
+            // Links in Nook's accent, as everywhere else in the app, not the
+            // system blue a Settings window falls back to.
+            .tint(NookPalette.accentFill)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

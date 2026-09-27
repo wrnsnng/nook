@@ -6,6 +6,14 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
+- When recording stops because a permission is missing, the notch offers Open
+  Settings beside Dismiss, not Dismiss alone.
+- The notch's progress lines while a meeting is saved are short enough to read
+  in full instead of being cut off.
+- Setup keeps each step's title on the same line, so Continue changes the words
+  without moving them.
+- About shows the version in the regular typeface and its links in Nook's
+  accent colour.
 - Nook suggests a folder for notes that are not in one yet, under the title,
   with the reason: earlier sittings of the same meeting, a folder named in the
   title or after a speaker, or notes like it. Move it there with one click, or
