@@ -6,31 +6,31 @@ contribute.
 
 ## Current release
 
-Nook 1.21.0 (build 38) is the current public release, published September 27,
-2026, and promoted to the Sparkle feed the same day. It was released at the
-maintainer's direction **without** the hands-on acceptance described under
-[Manual release acceptance](#manual-release-acceptance). Nothing in it has
-been checked by a person on a Mac: physical capture and permission prompts,
-VoiceOver, the notch island on a notched MacBook, speaker separation on real
-voices, Siri and Spotlight in the signed app. Treat those as open work, not
-as verified behaviour. Version 1.20.1 was published September 3.
+Nook 1.22.0 (build 39) is the current public release, published September 27,
+2026, and promoted to the Sparkle feed the same day. Like 1.21.0 it was
+released at the maintainer's direction **without** the hands-on acceptance
+described under [Manual release acceptance](#manual-release-acceptance). The
+maintainer used a development build with these changes before release, but
+folders on disk, inline summary editing, the calendar heads-up on a real
+calendar, VoiceOver and the signed app's permission prompts have not been
+through that acceptance. Version 1.21.0 was published earlier the same day.
 
-- Source: [c0e0542](https://github.com/wrnsnng/nook/commit/c0e05421cef0a4b9a14fc0dfc6f5b763ece4a704)
-  (release PR #31, which merged draft PRs #22, #23, #25, #26 and #27). The
-  artifact came from `stable-macos-build` run 36278466199 on Xcode 26 (SDK
-  26.5). Preparation ran from a later `main` that differed only in `Scripts/`
-  (#32 moved the FluidAudio lexicon removal into `sign-app.sh`; #33 fixed a
-  `pipefail` false failure in `verify-release-app.sh`).
-- Developer ID signed (team V2KY59725J, designated requirement and
-  entitlements identical to 1.20.1), notarized, stapled and Gatekeeper
-  accepted. The feed carries deltas from builds 33 to 37.
+- Source: [8c5450e](https://github.com/wrnsnng/nook/commit/8c5450e2ba02de7f0efb9bcd49a21d0af0bd61bf)
+  (release PR #38, which also carried #35, #36 and #37). The artifact came
+  from the maintainer unsigned distribution build, run 36299380707, and
+  preparation ran from that same commit.
+- Developer ID signed (team V2KY59725J), notarized, stapled and Gatekeeper
+  accepted. The feed carries deltas from builds 34 to 38.
 - Every public asset (versioned zip, `Nook.zip` and its checksum, update
   archive, five deltas and the appcast) was re-downloaded and compared with
-  the prepared bytes; archive and feed EdDSA signatures verified. The 1.20.1
+  the prepared bytes; archive and feed EdDSA signatures verified. The 1.21.0
   appcast is retained privately by the maintainer for rollback.
 - The release is available from the
-  [binary releases repository](https://github.com/wrnsnng/nook-releases/releases/tag/v1.21.0).
+  [binary releases repository](https://github.com/wrnsnng/nook-releases/releases/tag/v1.22.0).
 - User-facing changes are mapped in [CHANGELOG.md](../CHANGELOG.md).
+- The test action now passes a temporary `storageDirectory` to the test host.
+  Without it, a fresh local build scanned `~/Documents/Nook`, waited on the
+  Documents privacy prompt and stalled the whole run.
 
 ## Remaining issue implementation, September 4
 
