@@ -119,15 +119,7 @@ struct LibraryAskView: View {
     @ViewBuilder
     private var content: some View {
         if session.isAnswering {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 10) {
-                    ProgressView()
-                        .controlSize(.small)
-                        .accessibilityLabel("Searching your notes on this Mac")
-                    Text("Searching your notes on this Mac…")
-                        .foregroundStyle(.secondary)
-                        .accessibilityHidden(true)
-                }
+            VStack(alignment: .leading, spacing: 14) {
                 // Keep the status and footer reachable even when the submitted
                 // question is much taller than the sheet. Scrolling preserves
                 // the full question rather than truncating its visible text.
@@ -136,6 +128,21 @@ struct LibraryAskView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .frame(maxHeight: 140)
+                .fixedSize(horizontal: false, vertical: true)
+
+                // Held in the place the answer will appear, so the sheet does
+                // not rearrange itself when the answer arrives.
+                HStack(spacing: 10) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel("Searching your notes on this Mac")
+                    Text("Searching your notes on this Mac\u{2026}")
+                        .font(NookType.transcript)
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .modifier(AskAnswerSurface(fill: NookPalette.leadSurface))
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         } else if let answer = session.answer {
@@ -144,34 +151,33 @@ struct LibraryAskView: View {
                     submittedQuestion
 
                     if let reason = answer.refusedReason {
-                        Label(reason, systemImage: "questionmark.circle")
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        // Not an error: Nook declining to guess is the
+                        // feature working. It sits where an answer would, in
+                        // a neutral wash rather than the answer's tint.
+                        Label {
+                            Text(reason)
+                                .font(NookType.transcript)
+                                .lineSpacing(3)
+                                .fixedSize(horizontal: false, vertical: true)
+                        } icon: {
+                            Image(systemName: "questionmark.circle")
+                        }
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .modifier(AskAnswerSurface(fill: Color.primary.opacity(0.045)))
                     } else {
+                        // The answer is the lead of this sheet, set apart as
+                        // a note's "In summary" is: a soft tint, no border.
                         Text(answer.text)
+                            .font(NookType.transcript)
+                            .lineSpacing(4)
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
+                            .modifier(AskAnswerSurface(fill: NookPalette.leadSurface))
 
                         if !answer.citations.isEmpty {
-                            Divider()
-                            Text("From your notes")
-                                .font(NookType.label)
-                                .foregroundStyle(.secondary)
-                                .accessibilityAddTraits(.isHeader)
-                            ForEach(answer.citations) { citation in
-                                Button {
-                                    onSelectNote(citation.chunk.noteID)
-                                    onClose()
-                                } label: {
-                                    Label(
-                                        citation.displayTitle,
-                                        systemImage: "doc.text"
-                                    )
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                }
-                                .buttonStyle(.plain)
-                                .help("Open this meeting")
-                            }
+                            citations(answer.citations)
+                                .padding(.top, 8)
                         }
                     }
 
@@ -184,7 +190,7 @@ struct LibraryAskView: View {
                 .padding(.bottom, 8)
             }
         } else {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 18) {
                 Text(
                     "Ask anything your meetings covered. Nook searches your notes on this Mac and answers from what was actually said, citing the meetings it used."
                 )
@@ -197,19 +203,70 @@ struct LibraryAskView: View {
         }
     }
 
+    /// The meetings an answer drew on, as rows that open them: the
+    /// document glyph, the title, when it happened, and a chevron.
+    private func citations(_ citations: [LibraryCitation]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("From your notes")
+                .font(NookType.label)
+                .foregroundStyle(.secondary)
+                .accessibilityAddTraits(.isHeader)
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(citations.enumerated()), id: \.element.id) { index, citation in
+                    Button {
+                        onSelectNote(citation.chunk.noteID)
+                        onClose()
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "doc.text")
+                                .font(NookType.transcript)
+                                .foregroundStyle(.secondary)
+                                .frame(width: 20)
+                                .accessibilityHidden(true)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(citation.chunk.noteTitle)
+                                    .font(NookType.transcript)
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                                Text(
+                                    citation.chunk.startedAt.formatted(
+                                        date: .abbreviated, time: .omitted
+                                    )
+                                )
+                                .font(NookType.caption)
+                                .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 8)
+                            Image(systemName: "chevron.right")
+                                .font(NookType.caption.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                                .accessibilityHidden(true)
+                        }
+                        .padding(.vertical, 8)
+                    }
+                    .buttonStyle(NookLinkRowButtonStyle(bleed: 8))
+                    .help("Open this meeting")
+                    .accessibilityLabel(citation.displayTitle)
+                    .accessibilityHint("Opens this meeting and closes Ask")
+
+                    if index < citations.count - 1 {
+                        Divider().padding(.leading, 30)
+                    }
+                }
+            }
+        }
+    }
+
+    /// The question heads its answer, as a note's title heads its page.
     @ViewBuilder
     private var submittedQuestion: some View {
         if let question = session.submittedQuestion {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Your question")
-                    .font(NookType.label)
-                    .accessibilityAddTraits(.isHeader)
-                Text(question)
-                    .font(NookType.caption)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            Text(question)
+                .font(NookType.sectionTitle)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityLabel("Your question: \(question)")
+                .accessibilityAddTraits(.isHeader)
         }
     }
 
@@ -311,6 +368,22 @@ final class LibraryAskSession: ObservableObject {
         if isAnswering {
             phase = .ready
         }
+    }
+}
+
+/// The surface an answer, a refusal or the search in progress sits on:
+/// the note page's lead tint, with the same generous inset.
+private struct AskAnswerSurface: ViewModifier {
+    let fill: Color
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(
+                RoundedRectangle(cornerRadius: NookRadius.surface, style: .continuous)
+                    .fill(fill)
+            )
     }
 }
 

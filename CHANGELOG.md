@@ -15,6 +15,12 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
   asking, and a meeting you move back stays where you put it. Turn it off with
   "File recurring meetings automatically" in Settings > General.
 - A note's Move To menu lists the suggested folder first.
+- The prep brief reads like a note: the same column, title and details line,
+  Record This Sitting as the main action, and actions that name who owns them
+  and open the note they came from.
+- Ask Your Library shows your question as the heading of its answer, sets the
+  answer apart like a note's summary, and lists the meetings it used as rows
+  you can click.
 
 ## 1.22.2
 
