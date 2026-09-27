@@ -6,6 +6,9 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
+- Built with Xcode 27, so on macOS 27 Nook takes on the current system look,
+  including the floating sidebar, instead of the older style macOS gives apps
+  built for an earlier release. Nook still runs on macOS 26.
 - Reviewing a summary line has a calmer correction field: a plain box with a
   hairline border instead of a heavy accent ring, and a heading in the same
   style as other sheets.

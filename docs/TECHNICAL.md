@@ -4,7 +4,7 @@
 
 - Native SwiftUI and AppKit macOS application.
 - Minimum deployment target: macOS 26.
-- Stable Xcode 26 / Swift 6 with strict concurrency.
+- Stable Xcode 27 / Swift 6 with strict concurrency.
 - Bundle identifier: `com.localfirst.nook`.
 - App Sandbox is disabled because ScreenCaptureKit system-audio capture and
   user-selected local storage do not fit the current sandbox model.

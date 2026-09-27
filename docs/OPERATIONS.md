@@ -39,8 +39,8 @@ contracts or personal records to the repository.
 
 Both contributor CI and distribution builds use:
 
-- macOS 26;
-- stable Xcode 26, never a beta or release candidate; and
+- a macOS 26 runner (the app still deploys to macOS 26 and later);
+- stable Xcode 27 (the macOS 27 SDK), never a beta or release candidate; and
 - XcodeGen 2.46.0.
 
 The generated Xcode project is committed. `project.yml` is authoritative; after
@@ -88,7 +88,7 @@ disabled-updater marker.
 `.github/workflows/stable-macos-build.yml` is manually dispatched by a
 maintainer. It has read-only repository permissions and no release secrets. It:
 
-1. selects stable Xcode 26;
+1. selects stable Xcode 27;
 2. downloads XcodeGen 2.46.0 and checks the pinned SHA-256, then fetches and
    verifies the pinned speaker separation models;
 3. tests with `NOOK_OFFICIAL_BUILD=YES` and

@@ -3,7 +3,7 @@ options:
   bundleIdPrefix: com.localfirst
   deploymentTarget:
     macOS: "26.0"
-  xcodeVersion: "26.0"
+  xcodeVersion: "27.0"
 settings:
   base:
     # Nook's own lagoon teal, so every system-drawn control agrees with the brand

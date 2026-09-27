@@ -22,12 +22,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Select stable Xcode 26
+      - name: Select stable Xcode 27
         shell: bash
         run: |
           set -euo pipefail
           stable_xcode="$(
-            find /Applications -maxdepth 1 -type d -name 'Xcode_26*.app' \
+            find /Applications -maxdepth 1 -type d -name 'Xcode_27*.app' \
               | grep -Ev '(beta|Beta|RC|rc)' \
               | sort \
               | tail -n 1
@@ -36,7 +36,7 @@ jobs:
           sudo xcode-select --switch "$stable_xcode/Contents/Developer"
           xcodebuild -version
           if xcodebuild -version | grep -Eiq '(beta|rc|Xcode 27)'; then
-            echo "Distribution artifacts require stable Xcode 26." >&2
+            echo "Distribution artifacts require stable Xcode 27." >&2
             exit 1
           fi
 
