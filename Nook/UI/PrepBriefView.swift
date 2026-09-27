@@ -278,7 +278,7 @@ struct PrepCard: View {
             Label {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(brief.eventTitle)
-                        .font(.headline)
+                        .font(.body.weight(.medium))
                         .lineLimit(1)
                     Text(subtitle)
                         .font(.subheadline)

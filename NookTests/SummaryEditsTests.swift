@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Nook
 
-/// The Notes tab lets a person rewrite the gist, key points, decisions,
+/// The Notes tab lets a person rewrite the summary, key points, decisions,
 /// action items and open questions in place, so a meeting's notes can be
 /// finished in Nook instead of copied into another tool. These cover what
 /// that promises: typing reaches the file, ticks survive rewording, nothing
@@ -341,5 +341,150 @@ struct SummaryEditsTests {
         #expect(merged.title == scaffold.title)
         #expect(merged.actionItems.contains("Order badges"))
         #expect(merged.completedActionItems.contains("Book the venue"))
+    }
+
+    // MARK: Adding items and sections
+
+    @Test
+    func addingAnItemAppendsOneEmptyRowWithoutChangingTheFile() throws {
+        let store = store(in: try temporaryDirectory())
+        let saved = try store.save(meeting())
+        let before = try Data(contentsOf: try #require(saved.fileURL))
+        let edits = store.summaryEdits
+        edits.prepare(for: saved, store: store)
+
+        let added = edits.draft.appendEmptyRow(to: .keyPoints)
+
+        #expect(edits.draft.keyPoints.map(\.text) == ["Scope is final", "Beta starts in March", ""])
+        #expect(edits.draft.keyPoints.last?.id == added)
+        // Pressing Add again reuses the blank line instead of stacking them.
+        let again = edits.draft.appendEmptyRow(to: .keyPoints)
+        #expect(again == added)
+        #expect(edits.draft.keyPoints.count == 3)
+        // An empty item is not an edit: nothing is waiting to be written.
+        #expect(!edits.hasChanges)
+        #expect(edits.saveIfNeeded(store: store) == nil)
+        #expect(try Data(contentsOf: try #require(saved.fileURL)) == before)
+    }
+
+    @Test
+    func typingIntoAnAddedItemSavesItAtTheEndOfItsList() throws {
+        let store = store(in: try temporaryDirectory())
+        let saved = try store.save(meeting())
+        let edits = store.summaryEdits
+        edits.prepare(for: saved, store: store)
+
+        let added = edits.draft.appendEmptyRow(to: .decisions)
+        let index = try #require(edits.draft.decisions.firstIndex { $0.id == added })
+        edits.draft.decisions[index].text = "Keep the beta invite-only"
+        let written = try edits.save(note: saved, store: store)
+
+        #expect(try decodedFile(of: written).decisions == ["Ship the smaller plan", "Keep the beta invite-only"])
+    }
+
+    @Test
+    func aNewActionItemStartsOpenAndItsTickFollowsItsWords() throws {
+        let store = store(in: try temporaryDirectory())
+        let saved = try store.save(meeting())
+        let edits = store.summaryEdits
+        edits.prepare(for: saved, store: store)
+
+        let added = edits.draft.appendEmptyRow(to: .actions)
+        let index = try #require(edits.draft.actions.firstIndex { $0.id == added })
+        #expect(!edits.draft.actions[index].isCompleted)
+        #expect(edits.draft.actions[index].storedText.isEmpty)
+
+        edits.draft.actions[index].text = "Order badges"
+        let written = try edits.save(note: saved, store: store)
+        var file = try decodedFile(of: written)
+        #expect(file.actionItems.last == "Order badges")
+        #expect(!file.completedActionItems.contains("Order badges"))
+        // The existing tick stays with its own item.
+        #expect(file.completedActionItems == ["Book the venue"])
+
+        edits.draft.actions[index].isCompleted = true
+        file = try decodedFile(of: try edits.save(note: written, store: store))
+        #expect(file.completedActionItems == ["Book the venue", "Order badges"])
+    }
+
+    @Test
+    func leavingAnAddedItemEmptyRemovesItAndHidesItsSectionAgain() throws {
+        let store = store(in: try temporaryDirectory())
+        var note = meeting()
+        note.decisions = []
+        let saved = try store.save(note)
+        let before = try Data(contentsOf: try #require(saved.fileURL))
+        let edits = store.summaryEdits
+        edits.prepare(for: saved, store: store)
+
+        #expect(edits.draft.missingSections(for: .meeting) == [.decisions])
+        let added = edits.draft.appendEmptyRow(to: .decisions)
+        #expect(edits.draft.missingSections(for: .meeting).isEmpty)
+
+        // While the new item has the keyboard it stays.
+        let droppedWhileFocused = edits.draft.dropEmptyRows(keeping: added)
+        #expect(!droppedWhileFocused)
+        #expect(edits.draft.decisions.map(\.id) == [added])
+
+        // Once the keyboard leaves it, it goes, and the section with it.
+        let droppedAfterLeaving = edits.draft.dropEmptyRows(keeping: nil)
+        #expect(droppedAfterLeaving)
+        #expect(edits.draft.decisions.isEmpty)
+        #expect(edits.draft.missingSections(for: .meeting) == [.decisions])
+        // Everything with words is untouched, and nothing was written.
+        #expect(edits.draft.keyPoints.map(\.text) == ["Scope is final", "Beta starts in March"])
+        #expect(!edits.hasChanges)
+        #expect(edits.saveIfNeeded(store: store) == nil)
+        #expect(try Data(contentsOf: try #require(saved.fileURL)) == before)
+    }
+
+    @Test
+    func tidyingEmptyRowsKeepsTheRowThatHasTheKeyboard() throws {
+        var rows = SummaryListRow.rows(from: ["Scope is final"])
+        let split = try #require(SummaryRowEditing.split(&rows, at: rows[0].id, caret: 14))
+        var draft = SummaryEditsController.Draft(keyPoints: rows, actions: [SummaryListRow(text: "")])
+
+        // Return made a new row and the keyboard moved into it; the blank
+        // action item elsewhere was abandoned.
+        let dropped = draft.dropEmptyRows(keeping: split.rowID)
+        #expect(dropped)
+        #expect(draft.keyPoints.map(\.id) == [rows[0].id, split.rowID])
+        #expect(draft.actions.isEmpty)
+    }
+
+    @Test
+    func eachKindOfNoteOffersOnlyTheSectionsItCanShow() {
+        #expect(SummaryListSection.editable(for: .meeting) == [.keyPoints, .decisions, .actions, .openQuestions])
+        #expect(SummaryListSection.editable(for: .digest) == [.keyPoints, .decisions, .actions])
+        // Spoken notes stay as they were said.
+        #expect(SummaryListSection.editable(for: .spoken).isEmpty)
+        #expect(SummaryEditsController.Draft().missingSections(for: .spoken).isEmpty)
+        #expect(SummaryListSection.allCases.map(\.addLabel)
+            == ["Add key point", "Add decision", "Add action item", "Add question"])
+    }
+
+    // MARK: The summary heading and rhythm
+
+    @Test
+    func theSummaryIsTitledInSummaryAndFallbacksKeepTheirOwnName() {
+        var note = meeting()
+        #expect(DetailSummaryTitle.title(for: note) == "In summary")
+        note.summaryProvenance = .transcriptHighlights
+        #expect(DetailSummaryTitle.title(for: note) == "Fallback write-up")
+        note.summaryProvenance = nil
+        note.kind = .spoken
+        #expect(DetailSummaryTitle.title(for: note) == "Spoken words")
+    }
+
+    @Test
+    func sentencesInAParagraphSitALineApartAndParagraphsAParagraphApart() {
+        let summary = "The team agreed on the launch scope. Pricing stays the same.\n\nBeta opens in March."
+        let rows = SummaryProseRow.rows(
+            displaying: SummaryReviewItem.sentences(in: summary).map(\.text), of: summary
+        )
+        #expect(rows.count == 3)
+        #expect(DetailSummaryRhythm.gap(before: rows[1]) == DetailSummaryRhythm.lineSpacing)
+        #expect(DetailSummaryRhythm.gap(before: rows[2]) == DetailSummaryRhythm.paragraphGap)
+        #expect(DetailSummaryRhythm.paragraphGap > DetailSummaryRhythm.lineSpacing)
     }
 }

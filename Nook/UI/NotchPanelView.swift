@@ -272,11 +272,13 @@ struct NotchPanelView: View {
     /// the calendar knows one, and the three things Nook starts from.
     private var idleContent: some View {
         HStack(spacing: 11) {
-            NookPresence(
-                state: .resting,
-                size: 24,
-                showsSurface: false
-            )
+            // The app's own icon identifies the island, as a Live Activity
+            // does. The resting waveform read as a stray scribble at 24pt.
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 26, height: 26)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 if let event = geometry.upcomingEvent {
                     Text(event.title)
@@ -991,7 +993,10 @@ struct NotchPanelView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(HiddenRecordingIndicatorStyle())
-            .help("Show meeting panel")
+            // No `.help` tooltip: hovering the pill is the one interaction
+            // it has, and on macOS 27 the tooltip's hover pass re-entered
+            // the panel's constraint updates until AppKit aborted the app.
+            // The accessibility label and hint already describe the button.
         }
         .accessibilityHint("Restores the compact recording controls")
         .offset(

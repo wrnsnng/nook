@@ -72,14 +72,13 @@ struct InlineEditableText: View {
                     .accessibilityHidden(true)
             }
         }
-        // The only sign of editing besides the caret: a faint wash behind the
-        // row with the keyboard, drawn outside the text so nothing moves.
+        // The only sign of editing besides the caret: the same field surface
+        // My notes shows, behind the row with the keyboard and drawn outside
+        // the text so nothing moves.
         .background {
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(Color.primary.opacity(isFocused ? 0.045 : 0))
-                .padding(.horizontal, -6)
-                .padding(.vertical, -3)
-                .allowsHitTesting(false)
+            NookFieldSurface(isFocused: isFocused && isEditable)
+                .padding(.horizontal, -7)
+                .padding(.vertical, -4)
         }
     }
 }

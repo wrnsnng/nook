@@ -4,7 +4,7 @@
 
 - Native SwiftUI and AppKit macOS application.
 - Minimum deployment target: macOS 26.
-- Stable Xcode 26 / Swift 6 with strict concurrency.
+- Stable Xcode 27 / Swift 6 with strict concurrency.
 - Bundle identifier: `com.localfirst.nook`.
 - App Sandbox is disabled because ScreenCaptureKit system-audio capture and
   user-selected local storage do not fit the current sandbox model.
@@ -324,8 +324,13 @@ absorbed note; failed merging retains existing questions.
 
 Generated sections are edited in place on the Notes tab. `SummaryEditsController`
 (owned by `MarkdownStore`, so words outlive the detail view) holds the rows:
-the gist a sentence or balanced paragraph per row, laid out exactly as the
-read-only text was, and each list item a row. `InlineEditableText` is a
+the summary ("In summary" on screen) a sentence or balanced paragraph per row,
+and each list item a row. Rows continuing a paragraph sit one line-gap apart and
+only a stored paragraph break opens a paragraph gap (`DetailSummaryRhythm`).
+Each list ends with an add row, and missing sections are offered below the
+last one; both append an empty row and focus it. Empty rows are never written,
+and `Draft.dropEmptyRows(keeping:)` removes them once the keyboard leaves, so an
+added item left blank disappears and its section hides again. `InlineEditableText` is a
 self-sizing TextKit 1 `NSTextView` per row that reports Return, Delete at the
 start of a row and the arrow keys; `SummaryRowEditing` turns those into row
 splits, joins and removals as pure functions. Rows remember the exact

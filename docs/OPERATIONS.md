@@ -39,8 +39,8 @@ contracts or personal records to the repository.
 
 Both contributor CI and distribution builds use:
 
-- macOS 26;
-- stable Xcode 26, never a beta or release candidate; and
+- a macOS 26 runner (the app still deploys to macOS 26 and later);
+- stable Xcode 27 (the macOS 27 SDK), never a beta or release candidate; and
 - XcodeGen 2.46.0.
 
 The generated Xcode project is committed. `project.yml` is authoritative; after
@@ -85,10 +85,26 @@ disabled-updater marker.
 
 ## Unsigned official-configuration artifact
 
-`.github/workflows/stable-macos-build.yml` is manually dispatched by a
-maintainer. It has read-only repository permissions and no release secrets. It:
+`Scripts/build-distribution-app.sh` generates the project, fetches and checks
+the pinned models, tests the official configuration, builds the universal app,
+verifies it (bundle identity, official-build marker, both architectures, the
+macOS 27 SDK) and writes `Nook-stable-unsigned.zip` with its checksum. It
+refuses a checkout with uncommitted changes and any Xcode other than stable 27.
 
-1. selects stable Xcode 26;
+**While GitHub's hosted macOS images do not include stable Xcode 27** (true
+when Xcode 27 shipped in September 2026; they stopped at 26.6), the maintainer
+runs this script on their own Mac, from a clean checkout of the exact reviewed
+`main` commit, into an ignored candidate directory, and records the commit,
+`xcodebuild -version` and the zip checksum in the candidate record in place of
+the workflow run and artifact IDs. Contributor CI keeps testing on the newest
+stable Xcode 26 as a cross-check until the images catch up. Once they do,
+return to the workflow below and drop this exception.
+
+`.github/workflows/stable-macos-build.yml` runs the same script. It is manually
+dispatched by a maintainer, has read-only repository permissions and no release
+secrets. It:
+
+1. selects stable Xcode 27;
 2. downloads XcodeGen 2.46.0 and checks the pinned SHA-256, then fetches and
    verifies the pinned speaker separation models;
 3. tests with `NOOK_OFFICIAL_BUILD=YES` and
