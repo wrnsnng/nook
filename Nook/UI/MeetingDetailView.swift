@@ -1555,17 +1555,13 @@ struct MeetingDetailView: View {
             }
             reloadChecklist()
             showCopyNotice("Summary regenerated")
-        case .failed(let message):
-            showCopyNotice(message, severity: .failure)
-        case .retained(let reason):
-            if let reason {
-                showCopyNotice(RegenerationCopy.retainedMessage(for: reason), severity: .failure)
-            } else {
-                showCopyNotice(
-                    "There is no transcript here to summarize.",
-                    severity: .info
-                )
-            }
+        case .failed, .retained(.some):
+            // The summary status card under the title already says what
+            // happened, persistently and beside Retry. A banner saying the
+            // same words at the top of the window was the same failure twice.
+            break
+        case .retained(.none):
+            showCopyNotice("There is no transcript here to summarize.", severity: .info)
         }
     }
 

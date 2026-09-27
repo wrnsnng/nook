@@ -6,6 +6,15 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
+- Summaries of new recordings are kept again. When the library reloaded a
+  just-saved note while its summary was being written, the reload was taken
+  for an edit, the summary was discarded, and the note showed only transcript
+  highlights with a "changed while regeneration ran" message.
+- A summary that cannot be saved is explained once, in the note, beside Retry,
+  instead of also in a banner at the top of the window.
+- While recording, the menu bar shows only the record or pause symbol. The
+  notch already shows the elapsed time, and the two clocks sat side by side.
+
 ## 1.21.0
 
 [Release notes](Releases/Nook-1.21.0.md)
