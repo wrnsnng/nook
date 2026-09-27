@@ -34,9 +34,10 @@ jobs:
           )"
           test -n "$stable_xcode"
           sudo xcode-select --switch "$stable_xcode/Contents/Developer"
-          xcodebuild -version
-          if xcodebuild -version | grep -Eiq '(beta|rc)' \
-            || ! xcodebuild -version | grep -Eq '^Xcode 27'; then
+          xcode_version="$(xcodebuild -version)"
+          echo "$xcode_version"
+          if [[ "$xcode_version" != "Xcode 27"* ]] \
+            || grep -Eiq '(beta|rc)' <<<"$xcode_version"; then
             echo "Distribution artifacts require stable Xcode 27." >&2
             exit 1
           fi

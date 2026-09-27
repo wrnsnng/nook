@@ -43,8 +43,9 @@ jobs:
           [[ -n "$stable_xcode" ]] || stable_xcode="$(pick 26)"
           test -n "$stable_xcode"
           sudo xcode-select --switch "$stable_xcode/Contents/Developer"
-          xcodebuild -version
-          if xcodebuild -version | grep -Eiq '(beta|rc)'; then
+          xcode_version="$(xcodebuild -version)"
+          echo "$xcode_version"
+          if grep -Eiq '(beta|rc)' <<<"$xcode_version"; then
             echo "Contributor CI requires a stable Xcode." >&2
             exit 1
           fi

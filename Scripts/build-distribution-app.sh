@@ -11,9 +11,12 @@ OUTPUT_DIR=${1:-$PWD}
 PROJECT_DIR=${0:A:h:h}
 cd "$PROJECT_DIR"
 
-if xcodebuild -version | grep -Eiq '(beta|rc)' || ! xcodebuild -version | grep -Eq '^Xcode 27'; then
+# Read once: under pipefail, `grep -q` closing the pipe early makes
+# xcodebuild die of SIGPIPE and the check misfire.
+XCODE_VERSION=$(xcodebuild -version)
+if [[ "$XCODE_VERSION" != "Xcode 27"* ]] || grep -Eiq '(beta|rc)' <<<"$XCODE_VERSION"; then
   echo "Distribution builds require stable Xcode 27." >&2
-  xcodebuild -version >&2
+  echo "$XCODE_VERSION" >&2
   exit 1
 fi
 
