@@ -305,6 +305,11 @@ struct LibraryGroupingCacheKey: Equatable {
 enum LibrarySidebarPolicy {
     static let collapsedOpenActionLimit = 3
 
+    /// Open actions are off the sidebar while their value is reconsidered.
+    /// They are still gathered for the command palette, and still in each
+    /// note's Action items.
+    static let showsOpenActions = false
+
     static func emptySearchMessage(
         query: String,
         range: LibraryDateRange,
@@ -480,30 +485,17 @@ struct LibraryView: View {
         NavigationSplitView {
             sidebar
                 .navigationSplitViewColumnWidth(min: 260, ideal: 304, max: 380)
-        } detail: {
-            // Attached to the detail column so these sit trailing, beside
-            // the note's own actions, rather than against the sidebar.
-            detail
-            .toolbar {
-                // `.primaryAction` is the leading edge on macOS; actions that
-                // belong to the whole library sit trailing, as in Mail.
-                ToolbarItemGroup(placement: .automatic) {
-                    Button(action: presentAskSheet) {
-                        Label("Ask Your Library", systemImage: "sparkle.magnifyingglass")
+                .toolbar {
+                    // As in Notes: what acts on the whole library sits over
+                    // the list, and the detail toolbar is the note's own.
+                    ToolbarItemGroup(placement: .automatic) {
+                        Spacer()
+                        libraryActions
+                        LibraryRecordingToolbar(createNote: createNote)
                     }
-                    .help("Ask a question across all your notes")
-                    .disabled(store.isLoading)
-
-                    Button {
-                        createWeeklyDigest()
-                    } label: {
-                        Label("Create Weekly Digest", systemImage: "newspaper")
-                    }
-                    .help("Compile this week's meetings into one note")
-
-                    LibraryRecordingToolbar(createNote: createNote)
                 }
-            }
+        } detail: {
+            detail
         }
         // Like Notes and Mail: the selected note names itself in the
         // content, so a window title would only crowd the toolbar.
@@ -904,6 +896,26 @@ struct LibraryView: View {
         )
     }
 
+    /// Actions across every note, kept together in one menu over the list.
+    private var libraryActions: some View {
+        Menu {
+            Button(action: presentAskSheet) {
+                Label("Ask Your Library…", systemImage: "questionmark.bubble")
+            }
+            .disabled(store.isLoading)
+
+            Button {
+                createWeeklyDigest()
+            } label: {
+                Label("Create Weekly Digest", systemImage: "calendar.badge.clock")
+            }
+        } label: {
+            Label("Library", systemImage: "ellipsis.circle")
+        }
+        .menuIndicator(.hidden)
+        .help("Ask across your notes or compile this week's meetings")
+    }
+
     private var sidebar: some View {
         List(selection: listSelection) {
             Section {
@@ -918,7 +930,9 @@ struct LibraryView: View {
             }
 
             prepSection
-            openActionsSection
+            if LibrarySidebarPolicy.showsOpenActions {
+                openActionsSection
+            }
             LibraryRecoverySection(
                 recovery: recovery,
                 localeIdentifier: currentLocaleIdentifier

@@ -6,6 +6,10 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
+- The toolbar over a note now holds only that note's actions, Share and More,
+  as in Notes. New Note and a menu with Ask Your Library and Create Weekly
+  Digest sit over the list, since they act on the whole library. Open actions
+  are no longer shown in the sidebar; action items stay in each note.
 - Type is calmer and more consistent. Nook uses the system text styles
   throughout, with their own spacing, so nothing is squeezed tighter than
   macOS sets it. Bold is kept for page titles, semibold for headings, and
