@@ -6,6 +6,10 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
+## 1.22.2
+
+[Release notes](Releases/Nook-1.22.2.md)
+
 - The Folders list ends with a New Folder row, so making a folder no longer
   depends on finding it in a menu.
 - The All, Today and Yesterday control keeps its size when a notice appears,
