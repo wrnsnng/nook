@@ -147,7 +147,54 @@ struct MeetingDetailView: View {
         )
     }
 
+    /// Split from the lifecycle handlers and presentations below: as one
+    /// chain the body took the type checker past its limit on CI.
     var body: some View {
+        withPresentations(
+            lifecycleContent
+                .animation(
+                    reduceMotion ? nil : .easeOut(duration: 0.24),
+                    value: tab
+                )
+                .toolbar { detailToolbar }
+        )
+    }
+
+    private func withPresentations(_ content: some View) -> some View {
+        content
+        .sheet(isPresented: $showsFollowUpDraft) {
+            FollowUpDraftView(note: note)
+        }
+        .alert(
+            "Name \(namingSpeaker ?? "Speaker")",
+            isPresented: Binding(
+                get: { namingSpeaker != nil },
+                set: { if !$0 { namingSpeaker = nil } }
+            )
+        ) {
+            TextField("Name", text: $speakerNameDraft)
+            Button("Cancel", role: .cancel) { namingSpeaker = nil }
+            Button("Save") { saveSpeakerName() }
+        } message: {
+            Text("Every line this person said in this meeting will use the name. It is saved in the note.")
+        }
+        .sheet(item: $reviewingSummaryItem, onDismiss: returnFromSummaryReview) { session in
+            SummaryItemReviewView(session: session)
+        }
+        .confirmationDialog(
+            "Replace your edits?",
+            isPresented: $confirmsRegeneration
+        ) {
+            Button("Regenerate Summary", role: .destructive) {
+                startSummaryRegeneration()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Regenerating writes the gist, key points, decisions, action items and open questions again from the transcript. Your changes to those sections will be replaced. My notes are kept.")
+        }
+    }
+
+    private var lifecycleContent: some View {
         ZStack {
             NookAmbientBackground()
 
@@ -270,41 +317,6 @@ struct MeetingDetailView: View {
             saveTitle()
             savePersonalNotes()
             saveSummaryEdits()
-        }
-        .animation(
-            reduceMotion ? nil : .easeOut(duration: 0.24),
-            value: tab
-        )
-        .toolbar { detailToolbar }
-        .sheet(isPresented: $showsFollowUpDraft) {
-            FollowUpDraftView(note: note)
-        }
-        .alert(
-            "Name \(namingSpeaker ?? "Speaker")",
-            isPresented: Binding(
-                get: { namingSpeaker != nil },
-                set: { if !$0 { namingSpeaker = nil } }
-            )
-        ) {
-            TextField("Name", text: $speakerNameDraft)
-            Button("Cancel", role: .cancel) { namingSpeaker = nil }
-            Button("Save") { saveSpeakerName() }
-        } message: {
-            Text("Every line this person said in this meeting will use the name. It is saved in the note.")
-        }
-        .sheet(item: $reviewingSummaryItem, onDismiss: returnFromSummaryReview) { session in
-            SummaryItemReviewView(session: session)
-        }
-        .confirmationDialog(
-            "Replace your edits?",
-            isPresented: $confirmsRegeneration
-        ) {
-            Button("Regenerate Summary", role: .destructive) {
-                startSummaryRegeneration()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Regenerating writes the gist, key points, decisions, action items and open questions again from the transcript. Your changes to those sections will be replaced. My notes are kept.")
         }
     }
 
