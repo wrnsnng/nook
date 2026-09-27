@@ -6,6 +6,10 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
+- Settings, Keyboard lines up again: each row's scope, reset button and
+  shortcut sit in the same columns, centred on the row, and the Recording
+  footer says that Take a Note also works from any app while recording.
+
 ## 1.21.0
 
 [Release notes](Releases/Nook-1.21.0.md)

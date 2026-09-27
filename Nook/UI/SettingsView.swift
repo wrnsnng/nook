@@ -761,7 +761,12 @@ struct SettingsView: View {
 
     private func keyboardShortcutRow(for id: NookShortcutID) -> some View {
         VStack(alignment: .leading, spacing: NookSpacing.small) {
-            HStack(alignment: .top, spacing: NookSpacing.medium) {
+            // Every row has the same columns: scope, a reset slot that is
+            // always reserved, then the recorder, all centred on the row.
+            // Showing the reset button only when needed used to push that
+            // row's scope label sideways, and top alignment left the labels
+            // riding above the recorders.
+            HStack(alignment: .center, spacing: NookSpacing.medium) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(id.title)
                         .font(NookType.bodyEmphasized)
@@ -772,30 +777,32 @@ struct SettingsView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                HStack(alignment: .top, spacing: NookSpacing.small) {
+                HStack(alignment: .center, spacing: NookSpacing.small) {
                     Text(id.scopeLabel)
                         .font(NookType.metadata)
                         .foregroundStyle(.secondary)
+                        .frame(width: 72, alignment: .trailing)
                         .accessibilityLabel("\(id.title) scope")
                         .accessibilityValue(id.scopeDescription)
 
-                    if shortcuts.isOverridden(id) {
-                        Button {
-                            shortcuts.set(nil, for: id)
-                        } label: {
-                            Image(systemName: "arrow.counterclockwise")
-                                .font(NookType.caption)
-                                .frame(width: 24, height: 24)
-                        }
-                        .buttonStyle(.borderless)
-                        .help(
-                            "Restore \(id.title) to \(id.defaultShortcut.spokenDescription)."
-                        )
-                        .accessibilityLabel("Reset \(id.title) to default")
-                        .accessibilityValue(
-                            "Default \(id.defaultShortcut.displayString)"
-                        )
+                    Button {
+                        shortcuts.set(nil, for: id)
+                    } label: {
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(NookType.caption)
+                            .frame(width: 24, height: 24)
                     }
+                    .buttonStyle(.borderless)
+                    .opacity(shortcuts.isOverridden(id) ? 1 : 0)
+                    .disabled(!shortcuts.isOverridden(id))
+                    .accessibilityHidden(!shortcuts.isOverridden(id))
+                    .help(
+                        "Restore \(id.title) to \(id.defaultShortcut.spokenDescription)."
+                    )
+                    .accessibilityLabel("Reset \(id.title) to default")
+                    .accessibilityValue(
+                        "Default \(id.defaultShortcut.displayString)"
+                    )
 
                     ShortcutRecorderView(
                         shortcut: shortcuts.binding(for: id),
