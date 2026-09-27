@@ -21,6 +21,13 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 - Ask Your Library shows your question as the heading of its answer, sets the
   answer apart like a note's summary, and lists the meetings it used as rows
   you can click.
+- Interrupted recordings in the sidebar read like note rows: when, then size,
+  with one Recover button. Show in Finder and Move to Trash are in the row's
+  menu, and Move to Trash still asks first.
+- Recovered drafts show their title, kind and time without the library path,
+  and Retry and Open Recovery Folder are in the section's menu.
+- A fallback write-up explains itself in one line at the top of the write-up,
+  beside Retry Summary, instead of in a second card above it.
 
 ## 1.22.2
 

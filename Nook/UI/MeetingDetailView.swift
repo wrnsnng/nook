@@ -597,7 +597,7 @@ struct MeetingDetailView: View {
     private var notesView: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 38) {
-                if hasPrimaryContent || (note.kind == .meeting && !note.transcript.isEmpty) {
+                if showsSummarySection {
                     summarySection
                 }
 
@@ -1172,6 +1172,13 @@ struct MeetingDetailView: View {
                         regenerate: regenerateSummary
                     )
                 }
+            }
+            if note.kind == .meeting, let provenance = note.summaryProvenance {
+                SummaryFallbackNotice(
+                    provenance: provenance, isRunning: isRegenerating,
+                    canRetry: SummaryRegenerator.isAvailable(for: note) && !markdownDraft.hasChanges,
+                    retry: regenerateSummary
+                )
             }
             summaryEditsStatus
             summaryProse
@@ -2071,11 +2078,25 @@ struct MeetingDetailView: View {
 
     private var isRegenerating: Bool { regeneration.isRunning }
 
+    /// On the Notes tab the "Fallback write-up" lead carries its own
+    /// provenance line and Retry, so the card above every tab steps aside
+    /// there. It stays on Transcript and Markdown, and whenever the lead is
+    /// not drawn, so the provenance is never out of sight.
+    private var fallbackNoticeIsInLead: Bool {
+        tab == .notes && note.kind == .meeting && note.summaryProvenance != nil
+            && showsSummarySection
+    }
+
+    private var showsSummarySection: Bool {
+        hasPrimaryContent || (note.kind == .meeting && !note.transcript.isEmpty)
+    }
+
     /// The status sits above every tab rather than replacing the saved words.
     /// Reading, exporting, and editing remain available during enrichment.
     @ViewBuilder
     private var savedSummaryStatus: some View {
-        if note.kind == .meeting, let provenance = note.summaryProvenance {
+        if note.kind == .meeting, let provenance = note.summaryProvenance,
+           !fallbackNoticeIsInLead {
             SummaryFallbackCard(
                 provenance: provenance, isRunning: isRegenerating,
                 canRetry: SummaryRegenerator.isAvailable(for: note) && !markdownDraft.hasChanges,

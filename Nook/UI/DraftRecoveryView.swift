@@ -9,6 +9,7 @@ struct DraftRecoverySection: View {
     @ObservedObject var journal: DraftJournal
     @State private var selectedDraft: DraftCheckpoint?
     @State private var showsAll = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private static let visibleLimit = 3
 
@@ -18,38 +19,50 @@ struct DraftRecoverySection: View {
             || journal.statusMessage != nil {
             Section {
                 ForEach(visibleDrafts) { checkpoint in
+                    // Laid out like a note row: title, then kind and when.
+                    // The library path is a detail for the review sheet and
+                    // the tooltip, not a third line in every row.
                     Button {
                         selectedDraft = checkpoint
                     } label: {
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(checkpoint.title.isEmpty ? "Untitled draft" : checkpoint.title)
-                                .font(.callout)
+                            Text(displayTitle(checkpoint))
+                                .font(.body.weight(.medium))
                                 .foregroundStyle(.primary)
-                                .lineLimit(2)
-                            Text("\(checkpoint.kind.label) · \(checkpoint.checkpointedAt.formatted(date: .abbreviated, time: .shortened))")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Text(checkpoint.libraryPath)
-                                .font(.caption2)
+                                .lineLimit(1)
+                            Text("\(checkpoint.kind.label) · \(OrphanedRecording.relativeLabel(for: checkpoint.checkpointedAt))")
+                                .font(.subheadline)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
-                                .truncationMode(.middle)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, 4)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("Review recovered \(checkpoint.kind.label): \(checkpoint.title.isEmpty ? "Untitled draft" : checkpoint.title)")
+                    .help("\(displayTitle(checkpoint))\nFrom \(checkpoint.libraryPath)")
+                    .contextMenu {
+                        Button("Review Draft…") { selectedDraft = checkpoint }
+                        Button("Open Recovery Folder") {
+                            controller.revealRecoveryDirectory()
+                        }
+                    }
+                    .accessibilityLabel("Review recovered \(checkpoint.kind.label): \(displayTitle(checkpoint))")
                     .accessibilityValue(checkpoint.checkpointedAt.formatted(date: .abbreviated, time: .shortened))
                     .accessibilityHint("Opens a read-only preview. The original note is unchanged.")
                 }
 
                 if journal.recoveredDrafts.count > Self.visibleLimit {
                     Button(disclosureLabel) {
-                        showsAll.toggle()
+                        withAnimation(NookMotion.quickAnimation(reduceMotion: reduceMotion)) {
+                            showsAll.toggle()
+                        }
                     }
-                    .font(.caption)
+                    .buttonStyle(.plain)
+                    .font(.subheadline)
+                    .foregroundStyle(NookPalette.accent)
+                    .frame(minHeight: 28)
+                    .contentShape(Rectangle())
                 }
 
                 ForEach(journal.issues.prefix(Self.visibleLimit)) { issue in
@@ -72,7 +85,7 @@ struct DraftRecoverySection: View {
                         Button("Show Recovery File in Finder") {
                             controller.revealIssue(issue)
                         }
-                        .font(.caption)
+                        .controlSize(.small)
                         .accessibilityLabel("Show \(issue.fileURL.lastPathComponent) in Finder")
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -95,16 +108,35 @@ struct DraftRecoverySection: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 }
-                HStack {
-                    Button("Retry") { Task { await controller.retry() } }
-                        .disabled(controller.isWorking)
-                    Button("Open Recovery Folder") {
-                        controller.revealRecoveryDirectory()
+                // Maintenance stays in the header menu. Only when a recovery
+                // file or a failed write needs attention are its two actions
+                // worth a row of their own.
+                if !journal.issues.isEmpty || journal.statusMessage != nil
+                    || controller.message != nil {
+                    HStack {
+                        retryButton
+                        openFolderButton
                     }
+                    .controlSize(.small)
                 }
-                .font(.caption)
             } header: {
-                Label("Recovered drafts", systemImage: "doc.badge.clock")
+                HStack(spacing: NookSpacing.xSmall) {
+                    Label("Recovered drafts", systemImage: "doc.badge.clock")
+                    Spacer(minLength: NookSpacing.small)
+                    Menu {
+                        retryButton
+                        openFolderButton
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(.borderless)
+                    .menuIndicator(.hidden)
+                    .controlSize(.small)
+                    .fixedSize()
+                    .help("Recovered draft actions")
+                    .accessibilityLabel("Recovered draft actions")
+                }
             } footer: {
                 Text("Review unfinished writing from an earlier session. Your existing notes stay unchanged.")
             }
@@ -113,6 +145,22 @@ struct DraftRecoverySection: View {
             }
             .task { await controller.reconcileCompletedDrafts() }
         }
+    }
+
+    private var retryButton: some View {
+        Button("Retry") { Task { await controller.retry() } }
+            .disabled(controller.isWorking)
+            .help("Try saving any failed recovery copies again, then check the recovery folder")
+    }
+
+    private var openFolderButton: some View {
+        Button("Open Recovery Folder") {
+            controller.revealRecoveryDirectory()
+        }
+    }
+
+    private func displayTitle(_ checkpoint: DraftCheckpoint) -> String {
+        checkpoint.title.isEmpty ? "Untitled draft" : checkpoint.title
     }
 
     private var visibleDrafts: [DraftCheckpoint] {
