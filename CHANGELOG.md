@@ -42,6 +42,9 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
   instead of also in a banner at the top of the window.
 - While recording, the menu bar shows only the record or pause symbol. The
   notch already shows the elapsed time, and the two clocks sat side by side.
+- Hiding the notch during a recording shows the small recording pill beside
+  the camera again. It could stay folded inside the camera housing, where it
+  reacted to the pointer but could not be clicked to bring the panel back.
 
 ## 1.21.0
 
