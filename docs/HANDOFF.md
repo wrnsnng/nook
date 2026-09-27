@@ -6,9 +6,11 @@ contribute.
 
 ## Current release
 
-Nook 1.22.1 (build 40) is the current public release, published September 27,
-2026, and promoted to the Sparkle feed the same day, a few hours after 1.22.0
-(build 39). Both were released at the maintainer's direction **without** the
+Nook 1.22.2 (build 41) is the current public release, published September 27,
+2026: multi-selection of notes and a New Folder row, built locally on Xcode 27
+from [e987f64](https://github.com/wrnsnng/nook/commit/e987f64a1ab36f7fdcdb0dd6d2b71b9c50d602b9)
+(PR #42) the same way as 1.22.1. Earlier the same day came 1.22.1 (build 40)
+and 1.22.0 (build 39). All three were released at the maintainer's direction **without** the
 hands-on acceptance described under
 [Manual release acceptance](#manual-release-acceptance).
 
