@@ -258,13 +258,20 @@ enum NotchPanelMetrics {
 final class NotchPanelCoordinator {
     private let panel: NookTopPanel
     private let meeting: MeetingCoordinator
-    private let geometry = NotchPanelGeometry()
+    let geometry = NotchPanelGeometry()
+    /// Where the panel sits and whether it is on screen, for tests.
+    var panelFrame: NSRect { panel.frame }
+    var panelIsVisible: Bool { panel.isVisible }
     private var cancellables: Set<AnyCancellable> = []
     private var hideTask: Task<Void, Never>?
     /// The fold-and-reappear step when the island moves beside the camera.
     /// Separate from `hideTask`, which phase changes cancel as a matter of
     /// course.
     private var choreographyTask: Task<Void, Never>?
+    /// True from the fold into the camera until the island reopens. Layout
+    /// requests in between are left to the fold, which lays out the latest
+    /// state when it reopens.
+    private var isChoreographing = false
     private var peekWatcher: NotchPointerWatcher?
     private var peekTask: Task<Void, Never>?
     /// The island came out for a calendar event rather than the pointer, so
@@ -329,6 +336,10 @@ final class NotchPanelCoordinator {
 
     func show() {
         hideTask?.cancel()
+        guard !isChoreographing else {
+            panel.orderFrontRegardless()
+            return
+        }
         geometry.isTucking = false
         let wasVisible = panel.isVisible
         if !wasVisible, shouldAnimate {
@@ -710,6 +721,10 @@ final class NotchPanelCoordinator {
         // Growing first gives the shape room to spring outward, and the
         // window shrinks once the shape has settled, so no frame animation
         // ever runs on a different curve from the shape.
+        // A fold is moving the island; it lays out the latest state itself
+        // when it reopens. Resizing here would leave the fold behind.
+        guard !isChoreographing else { return }
+
         guard animated, shouldAnimate, panel.isVisible else {
             panel.setFrame(frame, display: true)
             return
@@ -721,16 +736,22 @@ final class NotchPanelCoordinator {
         if mode == .hiddenRecording || previousMode == .hiddenRecording,
            mode != previousMode {
             choreographyTask?.cancel()
+            isChoreographing = true
+            geometry.isTucking = true
+            withAnimation(NookMotion.tuck) {
+                geometry.revealProgress = 0
+            }
             choreographyTask = Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.geometry.isTucking = true
-                withAnimation(NookMotion.tuck) {
-                    self.geometry.revealProgress = 0
-                }
                 try? await Task.sleep(for: .milliseconds(300))
-                guard !Task.isCancelled, generation == self.layoutGeneration else { return }
-                self.panel.setFrame(frame, display: true)
+                guard let self, !Task.isCancelled else { return }
+                // Whatever the state is now, not what it was when the fold
+                // began: a second request (Hide sends two) or a phase change
+                // may have arrived meanwhile. The fold used to reopen only if
+                // nothing had, and otherwise left the island inside the
+                // camera housing, where it could not be clicked.
+                self.isChoreographing = false
                 self.geometry.isTucking = false
+                self.updateLayout(animated: false)
                 withAnimation(NookMotion.morph) {
                     self.geometry.revealProgress = 1
                 }

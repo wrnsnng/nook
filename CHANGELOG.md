@@ -6,6 +6,10 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
+- Hiding the notch during a recording shows the small recording pill beside
+  the camera again. It could stay folded inside the camera housing, where it
+  reacted to the pointer but could not be clicked to bring the panel back.
+
 ## 1.21.0
 
 [Release notes](Releases/Nook-1.21.0.md)
