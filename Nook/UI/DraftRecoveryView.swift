@@ -23,7 +23,7 @@ struct DraftRecoverySection: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(checkpoint.title.isEmpty ? "Untitled draft" : checkpoint.title)
-                                .font(.callout.weight(.medium))
+                                .font(.callout)
                                 .foregroundStyle(.primary)
                                 .lineLimit(2)
                             Text("\(checkpoint.kind.label) · \(checkpoint.checkpointedAt.formatted(date: .abbreviated, time: .shortened))")
@@ -55,7 +55,7 @@ struct DraftRecoverySection: View {
                 ForEach(journal.issues.prefix(Self.visibleLimit)) { issue in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(issue.fileURL.lastPathComponent)
-                            .font(.caption.weight(.medium))
+                            .font(.caption)
                             .foregroundStyle(.primary)
                             .lineLimit(nil)
                             .fixedSize(horizontal: false, vertical: true)
@@ -269,7 +269,7 @@ struct DraftRecoveryView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text("Recovered draft")
-                .font(.subheadline.weight(.medium))
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
             Text(checkpoint.title.isEmpty ? "Untitled draft" : checkpoint.title)
                 .font(NookType.title)

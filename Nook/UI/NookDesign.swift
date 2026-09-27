@@ -152,18 +152,33 @@ enum NookPalette {
     }
 }
 
+/// Nook's type scale: the system text styles, with their own tracking, and
+/// three weights.
+///
+/// - Bold is for a page's title only: a note's title, a setup step's title.
+/// - Semibold is for headings that name a section or a card.
+/// - Everything else is regular: prose, buttons, row labels, metadata and
+///   status. Medium is kept for small group labels and badges, and for the
+///   caption being spoken, which has to stand apart from its neighbours
+///   without becoming a heading.
+///
+/// Never add tracking. SF adjusts its own spacing to each size, and the
+/// negative tracking titles used to carry made them cramped.
 enum NookType {
     static let micro = Font.caption2
     static let caption = Font.caption
-    static let metadata = Font.caption.weight(.medium)
-    static let control = Font.callout.weight(.semibold)
+    /// Dates, durations, sources, counts: quiet, never weighted.
+    static let metadata = Font.caption
+    /// Mac button and control labels are regular weight.
+    static let control = Font.callout
     static let body = Font.callout
+    /// A heading inside a card ("Why Nook asks"), never a row label.
     static let bodyEmphasized = Font.callout.weight(.semibold)
     static let panelTitle = Font.headline
     static let transcript = Font.body
-    static let transcriptEmphasized = Font.body.weight(.semibold)
+    static let transcriptEmphasized = Font.body.weight(.medium)
     static let spoken = Font.title3
-    static let spokenEmphasized = Font.title3.weight(.semibold)
+    static let spokenEmphasized = Font.title3.weight(.medium)
     /// Three steps, as in a Notes document: title, heading, body.
     static let sectionTitle = Font.title3.weight(.semibold)
     /// The default SF design: rounded read as a toy next to native chrome.
@@ -171,6 +186,9 @@ enum NookType {
     static let largeTitle = Font.largeTitle.weight(.bold)
     static let editorialSummary = Font.body
     static let code = Font.caption.monospaced()
+    /// A small label that heads a group or marks a status: "Try one of
+    /// these", "Before this meeting", a signing badge.
+    static let label = Font.subheadline.weight(.medium)
 }
 
 enum NookSpacing {

@@ -423,7 +423,6 @@ struct MeetingDetailView: View {
                 TextField(titleLabel, text: $titleDraft)
                     .textFieldStyle(.plain)
                     .font(NookType.title)
-                    .tracking(-0.45)
                     .lineLimit(2)
                     .focused($titleFieldFocused)
                     .onSubmit(saveTitle)
@@ -444,7 +443,6 @@ struct MeetingDetailView: View {
                 // beside every title was chrome for a rare action.
                 Text(note.title)
                     .font(NookType.title)
-                    .tracking(-0.45)
                     .lineLimit(2)
                     // Not selectable: double-click belongs to rename here, and
                     // word selection would compete for the same gesture.
@@ -709,7 +707,7 @@ struct MeetingDetailView: View {
                             // The owner, read from the item's own wording.
                             if let owner = parsed.owner {
                                 Label(owner, systemImage: "person.fill")
-                                    .font(.caption.weight(.medium))
+                                    .font(.caption)
                                     .foregroundStyle(.secondary)
                                     .labelStyle(.titleAndIcon)
                                     .accessibilityLabel("Owner: \(owner)")
@@ -719,7 +717,7 @@ struct MeetingDetailView: View {
 
                         if let dueDate = line.dueDate {
                             Text("Due \(dueDate.formatted(.dateTime.month().day()))")
-                                .font(NookType.caption.weight(.medium))
+                                .font(NookType.caption)
                                 .foregroundStyle(.secondary)
                         }
                         // File line indices can differ from decoded list indices
@@ -1148,7 +1146,7 @@ struct MeetingDetailView: View {
                     systemImage: playback.isPlaying
                         ? "stop.fill" : "play.fill"
                 )
-                .font(.system(size: 11, weight: .medium))
+                .font(.subheadline)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(
@@ -1291,7 +1289,7 @@ struct MeetingDetailView: View {
             // was not.
             if !transcriptSearch.isEmpty {
                 Text("\(filteredTranscript.count) of \(note.transcript.count) passages")
-                    .font(NookType.micro.weight(.medium))
+                    .font(NookType.micro)
                     .foregroundStyle(.secondary)
                     .contentTransition(.numericText())
             }
@@ -1360,7 +1358,7 @@ struct MeetingDetailView: View {
                         statusMessage,
                         systemImage: statusMessage == "Saved" ? "checkmark.circle.fill" : "exclamationmark.circle"
                     )
-                    .font(NookType.micro.weight(.semibold))
+                    .font(NookType.micro)
                     .foregroundStyle(statusMessage == "Saved" ? NookPalette.success : NookPalette.danger)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)

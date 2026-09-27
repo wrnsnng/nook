@@ -6,6 +6,13 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
+- Type is calmer and more consistent. Nook uses the system text styles
+  throughout, with their own spacing, so nothing is squeezed tighter than
+  macOS sets it. Bold is kept for page titles, semibold for headings, and
+  everything else is regular, including row titles, status and metadata. The
+  notch uses the same sizes as the rest of the app, and its text buttons now
+  match the Record button beside them.
+
 ## 1.21.0
 
 [Release notes](Releases/Nook-1.21.0.md)

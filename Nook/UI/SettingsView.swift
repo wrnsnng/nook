@@ -516,7 +516,7 @@ struct SettingsView: View {
                             ? "Accessibility access allowed"
                             : "Accessibility access required"
                     )
-                    .font(NookType.caption.weight(.semibold))
+                    .font(NookType.label)
                     Text("Typing into another app is something only macOS can permit. Nook uses it to place your dictated text and nothing else.")
                         .font(NookType.caption)
                         .foregroundStyle(.secondary)
@@ -648,7 +648,7 @@ struct SettingsView: View {
                 HStack(alignment: .top, spacing: NookSpacing.medium) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Restore keyboard shortcuts")
-                            .font(NookType.bodyEmphasized)
+                            .font(.body)
                         Text(
                             "Return every Nook shortcut to its original binding."
                         )
@@ -764,7 +764,7 @@ struct SettingsView: View {
             HStack(alignment: .top, spacing: NookSpacing.medium) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(id.title)
-                        .font(NookType.bodyEmphasized)
+                        .font(.body)
                     Text(id.detail)
                         .font(NookType.caption)
                         .foregroundStyle(.secondary)
@@ -970,7 +970,7 @@ struct SettingsView: View {
                 // want to be able to trust.
                 if let signature {
                     Label(signature.label, systemImage: signature.symbol)
-                        .font(NookType.micro.weight(.semibold))
+                        .font(NookType.label)
                         .foregroundStyle(signature.tint)
                         .accessibilityLabel(signature.label)
                 } else {
@@ -980,7 +980,7 @@ struct SettingsView: View {
                     // is being verified reads as a warning about the very
                     // thing it is about to confirm.
                     Label("Checking", systemImage: "checkmark.seal")
-                        .font(NookType.micro.weight(.semibold))
+                        .font(NookType.label)
                         .opacity(0)
                         .accessibilityHidden(true)
                 }
@@ -1009,7 +1009,7 @@ struct SettingsView: View {
                     "Common Tools Co.",
                     destination: URL(string: "https://www.common-tools.co/")!
                 )
-                .font(.caption.weight(.semibold))
+                .font(NookType.label)
 
                 HStack(spacing: 6) {
                     Link(
@@ -1321,7 +1321,7 @@ private struct PrivacyFeatureRow: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
-                    .font(.caption.weight(.semibold))
+                    .font(NookType.label)
                 Text(detail)
                     .font(.caption)
                     .foregroundStyle(.secondary)

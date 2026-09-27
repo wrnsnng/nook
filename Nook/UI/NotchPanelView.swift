@@ -280,14 +280,14 @@ struct NotchPanelView: View {
             VStack(alignment: .leading, spacing: 1) {
                 if let event = geometry.upcomingEvent {
                     Text(event.title)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.body.weight(.medium))
                         .lineLimit(1)
                     UpcomingEventTime(startDate: event.startDate)
                 } else {
                     Text("Nook")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.body.weight(.medium))
                     Text("Ready when a meeting starts")
-                        .font(.system(size: 11))
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -372,10 +372,10 @@ struct NotchPanelView: View {
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(detection.suggestedTitle)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.body.weight(.medium))
                     .lineLimit(1)
                 Text("\(detection.appName) · Record this meeting?")
-                    .font(.system(size: 11))
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -685,7 +685,7 @@ struct NotchPanelView: View {
                     .accessibilityLabel(meeting.isPaused ? "Recording paused" : "Recording live")
 
                 Text(title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.callout.weight(.medium))
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
@@ -717,12 +717,12 @@ struct NotchPanelView: View {
     private var recordingControls: some View {
         if rendersForSnapshot {
             Image(systemName: "pause.fill")
-                .font(.system(size: 10.5, weight: .bold))
+                .font(.system(size: 10.5, weight: .semibold))
                 .frame(width: 26, height: 26)
                 .background(.white.opacity(0.09), in: Circle())
 
             Image(systemName: "stop.fill")
-                .font(.system(size: 10.5, weight: .bold))
+                .font(.system(size: 10.5, weight: .semibold))
                 .foregroundStyle(NookPalette.danger)
                 .frame(width: 26, height: 26)
                 .background(.white.opacity(0.09), in: Circle())
@@ -801,7 +801,7 @@ struct NotchPanelView: View {
 
             TextField("Note for this meeting", text: $noteDraft, prompt: Text("Jot a note, then press Return"))
                 .textFieldStyle(.plain)
-                .font(.system(size: 12.5))
+                .font(.callout)
                 .focused($noteFieldFocused)
                 .onSubmit(addNoteLine)
                 .onExitCommand(perform: endNoteLine)
@@ -867,9 +867,9 @@ struct NotchPanelView: View {
 
             VStack(alignment: .leading, spacing: 1) {
                 Text("Tucking this conversation away")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.body.weight(.medium))
                 Text(processingDetail(for: step))
-                    .font(.system(size: 11))
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .contentTransition(.numericText())
                     .lineLimit(1)
@@ -893,9 +893,9 @@ struct NotchPanelView: View {
 
             VStack(alignment: .leading, spacing: 1) {
                 Text("Tucked away")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.body.weight(.medium))
                 Text("\(title) · Saved as Markdown")
-                    .font(.system(size: 11))
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -918,9 +918,9 @@ struct NotchPanelView: View {
 
             VStack(alignment: .leading, spacing: 1) {
                 Text("Nook needs a hand")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.body.weight(.medium))
                 Text(panelFailureMessage(message))
-                    .font(.system(size: 11))
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(3)
             }
@@ -1513,7 +1513,7 @@ private struct UpcomingEventTime: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             Text(UpcomingEventTiming.label(until: startDate.timeIntervalSince(context.date)))
-                .font(.system(size: 11))
+                .font(.subheadline)
                 .foregroundStyle(NookPalette.accentHighlight)
                 .monospacedDigit()
                 .contentTransition(.numericText())
@@ -1660,7 +1660,7 @@ private struct IslandControlButtonStyle: ButtonStyle {
             surface: .icon, isPressed: configuration.isPressed, reduceMotion: reduceMotion
         )
         return configuration.label
-            .font(.system(size: sideLength * 0.37, weight: .bold))
+            .font(.system(size: sideLength * 0.37, weight: .semibold))
             .labelStyle(.iconOnly)
             .foregroundStyle(tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(Color.white.opacity(0.92)))
             .frame(width: sideLength, height: sideLength)
@@ -1683,7 +1683,7 @@ private struct IslandCapsuleButtonStyle: ButtonStyle {
             surface: .text, isPressed: configuration.isPressed, reduceMotion: reduceMotion
         )
         return configuration.label
-            .font(.system(size: 12.5, weight: .semibold))
+            .font(.callout.weight(.medium))
             .labelStyle(.titleAndIcon)
             .symbolRenderingMode(.monochrome)
             .foregroundStyle(NookPalette.notchInk)
@@ -1778,7 +1778,7 @@ private struct IslandModePicker: View {
                     select(mode)
                 } label: {
                     Text(mode.label)
-                        .font(.system(size: 11.5, weight: .semibold))
+                        .font(.subheadline.weight(.medium))
                         .foregroundStyle(
                             selection == mode
                                 ? AnyShapeStyle(.primary)
@@ -1838,7 +1838,7 @@ private struct PanelTextButtonStyle: ButtonStyle {
             surface: .text, isPressed: configuration.isPressed, reduceMotion: reduceMotion
         )
         return configuration.label
-            .font(NookType.metadata)
+            .font(NookType.control)
             .labelStyle(.titleAndIcon)
             .foregroundStyle(foreground)
             .padding(.horizontal, 8)
@@ -1986,7 +1986,7 @@ private struct NotchRecordingClock: View {
 
     var body: some View {
         Text(NookElapsedTime.clock(live.elapsed))
-            .font(.system(size: isSmall ? 11 : 12.5, weight: .semibold))
+            .font(isSmall ? .subheadline.weight(.medium) : .callout.weight(.medium))
             .monospacedDigit()
             .foregroundStyle(isPaused ? NookPalette.warning : Color.white.opacity(0.92))
             .contentTransition(.numericText())
@@ -2046,7 +2046,7 @@ private struct LiveSummaryPanel: View {
             // is and offers to refresh; no glyph restates the title.
             HStack(spacing: 8) {
                 Text(updatedLabel)
-                    .font(.system(size: 11))
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .contentTransition(.opacity)
 
@@ -2072,7 +2072,7 @@ private struct LiveSummaryPanel: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(insights.summary)
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.body)
                             .lineSpacing(3)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .textSelection(.enabled)
@@ -2086,7 +2086,7 @@ private struct LiveSummaryPanel: View {
                                     .fill(NookPalette.accent)
                                     .frame(width: 4, height: 4)
                                 Text(point)
-                                    .font(.system(size: 12))
+                                    .font(.callout)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(2)
                             }
@@ -2130,7 +2130,7 @@ private struct LiveSummaryWaitingText: View {
                 ? "A faithful summary will appear as the conversation develops."
                 : "Finding the shape of the conversation…"
         )
-        .font(.system(size: 12, weight: .medium))
+        .font(.callout)
         .foregroundStyle(.secondary)
     }
 }
@@ -2144,7 +2144,7 @@ private struct LiveNotesPanel: View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 8) {
                 Text("Added to the note when the meeting ends")
-                    .font(.system(size: 11))
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button(action: detach) {
@@ -2189,9 +2189,9 @@ private struct DetachedNotesPanel: View {
         VStack(spacing: 12) {
             VStack(spacing: 3) {
                 Text("My notes is in its own window")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.body.weight(.medium))
                 Text("Keep writing there, or bring the notes back into the notch.")
-                    .font(.system(size: 11.5))
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
             HStack(spacing: 8) {

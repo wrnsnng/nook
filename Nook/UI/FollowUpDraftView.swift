@@ -17,7 +17,7 @@ struct FollowUpDraftView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text("Draft Follow-up")
-                    .font(.title3.weight(.semibold))
+                    .font(NookType.sectionTitle)
                     .accessibilityAddTraits(.isHeader)
                 Spacer()
                 Picker("Format", selection: $format) {

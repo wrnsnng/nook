@@ -173,12 +173,11 @@ struct WelcomeView: View {
     private func header(_ title: String, _ detail: String) -> some View {
         VStack(spacing: 8) {
             Text(title)
-                .font(.system(size: 28, weight: .bold))
-                .tracking(-0.4)
+                .font(NookType.largeTitle)
                 .multilineTextAlignment(.center)
                 .accessibilityAddTraits(.isHeader)
             Text(detail)
-                .font(.system(size: 14))
+                .font(.title3)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .lineSpacing(2)
@@ -238,7 +237,7 @@ struct WelcomeView: View {
                         .foregroundStyle(statusTint(status))
                         .contentTransition(.symbolEffect(.replace))
                     Text(status.label)
-                        .font(NookType.bodyEmphasized)
+                        .font(NookType.body)
                     Spacer()
                     Text("macOS controls this permission")
                         .font(NookType.caption)
@@ -402,7 +401,7 @@ struct WelcomeView: View {
                 .frame(width: 20)
                 .accessibilityHidden(true)
             Text(permission.title)
-                .font(NookType.bodyEmphasized)
+                .font(NookType.body)
             Spacer(minLength: 9)
             Label(status.label, systemImage: status.symbol)
                 .font(NookType.caption)
@@ -656,7 +655,7 @@ private struct WelcomePromise: View {
             Image(systemName: symbol)
                 .foregroundStyle(NookPalette.accent)
         }
-        .font(.system(size: 12, weight: .medium))
+        .font(.callout)
         .foregroundStyle(.secondary)
     }
 }

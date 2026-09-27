@@ -931,7 +931,7 @@ struct LibraryView: View {
                 Section("Library status") {
                     VStack(alignment: .leading, spacing: 8) {
                         Label(lastError, systemImage: "exclamationmark.triangle.fill")
-                            .font(.callout.weight(.medium))
+                            .font(.callout)
                             .foregroundStyle(NookPalette.danger)
                         ForEach(store.loadIssues.prefix(3)) { issue in
                             Button {
@@ -1179,7 +1179,7 @@ struct LibraryView: View {
                     }
                 }
                 .buttonStyle(.plain)
-                .font(.caption.weight(.medium))
+                .font(.caption)
                 .foregroundStyle(NookPalette.accent)
                 .frame(minHeight: 28)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1864,7 +1864,7 @@ private struct LibraryRecoverySection: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .font(.caption.weight(.medium))
+                    .font(.caption)
                     .foregroundStyle(NookPalette.accent)
                     .frame(minHeight: 28)
                     .contentShape(Rectangle())
@@ -1877,7 +1877,7 @@ private struct LibraryRecoverySection: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .font(.caption.weight(.medium))
+                    .font(.caption)
                     .foregroundStyle(NookPalette.accent)
                     .frame(minHeight: 28)
                     .contentShape(Rectangle())
@@ -1916,7 +1916,7 @@ private struct LibraryRecoverySection: View {
                     )
                     Spacer(minLength: NookSpacing.small)
                     Text(recovery.totalSizeLabel)
-                        .font(.caption2.weight(.medium))
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
                 .accessibilityElement(children: .ignore)
@@ -1954,7 +1954,7 @@ private struct LibraryRecoverySection: View {
             HStack(alignment: .firstTextBaseline, spacing: NookSpacing.small) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(orphan.dateLabel)
-                        .font(.callout.weight(.medium))
+                        .font(.callout)
                     HStack(spacing: NookSpacing.xSmall) {
                         Text(orphan.sizeLabel)
                         if orphan.isAudioOnly {
@@ -2016,7 +2016,7 @@ private struct LibraryRecoverySection: View {
                     .foregroundStyle(NookPalette.warning)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Saved note: \(failure.noteTitle)")
-                        .font(.callout.weight(.medium))
+                        .font(.callout)
                     Text(
                         "\(failure.dateLabel) · \(failure.sizeLabel) still in Nook"
                     )
@@ -2299,7 +2299,7 @@ private struct OpenActionRow: View {
                             .lineLimit(1)
                         if !dueChip.text.isEmpty {
                             Text(dueChip.text)
-                                .font(.caption2.weight(.semibold))
+                                .font(.caption2.weight(.medium))
                                 .foregroundStyle(
                                     dueChip.isOverdue
                                         ? NookPalette.danger : .secondary

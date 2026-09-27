@@ -103,7 +103,7 @@ struct LibraryAskView: View {
         if !examples.isEmpty {
             VStack(alignment: .leading, spacing: NookSpacing.xSmall + 2) {
                 Text("Try one of these")
-                    .font(NookType.micro.weight(.semibold))
+                    .font(NookType.label)
                     .foregroundStyle(.secondary)
                     .accessibilityAddTraits(.isHeader)
                 ForEach(examples, id: \.self) { example in
@@ -155,7 +155,7 @@ struct LibraryAskView: View {
                         if !answer.citations.isEmpty {
                             Divider()
                             Text("From your notes")
-                                .font(.caption.weight(.semibold))
+                                .font(NookType.label)
                                 .foregroundStyle(.secondary)
                                 .accessibilityAddTraits(.isHeader)
                             ForEach(answer.citations) { citation in
@@ -202,7 +202,7 @@ struct LibraryAskView: View {
         if let question = session.submittedQuestion {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Your question")
-                    .font(NookType.caption.weight(.semibold))
+                    .font(NookType.label)
                     .accessibilityAddTraits(.isHeader)
                 Text(question)
                     .font(NookType.caption)

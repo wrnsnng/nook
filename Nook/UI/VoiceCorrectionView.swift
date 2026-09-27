@@ -27,12 +27,12 @@ struct VoiceCorrectionView: View {
                 Label(note.outboundMessage, systemImage: "arrow.up.forward.app.fill")
                     .font(.caption)
             }
-            Text("You said").font(.subheadline.weight(.semibold))
+            Text("You said").font(NookType.label)
             sourceText(proposal.utterance, label: "Recognized correction words")
-            Text("Original words").font(.subheadline.weight(.semibold))
+            Text("Original words").font(NookType.label)
             sourceText(proposal.originalWords, label: "Words affected by correction")
             if !proposal.isRemoval {
-                Text("Replacement words").font(.subheadline.weight(.semibold))
+                Text("Replacement words").font(NookType.label)
                 NookNotesEditor(text: $replacement, placeholder: "Type the replacement words.",
                                 accessibilityLabel: "Replacement words")
                     .frame(height: 110)

@@ -154,13 +154,12 @@ struct LiveMeetingView: View {
                 }
                 Spacer()
                 Text("On-device")
-                    .font(.caption.weight(.medium))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
             Text(title)
                 .font(NookType.largeTitle)
-                .tracking(-0.7)
                 .lineLimit(2)
                 .accessibilityAddTraits(.isHeader)
 
