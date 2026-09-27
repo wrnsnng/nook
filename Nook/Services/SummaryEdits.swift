@@ -176,9 +176,9 @@ struct SummaryListRow: Identifiable, Hashable, Sendable {
     }
 }
 
-/// One paragraph of the gist as the Notes tab shows it.
+/// One paragraph of the summary ("In summary") as the Notes tab shows it.
 ///
-/// The gist is displayed a sentence (or a balanced paragraph) per row, and it
+/// The summary is displayed a sentence (or a balanced paragraph) per row, and it
 /// is edited the same way, so the page looks the same whether or not a field
 /// has the keyboard. Each row remembers the exact text that separated it from
 /// the row before, which is what lets an edit to one sentence write back the
@@ -230,6 +230,113 @@ struct SummaryProseRow: Identifiable, Hashable, Sendable {
             result += text
         }
         return result
+    }
+}
+
+/// One of the editable lists under the summary, with the words the Notes tab
+/// uses to offer a new item or a new section.
+enum SummaryListSection: CaseIterable, Sendable {
+    case keyPoints, decisions, actions, openQuestions
+
+    var title: String {
+        switch self {
+        case .keyPoints: "Key points"
+        case .decisions: "Decisions"
+        case .actions: "Action items"
+        case .openQuestions: "Open questions"
+        }
+    }
+
+    /// The name of one item, as a section button offers it.
+    var itemName: String {
+        switch self {
+        case .keyPoints: "Key point"
+        case .decisions: "Decision"
+        case .actions: "Action item"
+        case .openQuestions: "Open question"
+        }
+    }
+
+    /// The quiet row at the end of the list.
+    var addLabel: String {
+        switch self {
+        case .keyPoints: "Add key point"
+        case .decisions: "Add decision"
+        case .actions: "Add action item"
+        case .openQuestions: "Add question"
+        }
+    }
+
+    /// The lists a kind of note shows. Open questions belong to meetings; a
+    /// spoken note's words stay as they were said, so it offers none.
+    static func editable(for kind: NoteKind) -> [Self] {
+        switch kind {
+        case .meeting: allCases
+        case .digest: [.keyPoints, .decisions, .actions]
+        case .spoken: []
+        }
+    }
+}
+
+extension SummaryEditsController.Draft {
+    func rows(_ section: SummaryListSection) -> [SummaryListRow] {
+        switch section {
+        case .keyPoints: keyPoints
+        case .decisions: decisions
+        case .actions: actions
+        case .openQuestions: openQuestions
+        }
+    }
+
+    mutating func setRows(_ rows: [SummaryListRow], for section: SummaryListSection) {
+        switch section {
+        case .keyPoints: keyPoints = rows
+        case .decisions: decisions = rows
+        case .actions: actions = rows
+        case .openQuestions: openQuestions = rows
+        }
+    }
+
+    /// A new, empty item at the end of a list, for the person to type into.
+    /// An empty item already waiting at the end is reused, so pressing Add
+    /// twice leaves one blank line rather than a stack of them. An empty row
+    /// is never written (see `SummaryListRow.items`), and a new action item
+    /// starts open, so adding one can neither change the file nor tick
+    /// anything until words are typed.
+    @discardableResult
+    mutating func appendEmptyRow(to section: SummaryListSection) -> UUID {
+        var list = rows(section)
+        if let last = list.last, last.storedText.isEmpty {
+            return last.id
+        }
+        let row = SummaryListRow(text: "")
+        list.append(row)
+        setRows(list, for: section)
+        return row.id
+    }
+
+    /// Removes rows left empty, except the one that still has the keyboard.
+    /// Called when a row loses focus: an item someone added and then left
+    /// blank disappears, and a section it opened hides again. Returns whether
+    /// anything was removed. Never affects what is saved, since empty rows
+    /// are not written.
+    @discardableResult
+    mutating func dropEmptyRows(keeping kept: UUID?) -> Bool {
+        var changed = false
+        for section in SummaryListSection.allCases {
+            let list = rows(section)
+            let trimmed = list.filter { !$0.storedText.isEmpty || $0.id == kept }
+            if trimmed.count != list.count {
+                setRows(trimmed, for: section)
+                changed = true
+            }
+        }
+        return changed
+    }
+
+    /// The sections a note could have but does not show, in page order.
+    func missingSections(for kind: NoteKind) -> [SummaryListSection] {
+        SummaryListSection.editable(for: kind).filter { rows($0).isEmpty }
     }
 }
 
@@ -296,7 +403,7 @@ enum SummaryRowEditing {
         guard let index = rows.firstIndex(where: { $0.id == id }) else { return nil }
         let row = rows[index]
         if row.text.isEmpty {
-            // The gist always keeps one row to type into.
+            // The summary always keeps one row to type into.
             guard rows.count > 1 else { return nil }
             rows.remove(at: index)
             if index > 0 {
@@ -493,7 +600,7 @@ final class SummaryEditsController {
         statusMessage = nil
     }
 
-    /// The gist split the way the detail view shows it: a sentence per row
+    /// The summary split the way the detail view shows it: a sentence per row
     /// for a meeting, balanced paragraphs otherwise.
     static func summaryRows(for note: MeetingNote) -> [SummaryProseRow] {
         let sentences = SummaryReviewItem.sentences(in: note.summary)

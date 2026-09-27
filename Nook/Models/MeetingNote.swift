@@ -106,7 +106,7 @@ struct MeetingNote: Identifiable, Hashable, Sendable {
     var summaryPending: PendingSummaryKind?
     var summaryProvenance: SummaryProvenance?
     var summaryRecipe: SummaryRecipe
-    /// Whether the person has rewritten any generated section (the gist, key
+    /// Whether the person has rewritten any generated section (the summary, key
     /// points, decisions, action items or open questions) since the model
     /// last wrote them.
     ///

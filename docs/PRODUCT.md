@@ -165,8 +165,11 @@ structured outcomes, personal notes, transcript text, and metadata.
 
 The detail surface has three views:
 
-- **Notes:** summary, key points, decisions, action items, and editable personal
-  notes.
+- **Notes:** the summary ("In summary", set apart as the lead of the page), key
+  points, decisions, action items, open questions, and personal notes. All of
+  them are edited in place; each list ends with a quiet row to add an item, and
+  a section a meeting does not have yet can be added from the line below the
+  last one.
 - **Transcript:** speaker-aware, timestamped transcript.
 - **Markdown:** editable source with explicit save/revert behavior.
 

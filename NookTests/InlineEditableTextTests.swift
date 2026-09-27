@@ -64,8 +64,8 @@ struct InlineEditableTextTests {
         #expect(model.rows.map(\.text) == ["Maya: send the brief"])
     }
 
-    /// The gist uses 7 points of line spacing, list items 4 and questions 0.
-    @Test(arguments: [0.0, 4.0, 7.0])
+    /// The summary uses 6 points of line spacing, list items 4 and questions 0.
+    @Test(arguments: [0.0, 4.0, 6.0])
     func aRowMeasuresTheSameHeightAsTheTextItReplaced(lineSpacing: Double) async throws {
         let sentence = String(repeating: "A synthetic sentence that wraps across lines. ", count: 6)
         let model = InlineRowsFixtureModel(rows: [SummaryListRow(text: sentence)], lineSpacing: lineSpacing)

@@ -26,6 +26,17 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
   Folders heading it collided with the heading's own disclosure arrow.
 - The notch shows Nook's icon when nothing is happening, instead of a small
   line that read as a stray scribble.
+- A note's summary is now called "In summary" and leads the page on a softly
+  tinted background, in slightly larger type. Its paragraphs are spaced evenly:
+  sentences in the same paragraph sit together, and only a real paragraph break
+  opens a gap.
+- You can add key points, decisions, action items and open questions, not just
+  edit them. Each list ends with an Add row, and a section a meeting does not
+  have yet can be added from the line below the last one. An item you add and
+  leave empty disappears again.
+- My notes shows a soft field while you type in it, and a faint one under the
+  pointer, so it is clear where your words go. Edited summary lines use the
+  same look.
 
 ## 1.22.0
 
