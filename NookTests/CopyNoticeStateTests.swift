@@ -70,8 +70,11 @@ struct CopyNoticeStateTests {
         #expect(state.current?.expirationDelay == 4)
     }
 
+    /// A notice floats over the document instead of pushing it down: the
+    /// heading stays exactly where it was, and the editor keeps its words,
+    /// focus and selection while short and very long notices come and go.
     @Test(arguments: [340.0, 595.0])
-    func noticesLeaveTheHeadingVisibleAndKeepTheSameEditorAndSelection(width: Double) async throws {
+    func noticesFloatWithoutMovingTheDocumentOrItsEditor(width: Double) async throws {
         let model = NoticeLayoutFixtureModel()
         let host = NSHostingView(rootView: NoticeLayoutFixture(model: model))
         host.frame = NSRect(x: 0, y: 0, width: width, height: 400)
@@ -91,22 +94,16 @@ struct CopyNoticeStateTests {
         editor.setSelectedRange(selection)
 
         let short = model.notice.show("Your existing note is unchanged.", severity: .failure)
-        try await settleLayout(in: host) {
-            model.headingFrame.minY > headingWithoutNotice.maxY
-        }
-        let headingWithShortNotice = model.headingFrame
         let long = model.notice.show(
             String(repeating: "Synthetic save error. Review the local file before trying again.\n", count: 60),
             severity: .failure
         )
-        try await settleLayout(in: host) {
-            model.headingFrame.minY > headingWithShortNotice.minY
+        for _ in 0..<10 {
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(10))
         }
-        // Even an unusually long explanation must leave the document heading
-        // and a usable portion of its editor inside the window.
-        #expect(model.headingFrame.maxY < 240)
+        #expect(model.headingFrame == headingWithoutNotice)
         #expect(editors(in: host).first === editor)
-        #expect(editor.visibleRect.height > 80)
         #expect(window.firstResponder === editor)
         #expect(editor.selectedRange() == selection)
         #expect(editor.string.utf8.elementsEqual(original.utf8))

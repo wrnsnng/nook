@@ -676,18 +676,20 @@ private struct NookNoticePresentation: ViewModifier {
     let notice: CopyNoticeState.Notice?
     let onDismiss: (UUID) -> Void
 
+    /// Floats over the content rather than sitting above it, so a notice
+    /// never pushes the note, the list or the toolbar down while it shows.
     func body(content: Content) -> some View {
-        VStack(spacing: 0) {
+        content.overlay(alignment: .top) {
             if let notice {
                 CopyConfirmationBanner(message: notice.message, severity: notice.severity) {
                     onDismiss(notice.id)
                 }
                 .id(notice.id)
+                .frame(maxWidth: 560)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
-            content
         }
     }
 }

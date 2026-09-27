@@ -6,6 +6,17 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
+- Nook no longer quits when you point at the hidden recording pill beside the
+  camera on macOS 27. The pill's tooltip set off a layout loop that macOS
+  stopped by closing the app; the pill has no tooltip now, and hiding the notch
+  also clears a controls shelf that was open.
+- Notices such as "Folder deleted" float over the window instead of pushing the
+  whole note and list down while they show.
+- New Folder moves to the bar at the bottom of the sidebar, as in Notes. In the
+  Folders heading it collided with the heading's own disclosure arrow.
+- The notch shows Nook's icon when nothing is happening, instead of a small
+  line that read as a stray scribble.
+
 ## 1.22.0
 
 [Release notes](Releases/Nook-1.22.0.md)
