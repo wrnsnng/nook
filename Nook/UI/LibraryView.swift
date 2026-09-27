@@ -4,6 +4,8 @@ import SwiftUI
 enum LibrarySelection: Hashable {
     case live
     case note(LibraryNoteIdentity)
+    /// Two or more notes. See `LibraryMultiSelection.swift`.
+    case notes(Set<LibraryNoteIdentity>)
     case copies(MeetingNote.ID)
     case prep
 }
@@ -462,6 +464,10 @@ struct LibraryView: View {
     @State private var mergeIsStopping = false
     /// The note awaiting Trash confirmation.
     @State private var notePendingDeletion: MeetingNote?
+    /// Several notes awaiting one Trash confirmation.
+    @State private var notesPendingDeletion: [LibraryNoteIdentity] = []
+    /// Two selected notes awaiting the merge confirmation: absorbed, target.
+    @State private var mergePairPendingConfirmation: (absorbed: MeetingNote, target: MeetingNote)?
     @State private var commandPalette = CommandPalettePresentation()
     /// Sidebar scope: the whole library, today's capture, or yesterday.
     @State private var scope = LibraryScopeState()
@@ -499,16 +505,25 @@ struct LibraryView: View {
     @State private var folderCounts: [String: Int] = [:]
     @State private var folderNameDraft = ""
     @State private var showsNewFolderAlert = false
-    /// A note waiting to move into the folder being named, when New Folder
-    /// was chosen from its Move To menu.
-    @State private var noteAwaitingNewFolder: MeetingNote?
+    /// Notes waiting to move into the folder being named, when New Folder
+    /// was chosen from a Move To menu.
+    @State private var notesAwaitingNewFolder: [LibraryNoteIdentity] = []
     @State private var folderPendingRename: String?
     @State private var folderPendingDeletion: String?
     @State private var dropTargetFolder: String?
+    /// Where each root note probably belongs, rebuilt with the grouping
+    /// cache and whenever the folder list changes. Titles only, so cheap.
+    @State private var folderSuggestionIndex: FolderSuggestionIndex?
+    /// Bumped when a suggestion is dismissed or a note is placed by hand.
+    /// The memory lives in preferences, which SwiftUI does not observe.
+    @State private var folderPlacementRevision = 0
 
-    init(initialNoteID: MeetingNote.ID? = nil) {
+    init(
+        initialNoteID: MeetingNote.ID? = nil,
+        initialSelection: LibrarySelection? = nil
+    ) {
         _selection = State(
-            initialValue: initialNoteID.map(LibrarySelection.copies)
+            initialValue: initialSelection ?? initialNoteID.map(LibrarySelection.copies)
         )
     }
 
@@ -550,6 +565,7 @@ struct LibraryView: View {
             libraryURL: store.storageURL
         )
         folderCounts = LibraryNoteGrouping.folderCounts(store.notes, libraryURL: store.storageURL)
+        rebuildFolderSuggestions()
         cachedFilteredNotes = filtered
         cachedGroupedNotes = LibraryNoteGrouping.group(filtered)
     }
@@ -648,6 +664,12 @@ struct LibraryView: View {
             refreshLibraryCacheIfNeeded()
             chooseInitialSelection()
             Task { await openActions.refresh(store: store) }
+            // Filed while no library window was open: still offer Undo, once,
+            // if it happened recently enough to be remembered.
+            if let filing = store.lastAutoFiling,
+               Date().timeIntervalSince(filing.filedAt) < 5 * 60 {
+                announceAutoFiling(filing)
+            }
         }
         .onDisappear {
             invalidateCommandPalette()
@@ -688,6 +710,13 @@ struct LibraryView: View {
         }
         .onChange(of: store.folders) { _, folders in
             scope.keepOnlyFolders(folders)
+            rebuildFolderSuggestions()
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(for: .nookNoteAutoFiled)
+        ) { notification in
+            guard let filing = notification.object as? AutoFiledNote else { return }
+            announceAutoFiling(filing)
         }
         .onReceive(
             NotificationCenter.default.publisher(for: .nookOpenPrepBrief)
@@ -718,6 +747,16 @@ struct LibraryView: View {
                     requestSelection(.note(renamed.libraryIdentity))
                 } else {
                     requestSelection(restoredOrFirstSelection(in: notes))
+                }
+            } else if case .notes = selection, let current = selection {
+                // A multi-selection keeps whichever of its notes remain,
+                // following any whose file moved.
+                let followed = current.following(
+                    present: Set(notes.map(\.libraryIdentity)),
+                    uniqueNote: { store.uniqueNote(id: $0)?.libraryIdentity }
+                )
+                if followed != selection {
+                    requestSelection(followed ?? restoredOrFirstSelection(in: notes))
                 }
             } else if case .copies(let id) = selection,
                       let unique = store.uniqueNote(id: id) {
@@ -796,6 +835,45 @@ struct LibraryView: View {
                 "The Markdown file moves to the Trash and can be restored from there. Unsaved edits and recovery copies for this note are also discarded. Kept audio remains available in Recovery until you delete it there."
             )
         }
+        .alert(
+            LibraryBulkCopy.trashTitle(notesPendingDeletion.count),
+            isPresented: Binding(
+                get: { !notesPendingDeletion.isEmpty },
+                set: { if !$0 { notesPendingDeletion = [] } }
+            )
+        ) {
+            Button("Move to Trash", role: .destructive) {
+                let identities = notesPendingDeletion
+                notesPendingDeletion = []
+                trashNotes(identities)
+            }
+            Button("Cancel", role: .cancel) {
+                notesPendingDeletion = []
+            }
+        } message: {
+            Text(LibraryBulkCopy.trashMessage)
+        }
+        .alert(
+            "Merge these 2 notes?",
+            isPresented: Binding(
+                get: { mergePairPendingConfirmation != nil },
+                set: { if !$0 { mergePairPendingConfirmation = nil } }
+            )
+        ) {
+            Button("Merge Notes") {
+                if let pair = mergePairPendingConfirmation {
+                    mergeNotes(pair.absorbed, into: pair.target)
+                }
+                mergePairPendingConfirmation = nil
+            }
+            Button("Cancel", role: .cancel) {
+                mergePairPendingConfirmation = nil
+            }
+        } message: {
+            Text(mergePairPendingConfirmation.map {
+                LibraryBulkCopy.mergeMessage(target: $0.target.title)
+            } ?? "")
+        }
         .sheet(isPresented: $showsAskSheet) {
             let sourceLibrary = askLibraryURL
             LibraryAskView(
@@ -837,7 +915,7 @@ struct LibraryView: View {
         .alert("New Folder", isPresented: $showsNewFolderAlert) {
             TextField("Name", text: $folderNameDraft)
             Button("Create") { createFolderFromDraft() }
-            Button("Cancel", role: .cancel) { noteAwaitingNewFolder = nil }
+            Button("Cancel", role: .cancel) { notesAwaitingNewFolder = [] }
         } message: {
             Text("The folder is created inside your notes folder on this Mac.")
         }
@@ -1020,11 +1098,22 @@ struct LibraryView: View {
     /// Selection as the `List` drives it, routed through the same guard a
     /// click does. Without this the arrow keys could leave a pane holding
     /// unsaved Markdown without ever asking.
-    private var listSelection: Binding<LibrarySelection?> {
+    ///
+    /// A set, so Shift-click, Command-click and Shift-arrow extend the
+    /// selection natively. `fromList` keeps the live and prep rows out of a
+    /// multi-selection.
+    private var listSelection: Binding<Set<LibrarySelection>> {
         Binding(
-            get: { selection },
-            set: { requestSelection($0) }
+            get: { LibrarySelection.listRows(for: selection) },
+            set: { requestSelection(LibrarySelection.fromList($0, replacing: selection)) }
         )
+    }
+
+    /// Select All in the list selects every visible note and nothing else,
+    /// the way it does in Mail's message list.
+    private func selectAllVisibleNotes() {
+        guard let all = LibrarySelection.forNotes(filteredNotes.map(\.libraryIdentity)) else { return }
+        requestSelection(all)
     }
 
     private var scopeSelection: Binding<LibraryDateRange> {
@@ -1064,6 +1153,10 @@ struct LibraryView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
+                // Filling the row gives the segments equal, fixed widths. Sized
+                // to its labels, the control re-measured whenever the window
+                // re-laid out (a notice appearing, say) and "All" briefly grew.
+                .frame(maxWidth: .infinity)
                 .accessibilityLabel("Note date range")
             }
 
@@ -1165,46 +1258,20 @@ struct LibraryView: View {
                         // would swallow the click before the List saw it.
                         MeetingRow(
                             note: note,
-                            isSelected: selection == .note(note.libraryIdentity),
+                            isSelected: selection?.noteIdentities.contains(note.libraryIdentity) == true,
                             showsFileIdentity: store.duplicateNoteIDs.contains(note.id)
                         )
                         .tag(LibrarySelection.note(note.libraryIdentity))
-                        .draggable(LibraryNoteDrag.payload(for: note))
+                        // Dragging any row of a multi-selection carries all
+                        // of it, as in Finder.
+                        .draggable(LibraryNoteDrag.payload(
+                            for: orderedTargets(forRow: note.libraryIdentity)
+                        ))
                         .contextMenu {
-                            Button("Show in Finder") {
-                                store.reveal(note)
-                            }
-                            moveToMenu(for: note)
-                            Button("Copy Markdown") {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(
-                                    (try? store.rawMarkdown(for: note))
-                                        ?? MarkdownCodec.encode(note),
-                                    forType: .string
-                                )
-                                showCopyNotice("Markdown copied")
-                            }
-                            if note.kind != .digest {
-                                Divider()
-                                Button("Record into This Note") {
-                                    AppModel.shared.meeting.continueRecording(into: note)
-                                }
-                                .disabled(
-                                    currentPhase.isRecording || isProcessing
-                                        || store.duplicateNoteIDs.contains(note.id)
-                                )
-                                .help(
-                                    "Appends the next recording to this note instead of creating a new one"
-                                )
-                                Button("Merge Another Note into This") {
-                                    requestMergePicker(for: note)
-                                }
-                                .disabled(mergeTask != nil)
-                                .disabled(isProcessing || store.duplicateNoteIDs.contains(note.id))
-                            }
-                            Divider()
-                            Button("Move to Trash", role: .destructive) {
-                                notePendingDeletion = note
+                            if selection?.contextTargets(for: note.libraryIdentity).count ?? 1 > 1 {
+                                multipleNotesMenu(orderedTargets(forRow: note.libraryIdentity))
+                            } else {
+                                singleNoteMenu(note)
                             }
                         }
                     }
@@ -1214,6 +1281,7 @@ struct LibraryView: View {
             }
         }
         .listStyle(.sidebar)
+        .onCommand(#selector(NSTableView.selectAll(_:)), perform: selectAllVisibleNotes)
         .navigationTitle("Nook")
         .searchable(
             text: $searchText,
@@ -1223,6 +1291,120 @@ struct LibraryView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             sidebarFooter
         }
+    }
+
+    /// A note row's menu when it acts on that note alone.
+    @ViewBuilder
+    private func singleNoteMenu(_ note: MeetingNote) -> some View {
+        Button("Show in Finder") {
+            store.reveal(note)
+        }
+        moveToMenu(for: note)
+        Button("Copy Markdown") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(
+                (try? store.rawMarkdown(for: note))
+                    ?? MarkdownCodec.encode(note),
+                forType: .string
+            )
+            showCopyNotice("Markdown copied")
+        }
+        if note.kind != .digest {
+            Divider()
+            Button("Record into This Note") {
+                AppModel.shared.meeting.continueRecording(into: note)
+            }
+            .disabled(
+                currentPhase.isRecording || isProcessing
+                    || store.duplicateNoteIDs.contains(note.id)
+            )
+            .help(
+                "Appends the next recording to this note instead of creating a new one"
+            )
+            Button("Merge Another Note into This") {
+                requestMergePicker(for: note)
+            }
+            .disabled(mergeTask != nil)
+            .disabled(isProcessing || store.duplicateNoteIDs.contains(note.id))
+        }
+        Divider()
+        Button("Move to Trash", role: .destructive) {
+            notePendingDeletion = note
+        }
+    }
+
+    /// A note row's menu when it is part of a multi-selection: every item
+    /// acts on the whole selection, as in Finder.
+    @ViewBuilder
+    private func multipleNotesMenu(_ identities: [LibraryNoteIdentity]) -> some View {
+        let notes = identities.compactMap(store.note(matching:))
+        Button("Show in Finder") {
+            let urls = notes.compactMap(\.fileURL)
+            if !urls.isEmpty { NSWorkspace.shared.activateFileViewerSelecting(urls) }
+        }
+        bulkMoveToMenu(for: notes)
+        if identities.count == 2 {
+            Divider()
+            Button("Merge 2 Notes…") { requestMergeSelection(identities) }
+                .disabled(!canMergeSelection(notes))
+        }
+        Divider()
+        Button("Move \(identities.count) Notes to Trash", role: .destructive) {
+            notesPendingDeletion = identities
+        }
+    }
+
+    /// Move To for several notes at once.
+    private func bulkMoveToMenu(for notes: [MeetingNote]) -> some View {
+        Menu("Move To") {
+            moveToItems(for: notes)
+        }
+        .disabled(!canMoveNotes(notes))
+    }
+
+    private func moveToItems(for notes: [MeetingNote]) -> some View {
+        let locations = Set(notes.map { store.folderName(of: $0) })
+        let common = locations.count == 1 ? locations.first! : nil
+        return LibraryMoveToMenuItems(
+            folders: store.folders,
+            commonFolder: common,
+            allInLibraryRoot: locations == [nil],
+            suggestedFolder: notes.count == 1 ? notes.first.flatMap(folderSuggestion(for:))?.folder : nil,
+            onMove: { folder in moveNotes(notes.map(\.libraryIdentity), toFolder: folder) },
+            onNewFolder: {
+                notesAwaitingNewFolder = notes.map(\.libraryIdentity)
+                presentNewFolder()
+            }
+        )
+    }
+
+    private func canMoveNotes(_ notes: [MeetingNote]) -> Bool {
+        !notes.isEmpty && mergeTask == nil
+            && notes.contains { $0.fileURL != nil && !store.duplicateNoteIDs.contains($0.id) }
+    }
+
+    private func canMergeSelection(_ notes: [MeetingNote]) -> Bool {
+        notes.count == 2 && mergeTask == nil && !isProcessing
+            && notes.allSatisfy { $0.kind != .digest && !store.duplicateNoteIDs.contains($0.id) }
+    }
+
+    /// The notes a row's menu or drag acts on, in the list's order.
+    private func orderedTargets(forRow identity: LibraryNoteIdentity) -> [LibraryNoteIdentity] {
+        let targets = selection?.contextTargets(for: identity) ?? [identity]
+        guard targets.count > 1 else { return [identity] }
+        return orderedNotes(targets).map(\.libraryIdentity)
+    }
+
+    /// Selected notes in the order the sidebar lists them. Notes the list
+    /// does not show right now (a move into another folder) follow, newest
+    /// first, like the library itself.
+    private func orderedNotes(_ identities: Set<LibraryNoteIdentity>) -> [MeetingNote] {
+        let visible = filteredNotes.filter { identities.contains($0.libraryIdentity) }
+        let shown = Set(visible.map(\.libraryIdentity))
+        let hidden = store.notes.filter {
+            identities.contains($0.libraryIdentity) && !shown.contains($0.libraryIdentity)
+        }
+        return visible + hidden
     }
 
     /// Folders, like the folder list in Notes. Each is a real directory in
@@ -1275,6 +1457,16 @@ struct LibraryView: View {
                     }
                 }
             }
+            // Visible where folders are, as the Add rows are on a note, so
+            // making one never depends on finding a context menu.
+            Button(action: presentNewFolder) {
+                Label("New Folder", systemImage: "plus")
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 2)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Make a folder in your notes folder")
         } header: {
             // The header keeps only its title: a collapsible section draws
             // its own chevron at the trailing edge. New Folder sits in the
@@ -1288,40 +1480,9 @@ struct LibraryView: View {
 
     /// Move To lists every folder and the library's root. The note's own
     /// location is shown checked rather than offered as a no-op move.
-    @ViewBuilder
     private func moveToMenu(for note: MeetingNote) -> some View {
-        let current = store.folderName(of: note)
         Menu("Move To") {
-            Button {
-                moveNote(note, toFolder: nil)
-            } label: {
-                if current == nil {
-                    Label("Library", systemImage: "checkmark")
-                } else {
-                    Text("Library")
-                }
-            }
-            .disabled(current == nil)
-            if !store.folders.isEmpty {
-                Divider()
-                ForEach(store.folders, id: \.self) { name in
-                    Button {
-                        moveNote(note, toFolder: name)
-                    } label: {
-                        if current == name {
-                            Label(name, systemImage: "checkmark")
-                        } else {
-                            Text(name)
-                        }
-                    }
-                    .disabled(current == name)
-                }
-            }
-            Divider()
-            Button("New Folder…") {
-                noteAwaitingNewFolder = note
-                presentNewFolder()
-            }
+            moveToItems(for: [note])
         }
         .disabled(note.fileURL == nil || store.duplicateNoteIDs.contains(note.id))
     }
@@ -1473,6 +1634,8 @@ struct LibraryView: View {
                     }
                     : nil
             )
+        } else if case .notes(let identities) = selection {
+            multiSelectionPane(identities)
         } else if let selectedNote {
             if store.duplicateNoteIDs.contains(selectedNote.id) {
                 DuplicateNotePreview(
@@ -1484,9 +1647,17 @@ struct LibraryView: View {
                 )
                     .id(selectedNote.libraryIdentity)
             } else {
+                let suggestion = folderSuggestion(for: selectedNote)
                 MeetingDetailView(
                     note: selectedNote,
-                    summarySession: store.summarySessions.session(for: selectedNote)
+                    summarySession: store.summarySessions.session(for: selectedNote),
+                    folderSuggestion: suggestion,
+                    onAcceptFolderSuggestion: { folder in
+                        moveNote(selectedNote, toFolder: folder)
+                    },
+                    onDismissFolderSuggestion: {
+                        dismissFolderSuggestion(for: selectedNote)
+                    }
                 )
                     .id(selectedNote.libraryIdentity)
             }
@@ -1500,6 +1671,27 @@ struct LibraryView: View {
         } else {
             libraryPlaceholder
         }
+    }
+
+    private func multiSelectionPane(_ identities: Set<LibraryNoteIdentity>) -> some View {
+        let notes = orderedNotes(identities)
+        let locations = Set(notes.map { store.folderName(of: $0) })
+        return LibraryMultiSelectionPane(
+            notes: notes,
+            folders: store.folders,
+            commonFolder: locations.count == 1 ? locations.first! : nil,
+            allInLibraryRoot: locations == [nil],
+            canMove: canMoveNotes(notes),
+            canMerge: canMergeSelection(notes),
+            showsMerge: notes.count == 2,
+            onMove: { folder in moveNotes(notes.map(\.libraryIdentity), toFolder: folder) },
+            onNewFolder: {
+                notesAwaitingNewFolder = notes.map(\.libraryIdentity)
+                presentNewFolder()
+            },
+            onMerge: { requestMergeSelection(notes.map(\.libraryIdentity)) },
+            onTrash: { notesPendingDeletion = notes.map(\.libraryIdentity) }
+        )
     }
 
     @ViewBuilder
@@ -1671,6 +1863,11 @@ struct LibraryView: View {
                 folder: requestedFolder,
                 libraryURL: store.storageURL
             )
+            // A multi-selection keeps the notes the new scope still shows.
+            if case .notes = selection,
+               let kept = selection?.restricted(to: visible.map(\.libraryIdentity)) {
+                return kept
+            }
             let current: LibraryNoteIdentity?
             if case .note(let identity) = selection { current = identity }
             else { current = nil }
@@ -1816,15 +2013,21 @@ struct LibraryView: View {
            filteredNotes.contains(where: { $0.libraryIdentity == selectedID }) {
             return
         }
+        if case .notes = selection,
+           let kept = selection?.restricted(to: filteredNotes.map(\.libraryIdentity)) {
+            if kept != selection { requestSelection(kept) }
+            return
+        }
         requestSelection(filteredNotes.first.map { .note($0.libraryIdentity) })
     }
 
     private func showCopyNotice(
         _ message: String,
-        severity: CopyConfirmationBanner.Severity = .success
+        severity: CopyConfirmationBanner.Severity = .success,
+        action: NoticeAction? = nil
     ) {
         let id = withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
-            copyNotice.show(message, severity: severity)
+            copyNotice.show(message, severity: severity, action: action)
         }
         guard let dwell = copyNotice.current?.expirationDelay else { return }
         Task {
@@ -1834,6 +2037,73 @@ struct LibraryView: View {
                 copyNotice.expire(id: id)
             }
         }
+    }
+
+    // MARK: - Folder suggestions
+
+    private func rebuildFolderSuggestions() {
+        folderSuggestionIndex = store.folders.isEmpty
+            ? nil
+            : FolderSuggestionIndex(
+                notes: store.notes, folders: store.folders, libraryURL: store.storageURL
+            )
+    }
+
+    /// The one folder worth suggesting for a note at the library's root.
+    /// Quiet while a write-up is still running (the move would be refused),
+    /// and for notes the person dismissed the hint for or placed themselves.
+    private func folderSuggestion(for note: MeetingNote) -> FolderSuggestion? {
+        _ = folderPlacementRevision
+        guard let index = folderSuggestionIndex,
+              !store.duplicateNoteIDs.contains(note.id) else { return nil }
+        return index.offeredSuggestion(
+            for: note,
+            isInFolder: store.folderName(of: note) != nil,
+            isBusy: store.summarySessions.isRunning(for: note.libraryIdentity),
+            placements: store.folderPlacements
+        )
+    }
+
+    private func dismissFolderSuggestion(for note: MeetingNote) {
+        store.folderPlacements.dismissSuggestion(for: note.id)
+        folderPlacementRevision &+= 1
+    }
+
+    /// A move the person chose. Nook never files or re-files such a note
+    /// on its own, and stops suggesting for it.
+    private func markPlacedByHand(_ ids: [UUID]) {
+        guard !ids.isEmpty else { return }
+        store.folderPlacements.markUserPlaced(ids)
+        folderPlacementRevision &+= 1
+    }
+
+    private func announceAutoFiling(_ filing: AutoFiledNote) {
+        guard store.lastAutoFiling == filing else { return }
+        store.lastAutoFiling = nil
+        showCopyNotice(
+            filing.notice,
+            action: NoticeAction(
+                title: "Undo",
+                accessibilityLabel: "Undo, move \(filing.title) back to Library"
+            ) {
+                undoAutoFiling(filing)
+            }
+        )
+    }
+
+    /// Moves an automatically filed note back through the ordinary move, so
+    /// open editors are settled first, and remembers the choice: a note moved
+    /// back out is never filed again.
+    private func undoAutoFiling(_ filing: AutoFiledNote) {
+        guard let note = store.uniqueNote(id: filing.noteID) else {
+            showCopyNotice(MarkdownStoreError.fileChangedElsewhere.localizedDescription, severity: .failure)
+            return
+        }
+        guard store.folderName(of: note) != nil else {
+            markPlacedByHand([note.id])
+            return
+        }
+        moveNote(note, toFolder: nil)
     }
 
     // MARK: - Folders
@@ -1846,12 +2116,12 @@ struct LibraryView: View {
     }
 
     private func createFolderFromDraft() {
-        let pendingNote = noteAwaitingNewFolder
-        noteAwaitingNewFolder = nil
+        let pendingNotes = notesAwaitingNewFolder
+        notesAwaitingNewFolder = []
         do {
             let name = try store.createFolder(named: folderNameDraft)
-            if let pendingNote {
-                moveNote(pendingNote, toFolder: name)
+            if !pendingNotes.isEmpty {
+                moveNotes(pendingNotes, toFolder: name)
             } else {
                 showCopyNotice("Folder “\(name)” created")
             }
@@ -1888,12 +2158,9 @@ struct LibraryView: View {
 
     private func moveDroppedNotes(_ items: [String], toFolder name: String) -> Bool {
         dropTargetFolder = nil
-        let identities = items.compactMap(LibraryNoteDrag.identity(from:))
+        let identities = LibraryNoteDrag.identities(from: items)
         guard !identities.isEmpty else { return false }
-        for identity in identities {
-            guard let note = store.note(matching: identity) else { continue }
-            moveNote(note, toFolder: name)
-        }
+        moveNotes(identities, toFolder: name)
         return true
     }
 
@@ -1912,20 +2179,75 @@ struct LibraryView: View {
             }
             if store.folderName(of: current) == folder { return }
             let moved = try store.move(current, toFolder: folder)
-            if selection == .note(note.libraryIdentity) {
-                selection = .note(moved.libraryIdentity)
-            }
+            markPlacedByHand([moved.id])
+            selection = selection?.applyingMoves(
+                [note.libraryIdentity: moved.libraryIdentity]
+            )
             showCopyNotice("Moved to \(folder ?? "Library")")
         } catch {
             showCopyNotice(error.localizedDescription, severity: .failure)
         }
     }
 
-    /// Only the Markdown source for the note being moved blocks a move; any
+    /// Moves several notes with one summary notice. One note takes the
+    /// single-note path, so its notice and checks are exactly as before.
+    ///
+    /// The editors are settled once, before any file moves, with the same
+    /// rules as a single move. A note that cannot move (changed elsewhere,
+    /// busy, ambiguous) is reported and the rest still move.
+    private func moveNotes(_ identities: [LibraryNoteIdentity], toFolder folder: String?) {
+        if identities.count == 1, let only = identities.first {
+            guard let note = store.note(matching: only) else {
+                showCopyNotice(MarkdownStoreError.fileChangedElsewhere.localizedDescription, severity: .failure)
+                return
+            }
+            moveNote(note, toFolder: folder)
+            return
+        }
+        guard !identities.isEmpty else { return }
+        guard mergeTask == nil else {
+            showCopyNotice(LibraryFolderError.noteIsBusy.localizedDescription, severity: .info)
+            return
+        }
+        do {
+            try settleDraftsBeforeMoving(Set(identities))
+        } catch {
+            showCopyNotice(error.localizedDescription, severity: .failure)
+            return
+        }
+        let outcome = LibraryBulkNoteAction.move(identities, toFolder: folder, store: store)
+        markPlacedByHand(outcome.moved.values.map(\.noteID))
+        selection = selection?.applyingMoves(outcome.moved)
+        let notice = LibraryBulkNoteAction.moveNotice(outcome, toFolder: folder)
+        showCopyNotice(notice.message, severity: notice.isFailure ? .failure : .success)
+    }
+
+    /// Trashes several notes after the count-naming confirmation. Each goes
+    /// through the single delete, which already discards its editors'
+    /// unsaved words and recovery copies as the confirmation says.
+    private func trashNotes(_ identities: [LibraryNoteIdentity]) {
+        guard !identities.isEmpty else { return }
+        guard mergeTask == nil else {
+            showCopyNotice(LibraryFolderError.noteIsBusy.localizedDescription, severity: .info)
+            return
+        }
+        let outcome = LibraryBulkNoteAction.delete(identities, store: store)
+        let notice = LibraryBulkNoteAction.deleteNotice(outcome)
+        showCopyNotice(notice.message, severity: notice.isFailure ? .failure : .success)
+    }
+
+    private func settleDraftsBeforeMoving(_ note: MeetingNote) throws {
+        try settleDraftsBeforeMoving([note.libraryIdentity])
+    }
+
+    /// Only the Markdown source for a note being moved blocks a move; any
     /// other unsaved source edit keeps its own owner and its own question.
-    private func settleDraftsBeforeMoving(_ note: MeetingNote? = nil) throws {
+    /// Nil means every note may move, as a folder rename or removal does.
+    private func settleDraftsBeforeMoving(_ notes: Set<LibraryNoteIdentity>? = nil) throws {
         if markdownDraft.hasChanges {
-            let affected = note.map { markdownDraft.libraryIdentity == $0.libraryIdentity } ?? true
+            let affected = notes.map { identities in
+                markdownDraft.libraryIdentity.map(identities.contains) ?? false
+            } ?? true
             if affected { throw LibraryFolderError.unfinishedMarkdown }
         }
         if let reason = personalNotesDraft.saveIfNeeded(store: store) {
@@ -1941,6 +2263,14 @@ struct LibraryView: View {
     /// A folder rename or removal moves every file inside it. The selected
     /// note follows its file rather than falling back to the first note.
     private func followMovedSelection() {
+        if case .notes = selection, let current = selection {
+            let followed = current.following(
+                present: Set(store.notes.map(\.libraryIdentity)),
+                uniqueNote: { store.uniqueNote(id: $0)?.libraryIdentity }
+            )
+            if let followed { selection = followed }
+            return
+        }
         guard case .note(let identity) = selection,
               store.note(matching: identity) == nil,
               let moved = store.uniqueNote(id: identity.noteID) else { return }
@@ -2029,6 +2359,34 @@ struct LibraryView: View {
             return
         }
         openPreparedMergePicker(for: note.libraryIdentity)
+    }
+
+    /// Merging exactly two selected notes: the same pairwise merge as the
+    /// picker, with the picker's checks, confirmed in an alert because the
+    /// selection has already said which two notes. The one that started
+    /// first is the target, which is also where the merge files the result.
+    private func requestMergeSelection(_ identities: [LibraryNoteIdentity]) {
+        guard identities.count == 2, mergeTask == nil, !showsUnsavedChangesAlert,
+              libraryIsReadyForSheet() else { return }
+        do {
+            try NoteMergeWorkflow.settleDrafts(
+                store: store, markdown: markdownDraft, personal: personalNotesDraft
+            )
+            let notes = try identities.map { identity in
+                guard let current = store.uniqueNote(id: identity.noteID),
+                      current.libraryIdentity == identity else {
+                    throw NoteMergeError.sourceChanged
+                }
+                try store.validateMergeSource(
+                    current, directory: store.storageURL, generation: store.storageGeneration
+                )
+                return current
+            }
+            let ordered = notes.sorted { $0.startedAt < $1.startedAt }
+            mergePairPendingConfirmation = (absorbed: ordered[1], target: ordered[0])
+        } catch {
+            showCopyNotice(error.localizedDescription, severity: .failure)
+        }
     }
 
     private func openPreparedMergePicker(for identity: LibraryNoteIdentity) {
@@ -2281,7 +2639,7 @@ private struct LibraryRecoverySection: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(NookPalette.accent)
                     .frame(minHeight: 28)
                     .contentShape(Rectangle())
@@ -2294,7 +2652,7 @@ private struct LibraryRecoverySection: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(NookPalette.accent)
                     .frame(minHeight: 28)
                     .contentShape(Rectangle())
@@ -2326,16 +2684,12 @@ private struct LibraryRecoverySection: View {
                     .accessibilityElement(children: .combine)
                 }
             } header: {
-                HStack(spacing: NookSpacing.xSmall) {
-                    Label(
-                        "Recordings need attention",
-                        systemImage: "waveform.badge.exclamationmark"
-                    )
-                    Spacer(minLength: NookSpacing.small)
-                    Text(recovery.totalSizeLabel)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
+                // The total size moved to the footer and the spoken value:
+                // each row already names its own size.
+                Label(
+                    "Recordings need attention",
+                    systemImage: "waveform.badge.exclamationmark"
+                )
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Recordings need attention")
                 .accessibilityValue(recoverySummary)
@@ -2366,62 +2720,83 @@ private struct LibraryRecoverySection: View {
         }
     }
 
+    /// Laid out like a note row: when, then how much. Recover is the one
+    /// action worth a button; Show in Finder and Delete live in the row's
+    /// context menu and its ellipsis menu, where three bordered buttons
+    /// used to crowd a 300 point sidebar. Delete still asks first.
     private func recoveryRow(for orphan: OrphanedRecording) -> some View {
-        VStack(alignment: .leading, spacing: NookSpacing.xSmall) {
-            HStack(alignment: .firstTextBaseline, spacing: NookSpacing.small) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(orphan.dateLabel)
-                        .font(.callout)
-                    HStack(spacing: NookSpacing.xSmall) {
-                        Text(orphan.sizeLabel)
-                        if orphan.isAudioOnly {
-                            Text("·")
-                            Text("Audio only")
-                        }
-                    }
-                    .font(.caption2)
+        HStack(alignment: .center, spacing: NookSpacing.small) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(orphan.rowTitle())
+                    .font(.body.weight(.medium))
+                    .lineLimit(1)
+                Text(orphan.rowDetail)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
-                }
-
-                Spacer(minLength: NookSpacing.xSmall)
+                    .monospacedDigit()
+                    .lineLimit(1)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
+            .help(orphan.dateLabel)
 
-            HStack(spacing: NookSpacing.small) {
-                Button("Recover") {
-                    recovery.recover(
-                        orphan,
-                        localeIdentifier: localeIdentifier
-                    )
-                }
-                .controlSize(.small)
-                .disabled(recovery.isWorking)
-                .help("Recover this recording as a note.")
-                .accessibilityLabel(
-                    "Recover recording from \(orphan.dateLabel) as a note"
-                )
-
-                Button("Reveal") {
-                    recovery.reveal(orphan)
-                }
-                .controlSize(.small)
-                .help("Reveal this recording in Finder.")
-                .accessibilityLabel(
-                    "Reveal recording from \(orphan.dateLabel) in Finder"
-                )
-
-                Button("Delete", role: .destructive) {
-                    pendingDeletion = orphan
-                }
-                .controlSize(.small)
-                .disabled(recovery.isWorking)
-                .help("Move this recording to the Trash.")
-                .accessibilityLabel(
-                    "Move recording from \(orphan.dateLabel) to the Trash"
-                )
+            Button("Recover") {
+                recover(orphan)
             }
+            .controlSize(.small)
+            .fixedSize()
+            .disabled(recovery.isWorking)
+            .help("Recover this recording as a note.")
+            .accessibilityLabel(
+                "Recover recording from \(orphan.dateLabel) as a note"
+            )
+
+            Menu {
+                secondaryActions(for: orphan)
+            } label: {
+                Image(systemName: "ellipsis")
+            }
+            .menuStyle(.button)
+            .buttonStyle(.borderless)
+            .menuIndicator(.hidden)
+            .controlSize(.small)
+            .fixedSize()
+            .help("More actions for this recording")
+            .accessibilityLabel("More actions for recording from \(orphan.dateLabel)")
         }
-        .padding(.vertical, NookSpacing.xSmall)
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button("Recover as Note") { recover(orphan) }
+                .disabled(recovery.isWorking)
+            secondaryActions(for: orphan)
+        }
         .accessibilityElement(children: .contain)
+        .accessibilityAction(named: "Show in Finder") {
+            recovery.reveal(orphan)
+        }
+        .accessibilityAction(named: "Move to Trash") {
+            guard !recovery.isWorking else { return }
+            pendingDeletion = orphan
+        }
+    }
+
+    private func recover(_ orphan: OrphanedRecording) {
+        recovery.recover(orphan, localeIdentifier: localeIdentifier)
+    }
+
+    @ViewBuilder
+    private func secondaryActions(for orphan: OrphanedRecording) -> some View {
+        Button("Show in Finder") {
+            recovery.reveal(orphan)
+        }
+        .accessibilityLabel("Show recording from \(orphan.dateLabel) in Finder")
+        Divider()
+        Button("Move to Trash…", role: .destructive) {
+            pendingDeletion = orphan
+        }
+        .disabled(recovery.isWorking)
+        .accessibilityLabel("Move recording from \(orphan.dateLabel) to the Trash")
     }
 
     private func cleanupFailureRow(
@@ -2433,26 +2808,28 @@ private struct LibraryRecoverySection: View {
                     .foregroundStyle(NookPalette.warning)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Saved note: \(failure.noteTitle)")
-                        .font(.callout)
+                        .font(.body.weight(.medium))
+                        .lineLimit(2)
                     Text(
                         "\(failure.dateLabel) · \(failure.sizeLabel) still in Nook"
                     )
-                    .font(.caption2)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                     Text("Some files could not be removed after recovery.")
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: NookSpacing.xSmall)
             }
 
-            Button("Reveal Files") {
+            Button("Show in Finder") {
                 recovery.reveal(failure)
             }
             .controlSize(.small)
             .help("Reveal the files that could not be removed in Finder.")
             .accessibilityLabel(
-                "Reveal files left after recovering \(failure.noteTitle) in Finder"
+                "Show files left after recovering \(failure.noteTitle) in Finder"
             )
         }
         .padding(.vertical, NookSpacing.xSmall)
@@ -2503,10 +2880,10 @@ private struct LibraryRecoverySection: View {
     private var recoveryFooter: String {
         var text = recoveryContext
         if !recovery.orphans.isEmpty {
-            text += " Recover a recording as a note, reveal its files, or move it to the Trash."
+            text += " Recover a recording as a note, or use its menu to show it in Finder or move it to the Trash. \(recovery.totalSizeLabel) in total."
         }
         if !recovery.cleanupFailures.isEmpty {
-            text += " Reveal the remaining files to inspect them in Finder."
+            text += " Show the remaining files in Finder to inspect them."
         }
         return text
     }
@@ -2555,6 +2932,7 @@ private struct MeetingRow: View {
         }
         .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
@@ -2878,27 +3256,6 @@ private struct NoteMergePickerView: View {
         }
         .padding(22)
         .frame(width: 460)
-    }
-}
-
-/// What a dragged note row carries. A private text form rather than the
-/// file's URL: a file URL dropped on Finder would move or copy the Markdown
-/// behind Nook's back, while this names the note only to Nook's own folders.
-enum LibraryNoteDrag {
-    private static let prefix = "nook-note:"
-
-    static func payload(for note: MeetingNote) -> String {
-        prefix + note.libraryIdentity.noteID.uuidString + ":" + (note.libraryIdentity.filePath ?? "")
-    }
-
-    static func identity(from payload: String) -> LibraryNoteIdentity? {
-        guard payload.hasPrefix(prefix) else { return nil }
-        let body = payload.dropFirst(prefix.count)
-        guard let separator = body.firstIndex(of: ":"),
-              let id = UUID(uuidString: String(body[..<separator])) else { return nil }
-        let path = String(body[body.index(after: separator)...])
-        guard path.hasPrefix("/") else { return nil }
-        return LibraryNoteIdentity(noteID: id, fileURL: URL(fileURLWithPath: path))
     }
 }
 

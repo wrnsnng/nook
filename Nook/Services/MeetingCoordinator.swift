@@ -23,22 +23,23 @@ enum MeetingPhase: Equatable, Sendable {
         ///
         /// The panel and the live workspace used to word these independently
         /// and drift apart; both now read from here.
+        /// Short enough for one line in the notch's processing card.
         var displaySentence: String {
             switch self {
             case .preparing:
-                "Securing the recording before Nook shapes it into notes."
+                "Securing the recording on this Mac."
             case .refining:
-                "Cleaning up the live captions while preserving what was actually said."
+                "Tidying the captions, keeping every word said."
             case .transcribing:
-                "Giving the saved audio a careful second listen, entirely on this Mac."
+                "Listening to the saved audio again, on this Mac."
             case .separatingSpeakers:
-                "Working out who said what on the meeting side, entirely on this Mac."
+                "Working out who said what, on this Mac."
             case .summarizing:
-                "Finding the useful shape of the conversation: themes, decisions, and next steps."
+                "Finding the themes, decisions and next steps."
             case .saving:
-                "Writing a durable Markdown note you can read with any editor."
+                "Writing a Markdown note any editor can open."
             case .discarding:
-                "Removing the accidental recording without creating a note."
+                "Removing the recording without making a note."
             }
         }
     }
@@ -885,6 +886,13 @@ final class MeetingCoordinator: ObservableObject {
     /// calendar calls it rather than what the app's window title says.
     weak var calendarContext: CalendarContextService?
 
+    /// A recording has just created a new note, and its background summary
+    /// (if any) has started. Owned by AppModel, which files a recurring
+    /// meeting with its earlier sittings once that summary settles. Not
+    /// called when a recording joins an existing note: that note is already
+    /// wherever the person keeps it.
+    var onNewMeetingSaved: (@MainActor (MeetingNote, Task<Void, Never>?) -> Void)?
+
     private func handleDetection(_ detection: DetectedMeeting) {
         guard activeDraft == nil, processingTask == nil, dismissedDetection != detection else { return }
         var detection = detection
@@ -1377,7 +1385,8 @@ final class MeetingCoordinator: ObservableObject {
                 preserving: keepAudio ? Set([audioURL]) : []
             )
 
-            store.summarySessions.enrich(saved, purpose: .initial, store: store)
+            let summary = store.summarySessions.enrich(saved, purpose: .initial, store: store)
+            onNewMeetingSaved?(saved, summary)
 
             completeSuccessfulProcessing(
                 cleanupFailures: cleanupFailures,
@@ -1548,10 +1557,13 @@ final class MeetingCoordinator: ObservableObject {
                 )
             }
             NookEventLog.write(.meetingSavedFromLiveCaptions)
-            store.summarySessions.enrich(
+            let summary = store.summarySessions.enrich(
                 saved, purpose: draft.attachedNoteID == nil ? .initial : .appended,
                 store: store
             )
+            if draft.attachedNoteID == nil {
+                onNewMeetingSaved?(saved, summary)
+            }
             completeSuccessfulProcessing(
                 cleanupFailures: [],
                 title: saved.title,

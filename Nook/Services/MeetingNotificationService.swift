@@ -104,7 +104,7 @@ final class MeetingNotificationService: NSObject, UNUserNotificationCenterDelega
             var bodyText: String
             if priorSittings > 0 {
                 bodyText =
-                    "\(priorSittings) earlier sitting\(priorSittings == 1 ? "" : "s") in your library."
+                    "\(priorSittings) earlier meeting\(priorSittings == 1 ? "" : "s") in your library."
             } else if upcoming.attendeeCount > 0 {
                 bodyText = "\(upcoming.attendeeCount) invited."
             } else {

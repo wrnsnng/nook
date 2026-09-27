@@ -7,6 +7,9 @@ struct CalendarMeetingEvent: Hashable, Sendable {
     let title: String
     let attendeeCount: Int
     let startDate: Date
+    /// Whether the event repeats. Read from the local calendar only, and
+    /// only used to decide whether a new meeting joins a recurring series.
+    var isRecurring = false
 
     var key: String { "\(startDate.timeIntervalSince1970)|\(title)" }
 }
@@ -74,7 +77,8 @@ struct EventKitCalendarProvider: CalendarEventProviding {
                 CalendarMeetingEvent(
                     title: event.title ?? "",
                     attendeeCount: event.attendees?.count ?? 0,
-                    startDate: event.startDate
+                    startDate: event.startDate,
+                    isRecurring: event.hasRecurrenceRules
                 )
             }
     }
@@ -172,6 +176,35 @@ final class CalendarContextService: ObservableObject {
             end: date.addingTimeInterval(10 * 60)
         )
         return Self.nearestEvent(to: date, among: events)
+    }
+
+    /// Whether the calendar event a meeting was recorded from repeats.
+    ///
+    /// Answers false, never nil-means-unknown, when calendar context is off
+    /// or denied: filing then relies on the library's own history. The event
+    /// must share the note's series key, so an unrelated event that happened
+    /// to overlap cannot vouch for a meeting.
+    func isRecurringEvent(titled title: String, startedAt date: Date) async -> Bool {
+        guard isEnabled, !accessDenied else { return false }
+        let key = SeriesMatcher.seriesKey(for: title)
+        guard !key.isEmpty else { return false }
+        let provider = self.provider
+        let events = await Task.detached(priority: .utility) {
+            provider.events(
+                between: date.addingTimeInterval(-60 * 60),
+                end: date.addingTimeInterval(15 * 60)
+            )
+        }.value
+        return Self.recurringEventMatches(seriesKey: key, among: events)
+    }
+
+    static func recurringEventMatches(
+        seriesKey: String,
+        among events: [CalendarMeetingEvent]
+    ) -> Bool {
+        events.contains {
+            $0.isRecurring && SeriesMatcher.seriesKey(for: $0.title) == seriesKey
+        }
     }
 
     /// Nearest by absolute distance, so an event that started two minutes ago

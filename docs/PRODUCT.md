@@ -41,9 +41,9 @@ conversations, or reorganising their workflow around a new service.
 - Prompt before starting a detected meeting.
 - Optionally read the local calendar (opt-in) to name meetings after their
   event and to mention an upcoming one before it starts. When that event has
-  earlier sittings in the library, Nook offers a prep brief assembled locally
+  earlier meetings in the library, Nook offers a prep brief assembled locally
   from those notes: last decisions and key points, every action item the
-  series mentions, and the sittings themselves. Calendar reads stay on the
+  series mentions, and the meetings themselves. Calendar reads stay on the
   Mac and recording still always asks first.
 - Start a manual recording from the menu bar or `⇧⌘R`.
 - Flag a moment while recording (`⌥⌘F`, panel button, or menu command) so it
@@ -69,9 +69,9 @@ conversations, or reorganising their workflow around a new service.
   signal, with a timestamp title only as fallback.
 - Save the summary, structured outcomes, personal notes, and transcript into a
   local Markdown file.
-- Record into an existing note when a conversation arrives in sittings, or
+- Record into an existing note when a conversation arrives in parts, or
   merge two saved notes into one; the transcript stays one continuous timeline
-  with the gap between sittings visible, and personal notes are never rewritten.
+  with the gap between parts visible, and personal notes are never rewritten.
 - Browse, search, edit, reveal, review, and trash saved meetings in the native
   library.
 - Follow through on decisions: unfinished action items from every note are
@@ -163,6 +163,20 @@ does not silently cover neighbouring menu-bar items.
 The library groups meetings by date and searches across titles, summaries,
 structured outcomes, personal notes, transcript text, and metadata.
 
+Folders are real directories in the notes folder. Nook suggests one, and only
+one, for a note at the library's root when the evidence is clear: earlier
+meetings of the same series are filed there, the folder's name (such as the
+person in "1:1 Massimo") is in the title or is a named speaker, or the title's
+distinctive words belong to that folder's notes. The suggestion is a quiet line
+under the title with Move and a dismiss button; a dismissed suggestion does not
+come back. Nook moves a note by itself in exactly one case: a newly recorded
+meeting that continues a recurring series whose earlier meetings are
+consistently in one folder. It says so in a notice with Undo, and "File
+recurring meetings automatically" in Settings > General turns that off (the
+meeting then gets the suggestion instead). A note the person moved, including
+one moved back with Undo, is never filed again. No suggestion is better than a
+wrong one, so weak or conflicting evidence produces nothing.
+
 The detail surface has three views:
 
 - **Notes:** the summary ("In summary", set apart as the lead of the page), key
@@ -195,7 +209,7 @@ stateDiagram-v2
 
 A recording started from an existing note ("Record into this note") follows the
 same lifecycle and ends in the same Completed state; only the saving step
-differs, joining the finished sitting to that note's timeline instead of
+differs, joining the finished recording to that note's timeline instead of
 creating a new file. Nook never proposes this on its own: growing a note is
 always chosen from the note.
 

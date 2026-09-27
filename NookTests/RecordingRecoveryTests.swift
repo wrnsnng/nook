@@ -44,6 +44,35 @@ struct RecordingRecoveryTests {
         #expect(recording.captures == parts)
     }
 
+    @Test
+    func sidebarRowsNameTheDayTheWayRecentNotesDo() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "UTC"))
+        let now = try #require(calendar.date(
+            from: DateComponents(year: 2026, month: 9, day: 27, hour: 20)
+        ))
+        func label(daysAgo: Int) -> String {
+            OrphanedRecording.relativeLabel(
+                for: now.addingTimeInterval(-Double(daysAgo) * 86_400 - 3_600),
+                now: now, calendar: calendar
+            )
+        }
+
+        #expect(label(daysAgo: 0).hasPrefix("Today, "))
+        #expect(label(daysAgo: 1).hasPrefix("Yesterday, "))
+        #expect(!label(daysAgo: 3).contains("2026"))
+        #expect(label(daysAgo: 3).contains(", "))
+        #expect(label(daysAgo: 400).contains("2025"))
+
+        let audioOnly = OrphanedRecording(
+            id: UUID(),
+            urls: [URL(fileURLWithPath: "/synthetic/recordings/\(UUID().uuidString).m4a")],
+            recordedAt: now,
+            byteSize: 21_500_000
+        )
+        #expect(audioOnly.rowDetail == "Audio only · \(audioOnly.sizeLabel)")
+    }
+
     private func temporaryDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(

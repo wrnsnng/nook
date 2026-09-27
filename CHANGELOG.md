@@ -6,6 +6,53 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
+## 1.23.0
+
+[Release notes](Releases/Nook-1.23.0.md)
+
+- When recording stops because a permission is missing, the notch offers Open
+  Settings beside Dismiss, not Dismiss alone.
+- The notch's progress lines while a meeting is saved are short enough to read
+  in full instead of being cut off.
+- Setup keeps each step's title on the same line, so Continue changes the words
+  without moving them.
+- About shows the version in the regular typeface and its links in Nook's
+  accent colour.
+- Nook suggests a folder for notes that are not in one yet, under the title,
+  with the reason: earlier meetings in the same series, a folder named in the
+  title or after a speaker, or notes like it. Move it there with one click, or
+  dismiss the suggestion and it stays dismissed.
+- A new recording of a recurring meeting is filed with its earlier meetings
+  automatically, with a notice and Undo. Nothing else is ever moved without
+  asking, and a meeting you move back stays where you put it. Turn it off with
+  "File recurring meetings automatically" in Settings > General.
+- A note's Move To menu lists the suggested folder first.
+- The prep brief reads like a note: the same column, title and details line,
+  Record This Meeting as the main action, and actions that name who owns them
+  and open the note they came from.
+- Ask Your Library shows your question as the heading of its answer, sets the
+  answer apart like a note's summary, and lists the meetings it used as rows
+  you can click.
+- Interrupted recordings in the sidebar read like note rows: when, then size,
+  with one Recover button. Show in Finder and Move to Trash are in the row's
+  menu, and Move to Trash still asks first.
+- Recovered drafts show their title, kind and time without the library path,
+  and Retry and Open Recovery Folder are in the section's menu.
+- A fallback write-up explains itself in one line at the top of the write-up,
+  beside Retry Summary, instead of in a second card above it.
+
+## 1.22.2
+
+[Release notes](Releases/Nook-1.22.2.md)
+
+- The Folders list ends with a New Folder row, so making a folder no longer
+  depends on finding it in a menu.
+- The All, Today and Yesterday control keeps its size when a notice appears,
+  instead of briefly widening "All".
+- Select several notes at once: Shift-click or Shift-arrow for a range,
+  Command-click to add or remove one, Command-A for every note in the list.
+  Move them to a folder, drag them onto one, or move them to the Trash
+  together, and merge two selected notes into one.
 ## 1.22.1
 
 [Release notes](Releases/Nook-1.22.1.md)

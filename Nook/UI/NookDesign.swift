@@ -679,17 +679,30 @@ struct NookSectionLabel: View {
 
 /// A notice's identity, rather than its wording, owns dismissal. Repeating the
 /// same operation must not let the previous operation's timer erase its result.
+/// One button on a notice, such as Undo after Nook filed a note.
+struct NoticeAction {
+    let title: String
+    /// Read by VoiceOver instead of the short title, which is ambiguous out
+    /// of context ("Undo" what?).
+    let accessibilityLabel: String
+    let perform: @MainActor () -> Void
+}
+
 struct CopyNoticeState {
     struct Notice: Identifiable {
         let id: UUID
         let message: String
         let severity: CopyConfirmationBanner.Severity
+        var action: NoticeAction? = nil
 
         var expirationDelay: TimeInterval? {
+            // A notice with a button stays long enough to reach it, by
+            // pointer or by keyboard and VoiceOver.
+            if action != nil { return severity == .failure ? nil : 10 }
             switch severity {
-            case .success: 1.8
-            case .info: 4
-            case .failure: nil
+            case .success: return 1.8
+            case .info: return 4
+            case .failure: return nil
             }
         }
     }
@@ -697,8 +710,12 @@ struct CopyNoticeState {
     private(set) var current: Notice?
 
     @discardableResult
-    mutating func show(_ message: String, severity: CopyConfirmationBanner.Severity) -> UUID {
-        let notice = Notice(id: UUID(), message: message, severity: severity)
+    mutating func show(
+        _ message: String,
+        severity: CopyConfirmationBanner.Severity,
+        action: NoticeAction? = nil
+    ) -> UUID {
+        let notice = Notice(id: UUID(), message: message, severity: severity, action: action)
         current = notice
         return notice.id
     }
@@ -726,7 +743,20 @@ private struct NookNoticePresentation: ViewModifier {
     func body(content: Content) -> some View {
         content.overlay(alignment: .top) {
             if let notice {
-                CopyConfirmationBanner(message: notice.message, severity: notice.severity) {
+                CopyConfirmationBanner(
+                    message: notice.message,
+                    severity: notice.severity,
+                    action: notice.action.map { action in
+                        NoticeAction(
+                            title: action.title,
+                            accessibilityLabel: action.accessibilityLabel
+                        ) {
+                            // Acting on a notice finishes it.
+                            onDismiss(notice.id)
+                            action.perform()
+                        }
+                    }
+                ) {
                     onDismiss(notice.id)
                 }
                 .id(notice.id)
@@ -762,6 +792,7 @@ struct CopyConfirmationBanner: View {
     /// Persistent document status needs the same contrast as its controls,
     /// even when it is informational rather than a failure.
     var emphasizesMessage = false
+    var action: NoticeAction? = nil
     var onDismiss: (() -> Void)? = nil
     @State private var measuredMessageHeight: CGFloat = 0
 
@@ -780,6 +811,14 @@ struct CopyConfirmationBanner: View {
                 .accessibilityLabel("Full notice message")
             } else {
                 messageLabel
+            }
+            if let action {
+                Button(action.title) { action.perform() }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(NookPalette.accent)
+                    .fontWeight(.semibold)
+                    .fixedSize()
+                    .accessibilityLabel(action.accessibilityLabel)
             }
             if severity == .failure, let onDismiss {
                 Button("Dismiss", action: onDismiss)
