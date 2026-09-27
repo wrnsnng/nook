@@ -487,6 +487,9 @@ struct WelcomeView: View {
             }
         }
         .controlSize(.large)
+        // Large controls are capsules on macOS 26 and later; every other
+        // button in Nook is a rounded rectangle, so setup matches them.
+        .buttonBorderShape(.roundedRectangle)
         .padding(.horizontal, 28)
         .padding(.vertical, 20)
         .accessibilityElement(children: .contain)

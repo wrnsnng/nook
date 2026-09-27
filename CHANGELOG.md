@@ -6,6 +6,11 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
+- Reviewing a summary line has a calmer correction field: a plain box with a
+  hairline border instead of a heavy accent ring, and a heading in the same
+  style as other sheets.
+- Setup's buttons are rounded rectangles like every other button in Nook,
+  instead of capsules.
 - Note titles in the sidebar are medium weight instead of bold, so the list
   reads calmer and the note you are reading stands out by its highlight.
 - Nook no longer quits when you point at the hidden recording pill beside the
