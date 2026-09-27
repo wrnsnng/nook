@@ -112,6 +112,9 @@ final class CalendarContextService: ObservableObject {
     var onUpcomingEvent: ((CalendarMeetingEvent) -> Void)?
 
     private let provider: any CalendarEventProviding
+    /// The poll's clock. Injected by tests so scheduling can be driven
+    /// through a whole morning without waiting for it.
+    private let now: @MainActor () -> Date
     private var pollTask: Task<Void, Never>?
     private var eventStoreObserver: NSObjectProtocol?
     /// One prompt per event per day; dismissing must never nag again, and
@@ -125,9 +128,14 @@ final class CalendarContextService: ObservableObject {
         static let promptedEventKeysValues = "CalendarContextService.promptedEventKeysValues"
     }
 
-    init(provider: any CalendarEventProviding = EventKitCalendarProvider()) {
+    init(
+        provider: any CalendarEventProviding = EventKitCalendarProvider(),
+        now: @escaping @MainActor () -> Date = Date.init,
+        enabled: Bool? = nil
+    ) {
         self.provider = provider
-        isEnabled = UserDefaults.standard.bool(forKey: Keys.enabled)
+        self.now = now
+        isEnabled = enabled ?? UserDefaults.standard.bool(forKey: Keys.enabled)
         promptedEventKeys = Self.loadPromptedEventKeys()
     }
 
@@ -185,8 +193,8 @@ final class CalendarContextService: ObservableObject {
         alreadyPrompted: Set<String>
     ) -> CalendarMeetingEvent? {
         // Early enough to matter, late enough to be relevant, once per event.
-        let horizonStart = now.addingTimeInterval(90)
-        let horizonEnd = now.addingTimeInterval(10 * 60)
+        let horizonStart = now.addingTimeInterval(promptHorizonStart)
+        let horizonEnd = now.addingTimeInterval(promptHorizonEnd)
         return events
             .filter { $0.startDate >= horizonStart && $0.startDate <= horizonEnd }
             .filter { !alreadyPrompted.contains($0.key) }
@@ -246,13 +254,13 @@ final class CalendarContextService: ObservableObject {
     /// one-time prompt when due. Returns how long to wait before polling
     /// again.
     @discardableResult
-    private func pollOnce() async -> Duration {
+    func pollOnce() async -> Duration {
         let fallbackDelay = Duration.seconds(Self.maximumPollInterval)
         guard isEnabled, !accessDenied, let onUpcomingEvent else {
             return fallbackDelay
         }
 
-        let now = Date()
+        let now = self.now()
         let provider = self.provider
         // EventKit's fetch is synchronous I/O; running it off the main actor
         // keeps this periodic poll from ever stalling the UI. One broader
@@ -264,8 +272,8 @@ final class CalendarContextService: ObservableObject {
             provider.events(between: now, end: lookaheadEnd)
         }.value
 
-        let horizonStart = now.addingTimeInterval(90)
-        let horizonEnd = now.addingTimeInterval(10 * 60)
+        let horizonStart = now.addingTimeInterval(Self.promptHorizonStart)
+        let horizonEnd = now.addingTimeInterval(Self.promptHorizonEnd)
         let candidates = events.filter {
             $0.startDate >= horizonStart && $0.startDate <= horizonEnd
         }
@@ -285,30 +293,53 @@ final class CalendarContextService: ObservableObject {
             onUpcomingEvent(event)
         }
 
-        let nextEventStart = events
-            .map(\.startDate)
-            .filter { $0 > now }
-            .min()
-        return Self.nextPollDelay(now: now, nextEventStart: nextEventStart)
+        return Self.nextPollDelay(
+            now: now,
+            eventStarts: events.map(\.startDate)
+        )
     }
 
+    /// The prompt fires for events starting between these two offsets.
+    static let promptHorizonStart: TimeInterval = 90
+    static let promptHorizonEnd: TimeInterval = 10 * 60
     static let minimumPollInterval: TimeInterval = 60
     static let maximumPollInterval: TimeInterval = 10 * 60
     /// How far ahead to look purely to schedule the next poll; independent
     /// of the much narrower prompt horizon itself.
     private static let schedulingLookahead: TimeInterval = 2 * 60 * 60
 
-    /// Polls again just before the next known event would drop below the
-    /// prompt horizon's lower bound, bounded so a quiet calendar still gets
-    /// checked periodically and a busy one is never hammered.
+    /// Polls again as the next known event enters the prompt horizon, so the
+    /// heads-up arrives about ten minutes out, bounded so a quiet calendar is
+    /// still checked periodically and a busy one is never hammered.
+    ///
+    /// This used to aim at the moment an event was about to *leave* the
+    /// horizon, 90 seconds before it starts. A timer never fires early, only
+    /// late: `Task.sleep` without a tolerance gets `dispatch_after`'s default
+    /// leeway of up to a tenth of the interval, and App Nap stretches a menu
+    /// bar app's timers further. Waking even a moment late found the event
+    /// already under 90 seconds away, so it was never announced, and that
+    /// happened whenever the previous poll fell just outside the horizon.
+    /// Aiming at the entry leaves nearly the whole window as slack.
+    ///
+    /// An event already inside the horizon has had its prompt; the loop only
+    /// wakes as it leaves, so the published upcoming event clears on time.
     static func nextPollDelay(
         now: Date,
-        nextEventStart: Date?
+        eventStarts: [Date]
     ) -> Duration {
-        guard let nextEventStart else {
+        let wakeTimes = eventStarts.compactMap { start -> TimeInterval? in
+            let remaining = start.timeIntervalSince(now)
+            if remaining > promptHorizonEnd {
+                return remaining - promptHorizonEnd
+            } else if remaining > promptHorizonStart {
+                return remaining - promptHorizonStart
+            } else {
+                return nil
+            }
+        }
+        guard let interval = wakeTimes.min() else {
             return .seconds(maximumPollInterval)
         }
-        let interval = nextEventStart.timeIntervalSince(now) - 90
         return .seconds(
             min(maximumPollInterval, max(minimumPollInterval, interval))
         )
