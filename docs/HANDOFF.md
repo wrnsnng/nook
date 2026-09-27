@@ -6,31 +6,40 @@ contribute.
 
 ## Current release
 
-Nook 1.22.0 (build 39) is the current public release, published September 27,
-2026, and promoted to the Sparkle feed the same day. Like 1.21.0 it was
-released at the maintainer's direction **without** the hands-on acceptance
-described under [Manual release acceptance](#manual-release-acceptance). The
-maintainer used a development build with these changes before release, but
-folders on disk, inline summary editing, the calendar heads-up on a real
-calendar, VoiceOver and the signed app's permission prompts have not been
-through that acceptance. Version 1.21.0 was published earlier the same day.
+Nook 1.22.1 (build 40) is the current public release, published September 27,
+2026, and promoted to the Sparkle feed the same day, a few hours after 1.22.0
+(build 39). Both were released at the maintainer's direction **without** the
+hands-on acceptance described under
+[Manual release acceptance](#manual-release-acceptance).
 
-- Source: [8c5450e](https://github.com/wrnsnng/nook/commit/8c5450e2ba02de7f0efb9bcd49a21d0af0bd61bf)
-  (release PR #38, which also carried #35, #36 and #37). The artifact came
-  from the maintainer unsigned distribution build, run 36299380707, and
-  preparation ran from that same commit.
-- Developer ID signed (team V2KY59725J), notarized, stapled and Gatekeeper
-  accepted. The feed carries deltas from builds 34 to 38.
-- Every public asset (versioned zip, `Nook.zip` and its checksum, update
-  archive, five deltas and the appcast) was re-downloaded and compared with
-  the prepared bytes; archive and feed EdDSA signatures verified. The 1.21.0
+- 1.22.1 fixes a crash on macOS 27 when hovering the hidden recording pill
+  (AppKit's update-constraints loop; the pill's tooltip was removed), reworks
+  the notes page ("In summary", adding items and sections) and is the first
+  release built with **stable Xcode 27** (macOS 27 SDK, deployment target
+  still macOS 26). Apps linked against the 26 SDK get the older window style
+  on macOS 27, including a non-floating sidebar.
+- **Local build exception.** GitHub's hosted macOS images stopped at Xcode 26.6
+  when Xcode 27 shipped, so the 1.22.1 candidate was built on the maintainer's
+  Mac with `Scripts/build-distribution-app.sh` (the same script the
+  distribution workflow runs) from a clean checkout of `main` at
+  [2aa4f7c](https://github.com/wrnsnng/nook/commit/2aa4f7c965fcce26ee54ec822e4dece2b1d09aeb).
+  Its app source is identical to the release PR #40 merge; #41 changed only
+  the build script and workflows. Contributor CI tests on the newest stable
+  Xcode 26 as a cross-check until the images carry Xcode 27. See
+  [OPERATIONS.md](OPERATIONS.md#unsigned-official-configuration-artifact).
+- 1.22.0 came from `stable-macos-build` run 36299380707 at
+  [8c5450e](https://github.com/wrnsnng/nook/commit/8c5450e2ba02de7f0efb9bcd49a21d0af0bd61bf)
+  (release PR #38, which also carried #35, #36 and #37).
+- Both: Developer ID signed (team V2KY59725J), notarized, stapled and
+  Gatekeeper accepted; every public asset re-downloaded and byte-compared with
+  the prepared files; archive and feed EdDSA signatures verified. The previous
   appcast is retained privately by the maintainer for rollback.
-- The release is available from the
-  [binary releases repository](https://github.com/wrnsnng/nook-releases/releases/tag/v1.22.0).
-- User-facing changes are mapped in [CHANGELOG.md](../CHANGELOG.md).
-- The test action now passes a temporary `storageDirectory` to the test host.
+- The test action passes a temporary `storageDirectory` to the test host.
   Without it, a fresh local build scanned `~/Documents/Nook`, waited on the
   Documents privacy prompt and stalled the whole run.
+- Releases: [v1.22.1](https://github.com/wrnsnng/nook-releases/releases/tag/v1.22.1),
+  [v1.22.0](https://github.com/wrnsnng/nook-releases/releases/tag/v1.22.0).
+  User-facing changes are in [CHANGELOG.md](../CHANGELOG.md).
 
 ## Remaining issue implementation, September 4
 
