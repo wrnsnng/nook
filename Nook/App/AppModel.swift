@@ -115,15 +115,19 @@ final class AppModel: ObservableObject {
         self.prep = prep
         self.audioInputCheck = audioInputCheck
         self.spotlight = MeetingSpotlightIndexer()
-        store.onStorageDirectoryWillChange = {
+        store.onStorageDirectoryWillChange = { [weak store] in
             markdownDraft.libraryWillChange()
             personalNotesDraft.libraryWillChange()
+            // Written while the old folder is still current, so the edits
+            // land in the file they were typed against.
+            if let store { _ = store.summaryEdits.saveIfNeeded(store: store) }
             quickNote.libraryWillChange()
             draftJournal.flushSynchronously()
         }
-        store.onNoteDeleted = { note in
+        store.onNoteDeleted = { [weak store] note in
             markdownDraft.noteWasDeleted(note)
             personalNotesDraft.noteWasDeleted(note)
+            store?.summaryEdits.noteWasDeleted(note)
             quickNote.noteWasDeleted(note)
             for id in Self.recoveryIDs(forDeleted: note, in: draftJournal.recoveredDrafts) {
                 draftJournal.resolve(id)

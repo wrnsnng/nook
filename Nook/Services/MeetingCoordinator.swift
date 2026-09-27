@@ -1830,6 +1830,19 @@ final class MeetingCoordinator: ObservableObject {
               current.summaryRecipe == scaffold.summaryRecipe else { return current }
 
         var merged = current
+        // Recording into a note must not quietly rewrite sections the person
+        // edited by hand. New commitments from the added sitting still land
+        // beside theirs; a full rewrite is an explicit, confirmed Regenerate.
+        if current.summaryEditedByUser {
+            if exactStringsMatch(current.actionItems, scaffold.actionItems),
+               exactStringsMatch(current.completedActionItems.sorted(), scaffold.completedActionItems.sorted()) {
+                merged.actionItems = unionedActionItems(
+                    existing: scaffold.actionItems,
+                    proposed: result.insights.actionItems
+                )
+            }
+            return merged
+        }
         if current.title.utf8.elementsEqual(scaffold.title.utf8) {
             merged.title = mergedTitle(
                 existing: scaffold.title,

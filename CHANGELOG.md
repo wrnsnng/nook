@@ -6,6 +6,12 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
+- The gist, key points, decisions, action items and open questions can be
+  edited right on the Notes tab. Click into the text and type: Return adds an
+  item, Delete in an empty item removes it, and changes save on their own. A
+  ticked action item stays ticked when you reword it and keeps its due date.
+  Regenerate Summary now asks before replacing sections you have edited, and
+  recording more into an edited note keeps your wording.
 - Type is calmer and more consistent. Nook uses the system text styles
   throughout, with their own spacing, so nothing is squeezed tighter than
   macOS sets it. Bold is kept for page titles, semibold for headings, and

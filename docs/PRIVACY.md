@@ -403,6 +403,13 @@ the file, and a later explicit save can persist the field. Reviewed item changes
 retain an edited-fallback classification; only an accepted replacement of the
 summary clears it. No model runs merely because a fallback note is opened.
 
+When the gist, key points, decisions, action items or open questions are
+edited in place on the Notes tab, or a reviewed correction is applied, a meeting
+note stores `summary_edited: true` in the same frontmatter. It records only that
+the person rewrote generated sections, so Regenerate can ask before replacing
+them. It is absent from notes nobody edited, and a confirmed regeneration
+removes it. Editing runs no model and sends nothing anywhere.
+
 Summary item review derives exact passage references from the saved transcript,
 using local word matching and, when available, the on-device sentence embedding.
 Opening review does not invoke a language model or save feedback. An explicit

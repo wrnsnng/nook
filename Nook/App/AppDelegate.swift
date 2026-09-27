@@ -365,7 +365,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Writes the two fields that save themselves, before the app that holds
+    /// Writes the fields that save themselves, before the app that holds
     /// them goes away.
     ///
     /// Neither is a question worth asking: the My notes field and the quick
@@ -379,6 +379,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             store: model.store
         ) {
             showSaveFailure(failure)
+            return false
+        }
+        if let failure = model.store.summaryEdits.saveIfNeeded(store: model.store),
+           !confirmQuitDiscardingSummaryEdits(failure) {
             return false
         }
         if let failure = model.quickNote.saveForTermination() {
@@ -434,6 +438,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.informativeText = "Nook will stay open so you can review the error. Your recording was kept so nothing is lost."
         alert.addButton(withTitle: "Keep Nook Open")
         alert.runModal()
+    }
+
+    /// Summary edits have no recovery copy on disk, so a refused save offers
+    /// an explicit choice. Staying open is the default: an edit whose note
+    /// left the folder could otherwise block quitting forever.
+    private func confirmQuitDiscardingSummaryEdits(_ message: String) -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Nook couldn’t save your summary edits"
+        alert.informativeText = "\(message)\n\nStay open to copy them, or quit and lose them."
+        alert.addButton(withTitle: "Keep Nook Open")
+        alert.addButton(withTitle: "Quit and Lose Edits")
+        return alert.runModal() == .alertSecondButtonReturn
     }
 
     private func showSaveFailure(_ message: String) {

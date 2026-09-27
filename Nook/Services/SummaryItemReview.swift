@@ -75,6 +75,9 @@ struct SummaryReviewItem: Identifiable, Hashable, Sendable {
         }
         var updated = note
         if updated.summaryProvenance != nil { updated.summaryProvenance = .editedFallback }
+        // An applied correction is the person's decision, so a later
+        // Regenerate must ask before replacing it like any other edit.
+        if updated.kind == .meeting { updated.summaryEditedByUser = true }
         if kind == .summary {
             guard let range, let swiftRange = Range(range, in: note.summary) else { throw SummaryReviewError.changed }
             updated.summary.replaceSubrange(swiftRange, with: replacement ?? "")
