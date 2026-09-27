@@ -36,7 +36,8 @@ jobs:
             find /Applications -maxdepth 1 -type d -name "Xcode_$1*.app" \
               | grep -Ev '(beta|Beta|RC|rc)' \
               | sort -V \
-              | tail -n 1
+              | tail -n 1 \
+              || true
           }
           stable_xcode="$(pick 27)"
           [[ -n "$stable_xcode" ]] || stable_xcode="$(pick 26)"
