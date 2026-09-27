@@ -6,6 +6,10 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
+## 1.22.1
+
+[Release notes](Releases/Nook-1.22.1.md)
+
 - Built with Xcode 27, so on macOS 27 Nook takes on the current system look,
   including the floating sidebar, instead of the older style macOS gives apps
   built for an earlier release. Nook still runs on macOS 26.
