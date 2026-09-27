@@ -157,3 +157,9 @@ schemes:
     test:
       targets:
         - NookTests
+      # The test host is the app, and every MarkdownStore first scans the
+      # configured library. Without this that is ~/Documents/Nook: a fresh
+      # build then waits on the Documents privacy prompt and the whole test
+      # run stalls, and tests would read the developer's real notes.
+      commandLineArguments:
+        "-storageDirectory $(TARGET_TEMP_DIR)/TestLibrary": true
