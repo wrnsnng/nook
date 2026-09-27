@@ -11,6 +11,7 @@ struct SummaryItemReviewView: View {
     @State private var selectedPassageID: String?
     @State private var feedback = ""
     @FocusState private var focused: String?
+    @FocusState private var feedbackFocused: Bool
     @AccessibilityFocusState private var accessibleFocus: String?
 
     init(session: SummaryItemReviewSession, initialPassageID: String? = nil, initialFeedback: String = "") {
@@ -31,7 +32,8 @@ struct SummaryItemReviewView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Review \(session.item.kind.label.lowercased())").font(.title2)
+            Text("Review \(session.item.kind.label.lowercased())").font(NookType.sectionTitle)
+                .accessibilityAddTraits(.isHeader)
             ScrollViewReader { reader in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
@@ -135,9 +137,29 @@ struct SummaryItemReviewView: View {
 
     private var correctionControls: some View {
         VStack(alignment: .leading, spacing: 12) {
+            // A plain field on the same surface as Draft Follow-up's editor.
+            // The rounded-border style grows a heavy accent ring around a
+            // multi-line field and crowds the caret against the placeholder.
             TextField("What should be corrected?", text: $feedback, axis: .vertical)
                 .lineLimit(2...4)
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.plain)
+                .focused($feedbackFocused)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 7)
+                .background(
+                    Color(nsColor: .textBackgroundColor),
+                    in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .strokeBorder(
+                            feedbackFocused
+                                ? AnyShapeStyle(NookPalette.accent.opacity(0.7))
+                                : AnyShapeStyle(Color(nsColor: .separatorColor)),
+                            lineWidth: 1
+                        )
+                }
+                .focusEffectDisabled()
                 .disabled(!isCurrent)
             Text("Feedback is used for this correction only. It is not a lasting instruction for future summaries.")
                 .font(.caption).foregroundStyle(.secondary)

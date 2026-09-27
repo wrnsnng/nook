@@ -6,6 +6,42 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
+## 1.22.1
+
+[Release notes](Releases/Nook-1.22.1.md)
+
+- Built with Xcode 27, so on macOS 27 Nook takes on the current system look,
+  including the floating sidebar, instead of the older style macOS gives apps
+  built for an earlier release. Nook still runs on macOS 26.
+- Reviewing a summary line has a calmer correction field: a plain box with a
+  hairline border instead of a heavy accent ring, and a heading in the same
+  style as other sheets.
+- Setup's buttons are rounded rectangles like every other button in Nook,
+  instead of capsules.
+- Note titles in the sidebar are medium weight instead of bold, so the list
+  reads calmer and the note you are reading stands out by its highlight.
+- Nook no longer quits when you point at the hidden recording pill beside the
+  camera on macOS 27. The pill's tooltip set off a layout loop that macOS
+  stopped by closing the app; the pill has no tooltip now, and hiding the notch
+  also clears a controls shelf that was open.
+- Notices such as "Folder deleted" float over the window instead of pushing the
+  whole note and list down while they show.
+- New Folder moves to the bar at the bottom of the sidebar, as in Notes. In the
+  Folders heading it collided with the heading's own disclosure arrow.
+- The notch shows Nook's icon when nothing is happening, instead of a small
+  line that read as a stray scribble.
+- A note's summary is now called "In summary" and leads the page on a softly
+  tinted background, in slightly larger type. Its paragraphs are spaced evenly:
+  sentences in the same paragraph sit together, and only a real paragraph break
+  opens a gap.
+- You can add key points, decisions, action items and open questions, not just
+  edit them. Each list ends with an Add row, and a section a meeting does not
+  have yet can be added from the line below the last one. An item you add and
+  leave empty disappears again.
+- My notes shows a soft field while you type in it, and a faint one under the
+  pointer, so it is clear where your words go. Edited summary lines use the
+  same look.
+
 ## 1.22.0
 
 [Release notes](Releases/Nook-1.22.0.md)

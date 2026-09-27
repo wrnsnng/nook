@@ -79,9 +79,9 @@ RUNTIME_VERSION=$(
   /usr/bin/codesign -dv --verbose=4 "$APP_PATH" 2>&1 \
     | /usr/bin/sed -n 's/^Runtime Version=//p'
 )
-if [[ "$RUNTIME_VERSION" == 27.* ]]; then
-  echo "Refusing to release an app built with the macOS 27 beta SDK." >&2
-  echo "Build on stable Xcode 26 and provide it with NOOK_PREBUILT_APP." >&2
+if [[ "$RUNTIME_VERSION" != 27.* ]]; then
+  echo "Refusing to release an app not built with the stable macOS 27 SDK (runtime $RUNTIME_VERSION)." >&2
+  echo "Build on stable Xcode 27 and provide it with NOOK_PREBUILT_APP." >&2
   exit 78
 fi
 

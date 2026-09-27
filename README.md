@@ -35,7 +35,7 @@ transcribes and summarizes on-device, and saves a portable Markdown note.
 - A Mac supported by Apple's on-device Speech framework.
 - Apple Intelligence enabled for generated summaries. Transcription and the
   deterministic summary fallback work without it.
-- Stable Xcode 26 and XcodeGen 2.46.0 to regenerate and build the project.
+- Stable Xcode 27 and XcodeGen 2.46.0 to regenerate and build the project.
 
 The generated Xcode project is committed. Fetch the speaker separation models
 once (they are pinned, checksum-verified and bundled into the app, not

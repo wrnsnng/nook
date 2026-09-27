@@ -141,6 +141,14 @@ enum NookPalette {
         dark: NSColor(red: 1.00, green: 0.38, blue: 0.42, alpha: 1)
     )
 
+    /// Behind the summary that leads a note: the accent at a whisper, as
+    /// Mail and Notes tint a summary, so it reads as the page's lead without
+    /// a border, a shadow or a second typeface.
+    static let leadSurface = adaptive(
+        light: NSColor(red: 0.000, green: 0.427, blue: 0.388, alpha: 0.055),
+        dark: NSColor(red: 0.290, green: 0.859, blue: 0.776, alpha: 0.075)
+    )
+
     private static func adaptive(light: NSColor, dark: NSColor) -> Color {
         Color(
             nsColor: NSColor(name: nil) { appearance in
@@ -185,6 +193,10 @@ enum NookType {
     static let title = Font.title.weight(.bold)
     static let largeTitle = Font.largeTitle.weight(.bold)
     static let editorialSummary = Font.body
+    /// The summary that leads a note: one step above body, regular weight.
+    /// `title3` (the spoken-note size) was too loud for a paragraph that
+    /// sits above headings.
+    static let lead = Font.system(size: NookInlineFont.leadSize)
     static let code = Font.caption.monospaced()
     /// A small label that heads a group or marks a status: "Try one of
     /// these", "Before this meeting", a signing badge.
@@ -196,6 +208,9 @@ enum NookType {
 enum NookInlineFont {
     /// `NookType.transcript` and `NookType.editorialSummary`.
     @MainActor static var body: NSFont { .preferredFont(forTextStyle: .body) }
+    /// `NookType.lead`.
+    static let leadSize: CGFloat = 14
+    @MainActor static var lead: NSFont { .systemFont(ofSize: leadSize) }
 }
 
 enum NookSpacing {
@@ -289,6 +304,9 @@ enum NookElapsedTime {
 enum NookLayout {
     static let readableWidth: CGFloat = 680
     static let margin: CGFloat = 40
+    /// How far the summary's tinted surface reaches past the column, so its
+    /// words stay on the same edge as everything below it.
+    static let leadSurfaceBleed: CGFloat = 18
 }
 
 extension View {
@@ -302,6 +320,33 @@ extension View {
 enum NookRadius {
     static let control: CGFloat = 8
     static let surface: CGFloat = 14
+    /// A text area drawn on the page: My notes and the editable rows.
+    static let field: CGFloat = 7
+}
+
+/// The surface behind text you can type into on a page, where the words sit
+/// directly on the canvas as in Notes. Nothing at rest, a faint wash under
+/// the pointer, and while it has the keyboard a soft fill with a hairline in
+/// the system separator colour: enough to say "you are typing here" without
+/// the heavy bezel of a form field. Drawn outside the text, so the words
+/// never move when it appears.
+struct NookFieldSurface: View {
+    var isFocused: Bool
+    var isHovered = false
+    var cornerRadius: CGFloat = NookRadius.field
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        shape
+            .fill(Color.primary.opacity(isFocused ? 0.04 : (isHovered ? 0.025 : 0)))
+            .overlay {
+                shape
+                    .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
+                    .opacity(isFocused ? 1 : 0)
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
 }
 
 /// Custom chrome cannot inherit the system control's stronger contrast border.
@@ -676,18 +721,20 @@ private struct NookNoticePresentation: ViewModifier {
     let notice: CopyNoticeState.Notice?
     let onDismiss: (UUID) -> Void
 
+    /// Floats over the content rather than sitting above it, so a notice
+    /// never pushes the note, the list or the toolbar down while it shows.
     func body(content: Content) -> some View {
-        VStack(spacing: 0) {
+        content.overlay(alignment: .top) {
             if let notice {
                 CopyConfirmationBanner(message: notice.message, severity: notice.severity) {
                     onDismiss(notice.id)
                 }
                 .id(notice.id)
+                .frame(maxWidth: 560)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
-            content
         }
     }
 }

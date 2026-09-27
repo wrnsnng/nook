@@ -580,7 +580,14 @@ struct LibraryView: View {
                     }
                 }
         } detail: {
+            // On the detail column, not the window: there it floats below
+            // the toolbar instead of over the window's title bar.
             detail
+                .nookNotice(copyNotice.current) { id in
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
+                        copyNotice.dismiss(id: id)
+                    }
+                }
         }
         // Like Notes and Mail: the selected note names itself in the
         // content, so a window title would only crowd the toolbar.
@@ -611,11 +618,6 @@ struct LibraryView: View {
                 .frame(width: 0, height: 0)
                 .opacity(0)
                 .accessibilityHidden(true)
-        }
-        .nookNotice(copyNotice.current) { id in
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
-                copyNotice.dismiss(id: id)
-            }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if mergeTask != nil {
@@ -1274,16 +1276,10 @@ struct LibraryView: View {
                 }
             }
         } header: {
-            HStack(spacing: 4) {
-                Text("Folders")
-                Spacer(minLength: 0)
-                Button(action: presentNewFolder) {
-                    Image(systemName: "folder.badge.plus")
-                }
-                .buttonStyle(.borderless)
-                .help("New Folder")
-                .accessibilityLabel("New Folder")
-            }
+            // The header keeps only its title: a collapsible section draws
+            // its own chevron at the trailing edge. New Folder sits in the
+            // bar at the bottom of the sidebar, as in Notes.
+            Text("Folders")
             .contextMenu {
                 Button("New Folder…", action: presentNewFolder)
             }
@@ -1584,6 +1580,13 @@ struct LibraryView: View {
                     .lineLimit(1)
             }
             Spacer()
+            Button(action: presentNewFolder) {
+                Image(systemName: "folder.badge.plus")
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.borderless)
+            .help("New Folder")
+            .accessibilityLabel("New Folder")
             Button {
                 store.openStorageDirectory()
             } label: {
@@ -2526,7 +2529,7 @@ private struct MeetingRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(note.title)
-                .font(.headline)
+                .font(.body.weight(.medium))
                 .lineLimit(1)
 
             if showsFileIdentity, let file = note.fileURL {
@@ -2569,7 +2572,7 @@ private struct LiveSidebarRow: View {
         Label {
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.headline)
+                    .font(.body.weight(.medium))
                 Text(detail)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)

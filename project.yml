@@ -3,7 +3,7 @@ options:
   bundleIdPrefix: com.localfirst
   deploymentTarget:
     macOS: "26.0"
-  xcodeVersion: "26.0"
+  xcodeVersion: "27.0"
 settings:
   base:
     # Nook's own lagoon teal, so every system-drawn control agrees with the brand
@@ -15,8 +15,8 @@ settings:
     SWIFT_VERSION: "6.0"
     MACOSX_DEPLOYMENT_TARGET: "26.0"
     CODE_SIGN_STYLE: Automatic
-    MARKETING_VERSION: "1.22.0"
-    CURRENT_PROJECT_VERSION: "39"
+    MARKETING_VERSION: "1.22.1"
+    CURRENT_PROJECT_VERSION: "40"
 packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle

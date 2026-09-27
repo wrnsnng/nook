@@ -563,7 +563,10 @@ final class NotchPanelCoordinator {
             .removeDuplicates()
             .dropFirst()
             .sink { [weak self] isHovering in
-                guard let self, self.panel.isVisible, !self.geometry.isTucking else { return }
+                guard let self, self.panel.isVisible, !self.geometry.isTucking,
+                      // The hidden pill has no shelf; hover never resizes it.
+                      !self.meeting.topPanelHidden
+                else { return }
                 self.updateLayout(animated: true, isHovering: isHovering)
             }
             .store(in: &cancellables)
@@ -726,7 +729,7 @@ final class NotchPanelCoordinator {
         guard !isChoreographing else { return }
 
         guard animated, shouldAnimate, panel.isVisible else {
-            panel.setFrame(frame, display: true)
+            setPanelFrame(frame)
             return
         }
 
@@ -735,6 +738,9 @@ final class NotchPanelCoordinator {
         // beside it; restoring runs the same steps the other way.
         if mode == .hiddenRecording || previousMode == .hiddenRecording,
            mode != previousMode {
+            // A shelf that was open when Hide was clicked must not come back
+            // with the pill, or reopen the moment the panel is restored.
+            geometry.isHovering = false
             choreographyTask?.cancel()
             isChoreographing = true
             geometry.isTucking = true
@@ -766,13 +772,22 @@ final class NotchPanelCoordinator {
             width: max(current.maxX, frame.maxX) - min(current.minX, frame.minX),
             height: max(current.maxY, frame.maxY) - min(current.minY, frame.minY)
         )
-        panel.setFrame(stage, display: true)
+        setPanelFrame(stage)
         guard stage != frame else { return }
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(NookMotion.morphSettleSeconds))
             guard let self, generation == self.layoutGeneration else { return }
-            self.panel.setFrame(frame, display: true)
+            self.setPanelFrame(frame)
         }
+    }
+
+    /// Moves the stage only when it would actually change. Re-applying the
+    /// same frame still posts window move and resize work to the hosting
+    /// view; the hidden pill has so few views that repeated constraint
+    /// passes are enough for AppKit to abort the app.
+    private func setPanelFrame(_ frame: NSRect) {
+        guard panel.frame != frame else { return }
+        panel.setFrame(frame, display: true)
     }
 
     private func hiddenIndicatorOriginX(

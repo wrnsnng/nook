@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   test:
-    name: Test on stable Xcode 26
+    name: Test on stable Xcode
     runs-on: macos-26
     timeout-minutes: 25
 
@@ -25,21 +25,27 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Select stable Xcode 26
+      # Stable Xcode 27 when the image has it. Until GitHub's images carry
+      # it, the newest stable Xcode 26 builds and tests as a cross-check;
+      # releases are built with Xcode 27 (see docs/OPERATIONS.md).
+      - name: Select stable Xcode
         shell: bash
         run: |
           set -euo pipefail
-          stable_xcode="$(
-            find /Applications -maxdepth 1 -type d -name 'Xcode_26*.app' \
+          pick() {
+            find /Applications -maxdepth 1 -type d -name "Xcode_$1*.app" \
               | grep -Ev '(beta|Beta|RC|rc)' \
-              | sort \
-              | tail -n 1
-          )"
+              | sort -V \
+              | tail -n 1 \
+              || true
+          }
+          stable_xcode="$(pick 27)"
+          [[ -n "$stable_xcode" ]] || stable_xcode="$(pick 26)"
           test -n "$stable_xcode"
           sudo xcode-select --switch "$stable_xcode/Contents/Developer"
           xcodebuild -version
-          if xcodebuild -version | grep -Eiq '(beta|rc|Xcode 27)'; then
-            echo "Contributor CI requires stable Xcode 26." >&2
+          if xcodebuild -version | grep -Eiq '(beta|rc)'; then
+            echo "Contributor CI requires a stable Xcode." >&2
             exit 1
           fi
 
