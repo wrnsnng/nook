@@ -85,6 +85,14 @@ struct NookNotesEditor: View {
     var lineSpacing: CGFloat = 4
     var accessibilityLabel = "Personal meeting notes"
     var insertionPort: TextViewInsertionPort?
+    /// For an editor drawn straight on a page: how far a field surface
+    /// reaches past the text on each side. It shows on hover and, more
+    /// clearly, while the editor has the keyboard (see `NookFieldSurface`).
+    /// Nil draws nothing, for editors that already sit in a field.
+    var surfaceOutset: EdgeInsets?
+
+    @State private var hasKeyboard = false
+    @State private var isHovered = false
 
     init(
         text: Binding<String>,
@@ -95,7 +103,8 @@ struct NookNotesEditor: View {
         fontSize: CGFloat = NSFont.systemFontSize,
         lineSpacing: CGFloat = 4,
         accessibilityLabel: String = "Personal meeting notes",
-        insertionPort: TextViewInsertionPort? = nil
+        insertionPort: TextViewInsertionPort? = nil,
+        surfaceOutset: EdgeInsets? = nil
     ) {
         _text = text
         // A Binding<String> can compare equal after an NFC/NFD-only change,
@@ -110,6 +119,7 @@ struct NookNotesEditor: View {
         self.lineSpacing = lineSpacing
         self.accessibilityLabel = accessibilityLabel
         self.insertionPort = insertionPort
+        self.surfaceOutset = surfaceOutset
     }
 
     var body: some View {
@@ -132,9 +142,30 @@ struct NookNotesEditor: View {
                 lineSpacing: lineSpacing,
                 accessibilityLabel: accessibilityLabel,
                 isEditable: isEnabled,
-                insertionPort: insertionPort
+                insertionPort: insertionPort,
+                onKeyboardChange: { hasKeyboard = $0 }
             )
             .padding(contentInsets)
+        }
+        .background {
+            if let surfaceOutset {
+                // Outside the layout, so the text sits exactly where it does
+                // at rest and nothing shifts when the field takes the keyboard.
+                NookFieldSurface(
+                    isFocused: hasKeyboard && isEnabled,
+                    isHovered: isHovered && isEnabled
+                )
+                .padding(EdgeInsets(
+                    top: -surfaceOutset.top,
+                    leading: -surfaceOutset.leading,
+                    bottom: -surfaceOutset.bottom,
+                    trailing: -surfaceOutset.trailing
+                ))
+            }
+        }
+        .onHover { hovering in
+            guard surfaceOutset != nil else { return }
+            isHovered = hovering
         }
     }
 
@@ -207,6 +238,23 @@ private struct ExactNotesText: Equatable {
 /// it at the mouse instead. For editors in ordinary windows this only
 /// restates what the click already did.
 private final class KeyActivatingTextView: NSTextView {
+    /// The keyboard itself, not the delegate's editing notifications, which
+    /// begin only at the first keystroke: a click into the field is when it
+    /// should start to look like one.
+    var onFirstResponderChange: ((Bool) -> Void)?
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted { onFirstResponderChange?(true) }
+        return accepted
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { onFirstResponderChange?(false) }
+        return resigned
+    }
+
     override func mouseDown(with event: NSEvent) {
         super.mouseDown(with: event)
         NSApp.activate(ignoringOtherApps: true)
@@ -224,6 +272,7 @@ private struct PlainNotesTextView: NSViewRepresentable {
     let accessibilityLabel: String
     let isEditable: Bool
     var insertionPort: TextViewInsertionPort?
+    var onKeyboardChange: (Bool) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -263,6 +312,9 @@ private struct PlainNotesTextView: NSViewRepresentable {
             height: CGFloat.greatestFiniteMagnitude
         )
         textView.setAccessibilityLabel(accessibilityLabel)
+        textView.onFirstResponderChange = { [weak coordinator = context.coordinator] focused in
+            coordinator?.parent.onKeyboardChange(focused)
+        }
         scrollView.documentView = textView
         context.coordinator.textView = textView
         insertionPort?.textView = textView

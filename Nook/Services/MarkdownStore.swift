@@ -277,7 +277,7 @@ final class MarkdownStore: ObservableObject {
         return saved
     }
 
-    /// Writes in-place edits to the generated sections: the gist, key points,
+    /// Writes in-place edits to the generated sections: the summary, key points,
     /// decisions, action items and open questions.
     ///
     /// A three-way merge by section. Only a section the person changed is

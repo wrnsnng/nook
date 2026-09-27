@@ -118,6 +118,9 @@ struct MeetingDetailView: View {
     /// between rows of the generated sections.
     @State private var generatedFocus: InlineFocusRequest?
     @State private var generatedFocusToken = 0
+    /// The generated row that has the keyboard, so tidying up after focus
+    /// leaves a row never removes the row it moved to.
+    @State private var focusedGeneratedRow: UUID?
     /// Regenerate is about to replace sections the person rewrote.
     @State private var confirmsRegeneration = false
 
@@ -190,7 +193,7 @@ struct MeetingDetailView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Regenerating writes the gist, key points, decisions, action items and open questions again from the transcript. Your changes to those sections will be replaced. My notes are kept.")
+            Text("Regenerating writes the summary, key points, decisions, action items and open questions again from the transcript. Your changes to those sections will be replaced. My notes are kept.")
         }
     }
 
@@ -308,6 +311,7 @@ struct MeetingDetailView: View {
         // the debounce go there first, so the source never starts stale.
         .onChange(of: tab) { _, _ in
             saveSummaryEdits()
+            dropAbandonedRows(keepingFocusedRow: false)
         }
         // Backstop for navigation that races focus loss: the view keeps its
         // own note, so committing here always writes the right file.
@@ -317,6 +321,7 @@ struct MeetingDetailView: View {
             saveTitle()
             savePersonalNotes()
             saveSummaryEdits()
+            dropAbandonedRows(keepingFocusedRow: false)
         }
     }
 
@@ -600,6 +605,7 @@ struct MeetingDetailView: View {
                                 .accessibilityElement(children: .contain)
                                 .modifier(PublishesRowHover())
                             }
+                            addItemRow(.keyPoints, markerWidth: 10, markerSpacing: 14)
                         }
                     }
                 }
@@ -630,6 +636,7 @@ struct MeetingDetailView: View {
                                 .accessibilityElement(children: .contain)
                                 .modifier(PublishesRowHover())
                             }
+                            addItemRow(.decisions, markerWidth: 20, markerSpacing: 13)
                         }
                     }
                 }
@@ -654,6 +661,7 @@ struct MeetingDetailView: View {
                                 }
                                 .modifier(PublishesRowHover())
                             }
+                            addItemRow(.openQuestions, markerWidth: nil, markerSpacing: 7)
                         }
                     }
                 }
@@ -670,6 +678,8 @@ struct MeetingDetailView: View {
                     .foregroundStyle(.secondary)
                     .padding(.top, -16)
                 }
+
+                addSectionBar
             }
             .padding(.vertical, 28)
             .nookReadableColumn()
@@ -813,7 +823,9 @@ struct MeetingDetailView: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .disabled(markdownDraft.hasChanges || !editsBelongHere)
+                        // A new item has nothing in the file to tick until
+                        // it has words; its tick is keyed by those words.
+                        .disabled(markdownDraft.hasChanges || !editsBelongHere || row.storedText.isEmpty)
                         .help(row.isCompleted ? "Reopen item" : "Mark as done")
                         .accessibilityLabel(
                             "\(row.isCompleted ? "Reopen" : "Complete"): \(row.text)"
@@ -852,11 +864,14 @@ struct MeetingDetailView: View {
                     .accessibilityElement(children: .contain)
                     .modifier(PublishesRowHover())
 
-                    if index < actionRows.count - 1 {
+                    if index < actionRows.count - 1 || canOfferAdditions {
                         Divider()
                             .padding(.leading, 43)
                     }
                 }
+                addItemRow(.actions, markerWidth: 30, markerSpacing: 13)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -989,7 +1004,11 @@ struct MeetingDetailView: View {
                         bottom: 4,
                         trailing: 0
                     ),
-                    lineSpacing: 5
+                    lineSpacing: 5,
+                    // The page is still the writing surface, as in Notes;
+                    // the field only shows itself under the pointer and
+                    // while it has the keyboard, in the rows' own style.
+                    surfaceOutset: EdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10)
                 )
                 .disabled(markdownDraft.hasChanges)
                 .accessibilityHint(
@@ -1089,12 +1108,30 @@ struct MeetingDetailView: View {
         DetailSummaryParagraphPolicy.paragraphs(for: displaySummary)
     }
 
+    @ViewBuilder
     private var summarySection: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        if note.kind == .spoken {
+            summarySectionContent
+        } else {
+            // The lead of the page, set apart the way Mail and Notes set
+            // apart a summary: a softly tinted surface, not a card with a
+            // border or shadow. The surface bleeds into the margin so the
+            // words keep the column every other section starts on.
+            summarySectionContent
+                .padding(.vertical, 18)
+                .background {
+                    RoundedRectangle(cornerRadius: NookRadius.surface, style: .continuous)
+                        .fill(NookPalette.leadSurface)
+                        .padding(.horizontal, -NookLayout.leadSurfaceBleed)
+                }
+        }
+    }
+
+    private var summarySectionContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline) {
                 NookSectionLabel(
-                    title: note.kind == .spoken ? "Spoken words"
-                        : note.summaryProvenance != nil ? "Fallback write-up" : "The gist",
+                    title: DetailSummaryTitle.title(for: note),
                     symbol: note.kind == .spoken
                         ? "waveform" : "text.alignleft",
                     tint: NookPalette.accent
@@ -1154,23 +1191,23 @@ struct MeetingDetailView: View {
         }
     }
 
-    /// The gist, a row per sentence or paragraph exactly as it has always
+    /// The summary, a row per sentence or paragraph exactly as it has always
     /// been laid out, with every row an editor.
     private var editableSummaryProse: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(summaryRows.enumerated()), id: \.element.id) { index, row in
                 HStack(alignment: .top, spacing: 12) {
                     InlineEditableText(
                         text: summaryRowBinding(row),
                         placeholder: "Write what this meeting was about",
-                        font: NookInlineFont.body,
-                        lineSpacing: 7,
+                        font: NookInlineFont.lead,
+                        lineSpacing: DetailSummaryRhythm.lineSpacing,
                         isEditable: canEditGenerated,
                         accessibilityLabel: summaryRows.count > 1
                             ? "\(summaryTitle), paragraph \(index + 1)" : summaryTitle,
                         accessibilityHelp: "Editable. Return starts a new paragraph.",
                         focusRequest: generatedFocus?.rowID == row.id ? generatedFocus : nil,
-                        onFocusChange: generatedFocusChanged,
+                        onFocusChange: { generatedFocusChanged($0, row: row.id) },
                         onReturn: { caret in
                             editSummaryRows { SummaryRowEditing.split(&$0, at: row.id, caret: caret) }
                         },
@@ -1185,12 +1222,13 @@ struct MeetingDetailView: View {
                 }
                 .accessibilityElement(children: .contain)
                 .modifier(PublishesRowHover())
+                .padding(.top, index == 0 ? 0 : DetailSummaryRhythm.gap(before: row))
             }
         }
     }
 
     private var summaryTitle: String {
-        note.summaryProvenance != nil ? "Fallback write-up" : "The gist"
+        DetailSummaryTitle.title(for: note)
     }
 
     // MARK: Editing the generated sections
@@ -1264,7 +1302,7 @@ struct MeetingDetailView: View {
             accessibilityLabel: "\(label) \(index + 1)",
             accessibilityHelp: "Editable. Return adds an item below. Delete in an empty item removes it.",
             focusRequest: generatedFocus?.rowID == row.id ? generatedFocus : nil,
-            onFocusChange: generatedFocusChanged,
+            onFocusChange: { generatedFocusChanged($0, row: row.id) },
             onReturn: { caret in
                 editListRows(path) { SummaryRowEditing.split(&$0, at: row.id, caret: caret) }
             },
@@ -1347,9 +1385,87 @@ struct MeetingDetailView: View {
 
     /// Leaving a row writes it, as leaving My notes does. Moving between rows
     /// writes too, which costs one small save and keeps nothing waiting.
-    private func generatedFocusChanged(_ focused: Bool) {
-        guard !focused else { return }
+    private func generatedFocusChanged(_ focused: Bool, row id: UUID) {
+        if focused {
+            focusedGeneratedRow = id
+            return
+        }
+        if focusedGeneratedRow == id { focusedGeneratedRow = nil }
         saveSummaryEdits()
+        // A turn later, because moving between rows hands the keyboard over
+        // in two steps: this row lets go first, and the row it went to (say,
+        // a new one made by Return) takes it straight after. Only then is it
+        // clear which empty rows were left behind.
+        Task { @MainActor in dropAbandonedRows() }
+    }
+
+    /// Rows added and left empty go away when the keyboard leaves them, and
+    /// a section that only existed for one of them hides again. They were
+    /// never going to be written, so this changes nothing in the file.
+    private func dropAbandonedRows(keepingFocusedRow: Bool = true) {
+        guard editsBelongHere else { return }
+        var draft = summaryEdits.draft
+        guard draft.dropEmptyRows(keeping: keepingFocusedRow ? focusedGeneratedRow : nil) else { return }
+        summaryEdits.draft = draft
+    }
+
+    // MARK: Adding items and sections
+
+    /// Adding is offered wherever rows can be edited. While Markdown has
+    /// unsaved edits the controls stay, disabled, beside the notice that
+    /// explains why.
+    private var canOfferAdditions: Bool {
+        editsBelongHere && !SummaryListSection.editable(for: note.kind).isEmpty
+    }
+
+    /// An empty row at the end of the list, with the keyboard in it.
+    private func addItem(to section: SummaryListSection) {
+        guard canEditGenerated else { return }
+        let id = summaryEdits.draft.appendEmptyRow(to: section)
+        requestGeneratedFocus(.init(rowID: id, caret: 0))
+    }
+
+    /// The quiet last line of a list, in the list's own marker column.
+    @ViewBuilder
+    private func addItemRow(
+        _ section: SummaryListSection,
+        markerWidth: CGFloat?,
+        markerSpacing: CGFloat
+    ) -> some View {
+        if canOfferAdditions {
+            AddSummaryItemButton(
+                title: section.addLabel,
+                markerWidth: markerWidth,
+                markerSpacing: markerSpacing
+            ) {
+                addItem(to: section)
+            }
+            .disabled(!canEditGenerated)
+        }
+    }
+
+    /// Sections a note does not have are hidden, so they are offered here,
+    /// after the last one: each opens its section with one empty item.
+    @ViewBuilder
+    private var addSectionBar: some View {
+        let missing = canOfferAdditions
+            ? summaryEdits.draft.missingSections(for: note.kind) : []
+        if !missing.isEmpty {
+            HStack(spacing: 18) {
+                Text("Add")
+                    .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
+                ForEach(missing, id: \.self) { section in
+                    AddSummaryItemButton(title: section.itemName, markerWidth: nil, markerSpacing: 5) {
+                        addItem(to: section)
+                    }
+                    .accessibilityLabel("Add \(section.title.lowercased())")
+                    .help("Add a \(section.title.lowercased()) section with one new item")
+                }
+            }
+            .font(NookType.body)
+            .disabled(!canEditGenerated)
+        }
     }
 
     private func scheduleSummaryEditsSave() {
@@ -1433,6 +1549,11 @@ struct MeetingDetailView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
+            // The hit target stays 26 points, but the row is laid out as if
+            // the button were one line tall. At full height it propped every
+            // one-line row open while a wrapped row was not, which is what
+            // made the summary's paragraphs look unevenly spaced.
+            .padding(.vertical, -4)
             .modifier(RevealedOnRowHover(isFocused: summaryReviewFocus == item.id))
             .accessibilityLabel("Show supporting transcript for \(item.label): \(item.text)")
             .help("Review transcript support or correct this item")
@@ -2463,6 +2584,35 @@ enum DetailRenamePolicy {
 /// Builds visual breaks for long prose without changing the words a note
 /// contains. A generated summary that is short, sparse, or difficult to split
 /// safely remains one exact string; paragraphing is only a reading aid.
+/// The vertical rhythm of the summary's rows.
+///
+/// A meeting's summary is a row per sentence, so each sentence can be
+/// edited and checked against the transcript on its own. Spacing every row
+/// alike made each sentence look like its own paragraph, and the real
+/// paragraph breaks disappeared among them: the page read as unevenly
+/// spaced. A row continuing its paragraph now sits one line-gap below the
+/// last, and only a stored paragraph break opens a paragraph gap.
+enum DetailSummaryRhythm {
+    static let lineSpacing: CGFloat = 6
+    static let paragraphGap: CGFloat = 14
+
+    static func gap(before row: SummaryProseRow) -> CGFloat {
+        startsParagraph(row) ? paragraphGap : lineSpacing
+    }
+
+    static func startsParagraph(_ row: SummaryProseRow) -> Bool {
+        row.separator.contains(where: \.isNewline)
+    }
+}
+
+/// The heading over the lead of the Notes tab, shown and spoken the same way.
+enum DetailSummaryTitle {
+    static func title(for note: MeetingNote) -> String {
+        if note.kind == .spoken { return "Spoken words" }
+        return note.summaryProvenance != nil ? "Fallback write-up" : "In summary"
+    }
+}
+
 enum DetailSummaryParagraphPolicy {
     /// Summaries under this size stay visually identical to the existing
     /// single Text. The threshold avoids introducing a break into a compact
@@ -2806,6 +2956,38 @@ struct NativeSearchField: NSViewRepresentable {
             guard let field = notification.object as? NSSearchField else { return }
             text.wrappedValue = field.stringValue
         }
+    }
+}
+
+/// "Add key point" and its kin: a plus in the list's marker column and
+/// secondary words, like the new-item row at the end of a Reminders list.
+/// Plain until the pointer is over it, so a finished page stays quiet.
+private struct AddSummaryItemButton: View {
+    let title: String
+    /// The width of the list's bullet or checkbox column, so the plus sits
+    /// where a marker would and the words line up with the items above.
+    /// Nil for a list without markers.
+    let markerWidth: CGFloat?
+    let markerSpacing: CGFloat
+    let action: () -> Void
+
+    @State private var isHovered = false
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        Button(action: action) {
+            HStack(alignment: .firstTextBaseline, spacing: markerSpacing) {
+                Image(systemName: "plus")
+                    .font(.system(size: 11, weight: .medium))
+                    .frame(width: markerWidth, alignment: .center)
+                Text(title)
+            }
+            .foregroundStyle(isHovered && isEnabled ? .primary : .secondary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .help(title)
     }
 }
 
