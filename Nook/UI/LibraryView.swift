@@ -1064,6 +1064,10 @@ struct LibraryView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
+                // Filling the row gives the segments equal, fixed widths. Sized
+                // to its labels, the control re-measured whenever the window
+                // re-laid out (a notice appearing, say) and "All" briefly grew.
+                .frame(maxWidth: .infinity)
                 .accessibilityLabel("Note date range")
             }
 
@@ -1275,6 +1279,16 @@ struct LibraryView: View {
                     }
                 }
             }
+            // Visible where folders are, as the Add rows are on a note, so
+            // making one never depends on finding a context menu.
+            Button(action: presentNewFolder) {
+                Label("New Folder", systemImage: "plus")
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 2)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Make a folder in your notes folder")
         } header: {
             // The header keeps only its title: a collapsible section draws
             // its own chevron at the trailing edge. New Folder sits in the
