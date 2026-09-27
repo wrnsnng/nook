@@ -6,6 +6,10 @@ the [binary releases repository](https://github.com/wrnsnng/nook-releases/releas
 
 ## Unreleased
 
+## 1.23.0
+
+[Release notes](Releases/Nook-1.23.0.md)
+
 - When recording stops because a permission is missing, the notch offers Open
   Settings beside Dismiss, not Dismiss alone.
 - The notch's progress lines while a meeting is saved are short enough to read
