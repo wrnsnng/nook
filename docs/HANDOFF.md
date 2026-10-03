@@ -6,33 +6,104 @@ contribute.
 
 ## Current release
 
-Nook 1.21.0 (build 38) is the current public release, published September 27,
-2026, and promoted to the Sparkle feed the same day. It was released at the
-maintainer's direction **without** the hands-on acceptance described under
-[Manual release acceptance](#manual-release-acceptance). Nothing in it has
-been checked by a person on a Mac: physical capture and permission prompts,
-VoiceOver, the notch island on a notched MacBook, speaker separation on real
-voices, Siri and Spotlight in the signed app. Treat those as open work, not
-as verified behaviour. Version 1.20.1 was published September 3.
+Nook 1.23.0 (build 42) is the current public release, published September 27,
+2026: folder suggestions and automatic filing of recurring meetings, plus a UX
+sweep, built locally on Xcode 27 from
+[04dec1d](https://github.com/wrnsnng/nook/commit/04dec1dd3656426b577cb765048d757a8907d081)
+(PRs #43 and #44) the same way as 1.22.1. Before it, 1.22.2 (build 41): multi-selection of notes and a New Folder row, built locally on Xcode 27
+from [e987f64](https://github.com/wrnsnng/nook/commit/e987f64a1ab36f7fdcdb0dd6d2b71b9c50d602b9)
+(PR #42) the same way as 1.22.1. Earlier the same day came 1.22.1 (build 40)
+and 1.22.0 (build 39). All four were released at the maintainer's direction **without** the
+hands-on acceptance described under
+[Manual release acceptance](#manual-release-acceptance).
 
-- Source: [c0e0542](https://github.com/wrnsnng/nook/commit/c0e05421cef0a4b9a14fc0dfc6f5b763ece4a704)
-  (release PR #31, which merged draft PRs #22, #23, #25, #26 and #27). The
-  artifact came from `stable-macos-build` run 36278466199 on Xcode 26 (SDK
-  26.5). Preparation ran from a later `main` that differed only in `Scripts/`
-  (#32 moved the FluidAudio lexicon removal into `sign-app.sh`; #33 fixed a
-  `pipefail` false failure in `verify-release-app.sh`).
-- Developer ID signed (team V2KY59725J, designated requirement and
-  entitlements identical to 1.20.1), notarized, stapled and Gatekeeper
-  accepted. The feed carries deltas from builds 33 to 37.
-- Every public asset (versioned zip, `Nook.zip` and its checksum, update
-  archive, five deltas and the appcast) was re-downloaded and compared with
-  the prepared bytes; archive and feed EdDSA signatures verified. The 1.20.1
+- 1.22.1 fixes a crash on macOS 27 when hovering the hidden recording pill
+  (AppKit's update-constraints loop; the pill's tooltip was removed), reworks
+  the notes page ("In summary", adding items and sections) and is the first
+  release built with **stable Xcode 27** (macOS 27 SDK, deployment target
+  still macOS 26). Apps linked against the 26 SDK get the older window style
+  on macOS 27, including a non-floating sidebar.
+- **Local build exception.** GitHub's hosted macOS images stopped at Xcode 26.6
+  when Xcode 27 shipped, so the 1.22.1 candidate was built on the maintainer's
+  Mac with `Scripts/build-distribution-app.sh` (the same script the
+  distribution workflow runs) from a clean checkout of `main` at
+  [2aa4f7c](https://github.com/wrnsnng/nook/commit/2aa4f7c965fcce26ee54ec822e4dece2b1d09aeb).
+  Its app source is identical to the release PR #40 merge; #41 changed only
+  the build script and workflows. Contributor CI tests on the newest stable
+  Xcode 26 as a cross-check until the images carry Xcode 27. See
+  [OPERATIONS.md](OPERATIONS.md#unsigned-official-configuration-artifact).
+- 1.22.0 came from `stable-macos-build` run 36299380707 at
+  [8c5450e](https://github.com/wrnsnng/nook/commit/8c5450e2ba02de7f0efb9bcd49a21d0af0bd61bf)
+  (release PR #38, which also carried #35, #36 and #37).
+- Both: Developer ID signed (team V2KY59725J), notarized, stapled and
+  Gatekeeper accepted; every public asset re-downloaded and byte-compared with
+  the prepared files; archive and feed EdDSA signatures verified. The previous
   appcast is retained privately by the maintainer for rollback.
-- The release is available from the
-  [binary releases repository](https://github.com/wrnsnng/nook-releases/releases/tag/v1.21.0).
-- User-facing changes are mapped in [CHANGELOG.md](../CHANGELOG.md).
+- The test action passes a temporary `storageDirectory` to the test host.
+  Without it, a fresh local build scanned `~/Documents/Nook`, waited on the
+  Documents privacy prompt and stalled the whole run.
+- Releases: [v1.23.0](https://github.com/wrnsnng/nook-releases/releases/tag/v1.23.0),
+  [v1.22.2](https://github.com/wrnsnng/nook-releases/releases/tag/v1.22.2),
+  [v1.22.1](https://github.com/wrnsnng/nook-releases/releases/tag/v1.22.1),
+  [v1.22.0](https://github.com/wrnsnng/nook-releases/releases/tag/v1.22.0).
+  User-facing changes are in [CHANGELOG.md](../CHANGELOG.md).
 
-## Remaining issue implementation, September 4
+## Active work and tracker reconciliation, October 3
+
+The current release above was rechecked against the public release repository
+on October 3. GitHub issues #7 and #9 through #13 are closed; their implementation
+was integrated through PR #31 on September 26 and is present in 1.23.0. The old
+feature PRs #22, #23 and #25 through #27 are no longer pending implementation.
+Linear COM-279 and COM-285 through COM-289 now record delivery as Done. That
+status does not certify the physical acceptance listed below.
+
+Current proposed work, not merged or released:
+
+- [PR #47](https://github.com/wrnsnng/nook/pull/47): defer and coalesce native
+  editor focus publication after SwiftUI updates. A hosted regression failed
+  before the fix; all 21 editor tests pass afterward, with recorded warnings
+  reduced from four to zero. Physical IME, dictation, VoiceOver and minimum-
+  hardware performance remain open in issue #15 / COM-291.
+- [PR #46](https://github.com/wrnsnng/nook/pull/46), based on #47: integrate
+  metadata discovery and read-only previews into the library while retaining
+  complete models for all editing, search and cross-library consumers. Folder
+  generations and exact revisions reject stale discovery/preview results.
+  Measurements, tradeoffs and acceptance limits live in the PR and its
+  `docs/proposals/LIBRARY_LOADING_SPIKE.md`; prototype memory numbers are not
+  production memory claims. Issue #45 remains open.
+- [PR #48](https://github.com/wrnsnng/nook/pull/48), based on #47: kill and restart
+  synthetic editor processes across all three draft kinds, unchanged originals,
+  external edits and an unavailable original library path. All nine cases pass
+  with exact draft-text byte recovery and original-file preservation. The
+  generated metadata envelope is not compared byte for byte for My Notes or
+  Quick Note. Full suite: 1,376
+  declarations / 1,835 cases, no failures, skips or runtime warnings. It does
+  not certify installed-app UI, physical volume removal, final-keystroke or
+  power-loss durability. Issue #14 / COM-290 remains open for manual acceptance.
+- Issue #29 still tracks future App Intents surfaces, including widgets and
+  Control Center. Existing phase-one delivery does not close that future scope.
+
+COM-290 and COM-291 are In Progress with dated evidence. Their original manual
+criteria remain intact. Audio, permission, accessibility, physical-display and
+installed-update gaps remain in [Manual release acceptance](#manual-release-acceptance),
+even where an implementation ticket is closed. No signed app, permission grants,
+real meetings or user notes were changed by this work.
+
+The root checkout is clean on main at `04dec1d`. The old uncommitted combined
+feature tree was reviewed in full and exactly matches historical commit
+`c357a83`, already an ancestor of main. Its local archive and backup tag are
+retained; it contained no unique unmerged work. New changes use isolated,
+committed branches and focused PRs.
+
+## Historical implementation notes, September 4–5
+
+The following dated record is preserved for provenance. Statements about draft
+PRs, unmerged features, a dirty root checkout and outstanding code review describe
+that earlier point in time. They are superseded by the release and active-work
+sections above. Manual acceptance is superseded only by actual recorded evidence.
+
+<details>
+<summary>September implementation and review history</summary>
 
 ### Code-review completion and remaining acceptance, September 5
 
@@ -642,6 +713,8 @@ The combined source-writer/recovery suites passed **47 tests / 75 cases** in
 `Test-Nook-2026.09.04_22-28-45-+1000.xcresult`. The generated project is unchanged
 from the previous checkpoint. No real audio, model or physical acceptance is
 claimed; review and delivery remain open.
+
+</details>
 
 ## Historical release 1.20.0 candidate evidence
 
