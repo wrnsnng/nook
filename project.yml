@@ -124,6 +124,7 @@ targets:
       - path: NookTests
     dependencies:
       - target: Nook
+      - target: NookRecoveryProbe
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
@@ -147,6 +148,25 @@ targets:
     settings:
       base:
         PRODUCT_NAME: NookSnapshot
+        SWIFT_STRICT_CONCURRENCY: complete
+  NookRecoveryProbe:
+    type: tool
+    platform: macOS
+    sources:
+      - path: Nook
+        excludes:
+          - App/NookApp.swift
+          - App/AppDelegate.swift
+          - Resources
+      - path: NookRecoveryProbe
+    dependencies:
+      - package: Sparkle
+        product: Sparkle
+      - package: FluidAudio
+        product: FluidAudio
+    settings:
+      base:
+        PRODUCT_NAME: NookRecoveryProbe
         SWIFT_STRICT_CONCURRENCY: complete
 schemes:
   Nook:
