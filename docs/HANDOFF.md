@@ -74,7 +74,9 @@ Current proposed work, not merged or released:
 - [PR #48](https://github.com/wrnsnng/nook/pull/48), based on #47: kill and restart
   synthetic editor processes across all three draft kinds, unchanged originals,
   external edits and an unavailable original library path. All nine cases pass
-  with exact-byte recovery and original-file preservation. Full suite: 1,376
+  with exact draft-text byte recovery and original-file preservation. The
+  generated metadata envelope is not compared byte for byte for My Notes or
+  Quick Note. Full suite: 1,376
   declarations / 1,835 cases, no failures, skips or runtime warnings. It does
   not certify installed-app UI, physical volume removal, final-keystroke or
   power-loss durability. Issue #14 / COM-290 remains open for manual acceptance.
