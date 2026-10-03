@@ -1,0 +1,88 @@
+{
+  "baselineCommit": "04dec1d",
+  "hardware": "Apple M4 Pro Mac mini",
+  "toolchain": "Xcode 27.0 (27A266a)",
+  "configuration": "Debug with SWIFT_OPTIMIZATION_LEVEL=-O; no shipping Release claim",
+  "results": {
+    "baseline": {
+      "coldDefinition": "Empty application cache; OS file cache not flushed",
+      "fixtureGenerationPeakBytes": 234618880,
+      "fixtureRevision": "15Bl8WrwsPlqhXsOA6h7TKgUf1sJHeW/QHDX9sbIj6E=",
+      "inputTranscriptSegments": 130000,
+      "markdownBytes": 31611951,
+      "memoryDefinition": "Process high-water RSS, including test host and fixture generation",
+      "mode": "baseline",
+      "noteCount": 1001,
+      "os": "Version 26.6.2 (Build 25G83)",
+      "samples": [
+        {
+          "catalogPeakBytes": 653574144,
+          "coldCatalogMs": 2692.4692500033416,
+          "firstCompleteSearchMs": 93.83000002708286,
+          "openLongNoteMs": 0.022666645236313343,
+          "processPeakBytes": 685916160,
+          "repeatCompleteSearchMs": 37.03262499766424,
+          "warmCatalogMs": 77.39879167638719
+        },
+        {
+          "catalogPeakBytes": 689111040,
+          "coldCatalogMs": 2679.1537500103004,
+          "firstCompleteSearchMs": 93.4757916838862,
+          "openLongNoteMs": 0.001333362888544798,
+          "processPeakBytes": 689405952,
+          "repeatCompleteSearchMs": 36.92758333636448,
+          "warmCatalogMs": 83.04895833134651
+        },
+        {
+          "catalogPeakBytes": 689569792,
+          "coldCatalogMs": 2641.4533749921247,
+          "firstCompleteSearchMs": 91.95066668326035,
+          "openLongNoteMs": 0.0009583309292793274,
+          "processPeakBytes": 690061312,
+          "repeatCompleteSearchMs": 36.997250048443675,
+          "warmCatalogMs": 76.29987498512492
+        }
+      ]
+    },
+    "metadata": {
+      "coldDefinition": "Empty application cache; OS file cache not flushed",
+      "fixtureGenerationPeakBytes": 233439232,
+      "fixtureRevision": "15Bl8WrwsPlqhXsOA6h7TKgUf1sJHeW/QHDX9sbIj6E=",
+      "inputTranscriptSegments": 130000,
+      "markdownBytes": 31611951,
+      "memoryDefinition": "Process high-water RSS, including test host and fixture generation",
+      "mode": "metadata",
+      "noteCount": 1001,
+      "os": "Version 26.6.2 (Build 25G83)",
+      "samples": [
+        {
+          "catalogPeakBytes": 236978176,
+          "coldCatalogMs": 208.1841666949913,
+          "firstCompleteSearchMs": 2674.8508333112113,
+          "openLongNoteMs": 87.33654167735949,
+          "processPeakBytes": 286900224,
+          "repeatCompleteSearchMs": 62.4693333520554,
+          "warmCatalogMs": 51.565333327744156
+        },
+        {
+          "catalogPeakBytes": 287539200,
+          "coldCatalogMs": 206.56291669001803,
+          "firstCompleteSearchMs": 2663.4915416361764,
+          "openLongNoteMs": 85.11504164198413,
+          "processPeakBytes": 296927232,
+          "repeatCompleteSearchMs": 62.59029172360897,
+          "warmCatalogMs": 51.24354170402512
+        },
+        {
+          "catalogPeakBytes": 296927232,
+          "coldCatalogMs": 206.50233334163204,
+          "firstCompleteSearchMs": 2677.5467916741036,
+          "openLongNoteMs": 85.82070836564526,
+          "processPeakBytes": 297009152,
+          "repeatCompleteSearchMs": 68.89795832103118,
+          "warmCatalogMs": 52.00937500922009
+        }
+      ]
+    }
+  }
+}

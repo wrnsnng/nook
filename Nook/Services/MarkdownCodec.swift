@@ -165,6 +165,51 @@ enum MarkdownCodec {
         return ([frontmatter] + blocks).joined(separator: "\n\n")
     }
 
+    /// A discovery result has no editable content. Keeping it a different type
+    /// prevents an unloaded transcript from reaching a whole-note save as empty.
+    /// The loading spike uses this; the production store still fully decodes.
+    struct Metadata: Hashable, Sendable {
+        let id: UUID
+        let kind: NoteKind
+        let title: String
+        let startedAt: Date
+        let endedAt: Date
+        let sourceApp: String
+        let duration: TimeInterval
+    }
+
+    static func decodeMetadata(_ markdown: String) -> Metadata? {
+        let metadata = parseFrontmatter(markdown)
+        guard let id = UUID(uuidString: metadata["id"] ?? ""),
+              let startedAt = isoDate(from: metadata["started"] ?? ""),
+              let endedAt = isoDate(from: metadata["ended"] ?? "") else { return nil }
+        let kind = metadata["kind"].flatMap { NoteKind(rawValue: unquote($0)) } ?? .default
+        // Most files carry a title. A legacy heading fallback must stop at the
+        // first match instead of allocating a line array for a long transcript.
+        var title = metadata["title"]
+        if title == nil {
+            var remaining = markdown[...]
+            while !remaining.isEmpty {
+                let end = remaining.firstIndex(of: "\n") ?? remaining.endIndex
+                let line = remaining[..<end]
+                if line.hasPrefix("# ") {
+                    title = String(line.dropFirst(2))
+                    break
+                }
+                if end == remaining.endIndex { break }
+                remaining = remaining[remaining.index(after: end)...]
+            }
+        }
+        let sessions = kind == .spoken ? [] : parseSessions(metadata["sessions"] ?? "")
+        return Metadata(
+            id: id, kind: kind, title: unquote(title ?? "Untitled meeting"),
+            startedAt: startedAt, endedAt: endedAt,
+            sourceApp: unquote(metadata["source"] ?? "Unknown"),
+            duration: sessions.isEmpty ? max(0, endedAt.timeIntervalSince(startedAt))
+                : sessions.reduce(0) { $0 + $1.duration }
+        )
+    }
+
     static func decode(_ markdown: String, fileURL: URL? = nil) -> MeetingNote? {
         let metadata = parseFrontmatter(markdown)
         let bodyTitle = firstHeading(in: markdown)

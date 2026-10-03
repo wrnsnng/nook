@@ -48,8 +48,14 @@ Required behavior before integration:
   peak memory and rebuild time. Report cold and warm runs separately. A faster
   sidebar that delays or loses search does not satisfy the proposal.
 
-**Decision needed:** publish the architecture proposal, then review the spike's
-correctness and performance evidence before replacing the loader.
+**Status:** the architecture proposal is public as [issue 45](https://github.com/wrnsnng/nook/issues/45).
+The [October 3 loading work](LIBRARY_LOADING_SPIKE.md) records the spike and
+bounded UI integration in PR #46. Separate metadata rows and read-only previews
+arrive before the complete store snapshot; editable models and complete search
+retain their existing contract. Measured first-row publication is 226 ms, with
+complete loading at 2,879 ms for the synthetic 1,001-note fixture. This is not
+a production memory reduction. Native accessibility and minimum-hardware
+acceptance remain open before release.
 
 ## Native text layout for long paragraphs
 
