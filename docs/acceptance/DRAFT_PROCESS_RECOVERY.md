@@ -13,8 +13,11 @@ note through `DraftRecoveryController`.
 
 Each editor runs against an unchanged original, an externally edited original,
 and a renamed (unavailable) original library directory. All nine cases pass.
-Assertions check exact bytes (only the identity line changes for Markdown), a
-new note identity, no overwrite of original files, and checkpoint cleanup.
+Assertions compare the complete Markdown draft bytes with only its identity
+line replaced. For My Notes and Quick Note, they compare the exact draft-text
+bytes at the end of a valid new note; the generated metadata envelope is not
+pinned byte for byte. All cases check a new identity, original-file preservation
+and checkpoint cleanup.
 
 The complete suite passes 1,376 declarations / 1,835 cases, with zero failures,
 skips or runtime warnings. The test result is
