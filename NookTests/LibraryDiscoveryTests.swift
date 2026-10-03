@@ -76,26 +76,41 @@ struct LibraryDiscoveryTests {
     }
 
     @Test
-    func aSaveDuringDiscoveryCannotBeReplacedByItsOlderSnapshot() async throws {
-        let (root, _) = try fixture()
+    func savingDuringColdLoadingRetainsEveryNoteAndRejectsTheOlderSnapshot() async throws {
+        let (root, original) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
-        let release = DispatchSemaphore(value: 0)
-        defer { release.signal() }
+        let other = MeetingNote(title: "Another saved meeting", startedAt: original.startedAt.addingTimeInterval(-60),
+                                endedAt: original.endedAt, sourceApp: "Synthetic", summary: "Another summary", personalNotes: "Keep this too")
+        try MarkdownCodec.encode(other).write(to: root.appendingPathComponent("other.md"), atomically: true, encoding: .utf8)
+        let firstRelease = DispatchSemaphore(value: 0)
+        let refreshRelease = DispatchSemaphore(value: 0)
+        let loads = Mutex(0)
+        defer { firstRelease.signal(); refreshRelease.signal() }
         let store = MarkdownStore(directoryURL: root, noteLoader: { directory, cache in
             let snapshot = MarkdownStore.loadNotes(in: directory, cache: cache)
-            _ = release.wait(timeout: .now() + 5)
+            let attempt = loads.withLock { $0 += 1; return $0 }
+            _ = (attempt == 1 ? firstRelease : refreshRelease).wait(timeout: .now() + 5)
             return snapshot
         }, discoveryLoader: LibraryDiscovery.scan)
-        try await settle { store.discovery != nil }
-        var note = try LibraryDiscovery.load(#require(store.discovery?.entries.first))
+        try await settle { store.discovery?.entries.count == 2 && loads.withLock { $0 == 1 } }
+        let entry = try #require(store.discovery?.entries.first { $0.metadata.id == original.id })
+        var note = try LibraryDiscovery.load(entry)
         note.personalNotes = "Newer user writing"
         let saved = try store.save(note)
-        release.signal()
-        try await Task.sleep(for: .milliseconds(100))
-        #expect(store.notes.first?.personalNotes == "Newer user writing")
-        #expect(try store.rawMarkdown(for: saved).contains("Newer user writing"))
+        #expect(store.isLoading)
         #expect(store.discovery == nil)
-        #expect(!store.isLoading)
+        try await settle { loads.withLock { $0 == 2 } }
+        // Let the pre-save result return while its replacement is blocked.
+        firstRelease.signal()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(store.isLoading)
+        #expect(store.notes.first?.personalNotes == "Newer user writing")
+        refreshRelease.signal()
+        try await settle { !store.isLoading }
+        #expect(Set(store.notes.map(\.id)) == [original.id, other.id])
+        #expect(store.notes.first(where: { $0.id == original.id })?.personalNotes == "Newer user writing")
+        #expect(store.notes.first(where: { $0.id == other.id })?.personalNotes == "Keep this too")
+        #expect(try store.rawMarkdown(for: saved).contains("Newer user writing"))
     }
 
     @Test

@@ -61,6 +61,7 @@ final class MarkdownStore: ObservableObject {
     /// Read-only rows may arrive before complete models. They never enter notes.
     @Published private(set) var discovery: LibraryDiscovery.Catalog?
     private var reloadTask: Task<Void, Never>?
+    private var hasPublishedLibrarySnapshot = false
     typealias DiscoveryLoader = @Sendable (URL) throws -> LibraryDiscovery.Catalog
     private let discoveryLoader: DiscoveryLoader?
     /// A folder can change away and back while an operation awaits a model.
@@ -71,6 +72,7 @@ final class MarkdownStore: ObservableObject {
         willSet {
             if newValue.standardizedFileURL != storageURL.standardizedFileURL {
                 reloadTask?.cancel()
+                hasPublishedLibrarySnapshot = false
                 reloadGeneration &+= 1
                 discovery = nil
                 isLoading = false
@@ -127,6 +129,10 @@ final class MarkdownStore: ObservableObject {
     }
 
     func reload() {
+        reload(discover: notes.isEmpty)
+    }
+
+    private func reload(discover shouldDiscover: Bool) {
         ensureDirectory()
         reloadTask?.cancel()
         reloadGeneration += 1
@@ -137,7 +143,7 @@ final class MarkdownStore: ObservableObject {
         let cache = decodeCache
         isLoading = true
 
-        let discover = notes.isEmpty ? discoveryLoader : nil
+        let discover = shouldDiscover ? discoveryLoader : nil
         reloadTask = Task { [weak self] in
             if let discover {
                 let worker = Task.detached(priority: .userInitiated) { try discover(directory) }
@@ -163,6 +169,7 @@ final class MarkdownStore: ObservableObject {
             // merely mid-publish.
             switch result {
             case .success(let payload):
+                self.hasPublishedLibrarySnapshot = true
                 self.folders = folderNames
                 self.notes = payload.notes
                 self.loadIssues = payload.issues
@@ -1144,9 +1151,17 @@ final class MarkdownStore: ObservableObject {
     }
 
     /// A detached reload is a snapshot of the directory before this mutation.
-    /// Advancing the generation prevents that older snapshot from replacing the
-    /// note that was just saved, and clears a spinner whose task is now stale.
+    /// Advancing the generation prevents an old snapshot from replacing the
+    /// mutation. Before the first complete scan, cancelling alone would expose
+    /// only the upserted note as a finished library and hide all the other files.
     private func invalidateReloadSnapshot() {
+        if !hasPublishedLibrarySnapshot, discoveryLoader != nil {
+            // Mutators call this after their disk commit. The replacement task
+            // runs after their synchronous in-memory update, retaining loading
+            // until a fresh complete snapshot arrives. Do not rediscover rows.
+            reload(discover: false)
+            return
+        }
         reloadTask?.cancel()
         discovery = nil
         reloadGeneration += 1
