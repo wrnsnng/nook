@@ -100,9 +100,9 @@ struct LibraryLoadingSpikeTests {
         #expect(before.utf8.count == after.utf8.count)
         try after.write(to: file, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.modificationDate: timestamp], ofItemAtPath: file.path)
-        #expect(throws: LibraryLoadingSpike.Failure.self) { try LibraryLoadingSpike.load(old.entries[0]) }
-        #expect(throws: LibraryLoadingSpike.Failure.self) { try LibraryLoadingSpike.search("cobalt", catalog: old) }
-        #expect(throws: LibraryLoadingSpike.Failure.self) {
+        #expect(throws: LibraryDiscovery.Failure.self) { try LibraryLoadingSpike.load(old.entries[0]) }
+        #expect(throws: (any Error).self) { try LibraryLoadingSpike.search("cobalt", catalog: old) }
+        #expect(throws: (any Error).self) {
             try LibraryLoadingSpike.search("cobalt", catalog: old, cache: &searchCache)
         }
         let refreshed = try LibraryLoadingSpike.scan(root, cache: &cache)

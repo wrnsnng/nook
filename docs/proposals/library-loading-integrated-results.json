@@ -1,0 +1,34 @@
+{
+  "coldDefinition" : "Empty application cache; OS file cache not flushed",
+  "fixtureGenerationPeakBytes" : 234668032,
+  "fixtureRevision" : "15Bl8WrwsPlqhXsOA6h7TKgUf1sJHeW\/QHDX9sbIj6E=",
+  "inputTranscriptSegments" : 130000,
+  "markdownBytes" : 31611951,
+  "memoryDefinition" : "Process high-water RSS, including test host and fixture generation",
+  "mode" : "integrated",
+  "noteCount" : 1001,
+  "os" : "Version 26.6.2 (Build 25G83)",
+  "samples" : [
+    {
+      "completeLibraryMs" : 2893.0514166713692,
+      "firstCompleteSearchIncludingDebounceMs" : 257.5061249663122,
+      "firstRowsMs" : 226.801416662056,
+      "openLongNoteMs" : 90.183208347298205,
+      "processPeakBytes" : 686014464
+    },
+    {
+      "completeLibraryMs" : 2879.3240417144261,
+      "firstCompleteSearchIncludingDebounceMs" : 257.51829164801165,
+      "firstRowsMs" : 226.08379169832915,
+      "openLongNoteMs" : 88.090958364773542,
+      "processPeakBytes" : 691716096
+    },
+    {
+      "completeLibraryMs" : 2870.2785833156668,
+      "firstCompleteSearchIncludingDebounceMs" : 255.50174998352304,
+      "firstRowsMs" : 223.72662497218698,
+      "openLongNoteMs" : 90.876458329148591,
+      "processPeakBytes" : 697319424
+    }
+  ]
+}

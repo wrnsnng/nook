@@ -6,10 +6,11 @@ import Testing
 /// Opt-in, optimized measurements. Run each mode in a separate test
 /// process so process high-water memory is not inherited from the other loader.
 struct LibraryLoadingBenchmarkTests {
+    @MainActor
     @Test(.enabled(if: ProcessInfo.processInfo.environment["NOOK_LIBRARY_BENCHMARK"] != nil))
     func compareDiscoveryOpeningAndCompleteSearch() async throws {
         let mode = try #require(ProcessInfo.processInfo.environment["NOOK_LIBRARY_BENCHMARK"])
-        #expect(["baseline", "metadata"].contains(mode))
+        #expect(["baseline", "metadata", "integrated"].contains(mode))
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("Nook-Library-Benchmark-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -68,7 +69,36 @@ struct LibraryLoadingBenchmarkTests {
         let fixturePeak = peakBytes()
         for _ in 0..<3 {
             var row: [String: Double] = [:]
-            if mode == "baseline" {
+            if mode == "integrated" {
+                let start = ProcessInfo.processInfo.systemUptime
+                let store = MarkdownStore(directoryURL: root)
+                let deadline = start + 60
+                while store.discovery == nil && store.isLoading && ProcessInfo.processInfo.systemUptime < deadline {
+                    try await Task.sleep(for: .milliseconds(1))
+                }
+                let catalog = try #require(store.discovery)
+                #expect(catalog.entries.count == 1_001 && catalog.issues.isEmpty)
+                #expect(store.notes.isEmpty)
+                row["firstRowsMs"] = (ProcessInfo.processInfo.systemUptime - start) * 1_000
+                let entry = try #require(catalog.entries.first { $0.metadata.id == longNote.id })
+                let openStart = ProcessInfo.processInfo.systemUptime
+                let opened = try await Task.detached { try autoreleasepool { try LibraryDiscovery.load(entry) } }.value
+                #expect(opened.transcript.count == 10_000)
+                row["openLongNoteMs"] = (ProcessInfo.processInfo.systemUptime - openStart) * 1_000
+                while store.isLoading && ProcessInfo.processInfo.systemUptime < deadline {
+                    try await Task.sleep(for: .milliseconds(1))
+                }
+                #expect(!store.isLoading && store.notes.count == 1_001)
+                row["completeLibraryMs"] = (ProcessInfo.processInfo.systemUptime - start) * 1_000
+                let search = LibrarySearchController()
+                let searchStart = ProcessInfo.processInfo.systemUptime
+                search.update(query: "uniquetranscriptneedle", notes: store.notes)
+                while search.isSearching && ProcessInfo.processInfo.systemUptime < deadline {
+                    try await Task.sleep(for: .milliseconds(1))
+                }
+                #expect(search.matchingIDs?.count == 1_000)
+                row["firstCompleteSearchIncludingDebounceMs"] = (ProcessInfo.processInfo.systemUptime - searchStart) * 1_000
+            } else if mode == "baseline" {
                 let cache = NoteDecodeCache()
                 let (loaded, cold) = try measure { try MarkdownStore.loadNotes(in: root, cache: cache).get() }
                 #expect(loaded.notes.count == 1_001 && loaded.issues.isEmpty)

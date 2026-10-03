@@ -58,6 +58,11 @@ final class MarkdownStore: ObservableObject {
     /// read from disk rather than remembered. See `LibraryFolders`.
     @Published private(set) var folders: [String] = []
     @Published private(set) var isLoading = false
+    /// Read-only rows may arrive before complete models. They never enter notes.
+    @Published private(set) var discovery: LibraryDiscovery.Catalog?
+    private var reloadTask: Task<Void, Never>?
+    typealias DiscoveryLoader = @Sendable (URL) throws -> LibraryDiscovery.Catalog
+    private let discoveryLoader: DiscoveryLoader?
     /// A folder can change away and back while an operation awaits a model.
     /// Its URL alone cannot authorize that old operation when it returns.
     /// Ordinary reloads and saves deliberately do not advance this identity.
@@ -65,6 +70,10 @@ final class MarkdownStore: ObservableObject {
     @Published var storageURL: URL {
         willSet {
             if newValue.standardizedFileURL != storageURL.standardizedFileURL {
+                reloadTask?.cancel()
+                reloadGeneration &+= 1
+                discovery = nil
+                isLoading = false
                 storageGeneration &+= 1
                 summarySessions.removeAll()
                 onStorageDirectoryWillChange?()
@@ -96,16 +105,20 @@ final class MarkdownStore: ObservableObject {
 
     init(
         fileManager: FileManager = .default,
-        noteLoader: @escaping NoteLoader = MarkdownStore.loadNotes,
+        directoryURL: URL? = nil,
+        noteLoader: NoteLoader? = nil,
+        discoveryLoader: DiscoveryLoader? = nil,
         readCommittedBytes: @escaping @MainActor (URL) throws -> Data = { try Data(contentsOf: $0) },
         beforeWriteCommit: @escaping @MainActor (URL) throws -> Void = { _ in }
     ) {
         self.fileManager = fileManager
-        self.noteLoader = noteLoader
+        self.noteLoader = noteLoader ?? MarkdownStore.loadNotes
+        // Injected loaders keep their existing single-publication contract.
+        self.discoveryLoader = discoveryLoader ?? (noteLoader == nil ? LibraryDiscovery.scan : nil)
         self.beforeWriteCommit = beforeWriteCommit
         self.readCommittedBytes = readCommittedBytes
         let configured = UserDefaults.standard.string(forKey: "storageDirectory")
-        self.storageURL = configured.map(URL.init(fileURLWithPath:))
+        self.storageURL = directoryURL ?? configured.map(URL.init(fileURLWithPath:))
             ?? fileManager.homeDirectoryForCurrentUser
                 .appendingPathComponent("Documents", isDirectory: true)
                 .appendingPathComponent("Nook", isDirectory: true)
@@ -115,35 +128,53 @@ final class MarkdownStore: ObservableObject {
 
     func reload() {
         ensureDirectory()
+        reloadTask?.cancel()
         reloadGeneration += 1
+        discovery = nil
         let generation = reloadGeneration
         let directory = storageURL
         let noteLoader = noteLoader
         let cache = decodeCache
         isLoading = true
 
-        Task {
-            let (result, folderNames) = await Task.detached(priority: .userInitiated) {
+        let discover = notes.isEmpty ? discoveryLoader : nil
+        reloadTask = Task { [weak self] in
+            if let discover {
+                let worker = Task.detached(priority: .userInitiated) { try discover(directory) }
+                let catalog = await withTaskCancellationHandler {
+                    try? await worker.value
+                } onCancel: { worker.cancel() }
+                guard !Task.isCancelled, let self,
+                      generation == self.reloadGeneration, directory == self.storageURL else { return }
+                self.discovery = catalog
+            }
+            guard !Task.isCancelled else { return }
+            let worker = Task.detached(priority: .userInitiated) {
                 (noteLoader(directory, cache), LibraryFolders.folderNames(in: directory))
-            }.value
+            }
+            let (result, folderNames) = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: { worker.cancel() }
+            guard !Task.isCancelled, let self else { return }
 
-            guard generation == reloadGeneration, directory == storageURL else { return }
+            guard generation == self.reloadGeneration, directory == self.storageURL else { return }
             // Notes land before the loading flag clears. Observers that wait
             // for the end of loading must never see an empty library that is
             // merely mid-publish.
             switch result {
             case .success(let payload):
-                folders = folderNames
-                notes = payload.notes
-                loadIssues = payload.issues
-                lastError = payload.issues.isEmpty
+                self.folders = folderNames
+                self.notes = payload.notes
+                self.loadIssues = payload.issues
+                self.lastError = payload.issues.isEmpty
                     ? nil
                     : "\(payload.issues.count) Markdown file\(payload.issues.count == 1 ? "" : "s") couldn’t be loaded."
             case .failure(let error):
-                lastError = error.localizedDescription
-                loadIssues = []
+                self.lastError = error.localizedDescription
+                self.loadIssues = []
             }
-            isLoading = false
+            self.isLoading = false
+            self.discovery = nil
         }
     }
 
@@ -1116,6 +1147,8 @@ final class MarkdownStore: ObservableObject {
     /// Advancing the generation prevents that older snapshot from replacing the
     /// note that was just saved, and clears a spinner whose task is now stale.
     private func invalidateReloadSnapshot() {
+        reloadTask?.cancel()
+        discovery = nil
         reloadGeneration += 1
         isLoading = false
     }
@@ -1252,6 +1285,7 @@ final class MarkdownStore: ObservableObject {
             }
 
             for url in urls {
+                try Task.checkCancellation()
                 let modified = try? url.resourceValues(forKeys: [
                     .contentModificationDateKey
                 ]).contentModificationDate
