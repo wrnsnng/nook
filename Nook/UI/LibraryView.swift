@@ -1150,6 +1150,7 @@ struct LibraryView: View {
             } label: {
                 Label("Create Weekly Digest", systemImage: "calendar.badge.clock")
             }
+            .disabled(store.isLoading)
         } label: {
             Label("Library", systemImage: "ellipsis.circle")
         }
@@ -2301,6 +2302,9 @@ struct LibraryView: View {
     }
 
     private func createNote(from template: NoteTemplate) {
+        // A write would invalidate the cold scan before the other notes have
+        // arrived, leaving only the new note in the published snapshot.
+        guard libraryIsReadyForSheet() else { return }
         do {
             // A note made while a folder is on screen belongs in it, the
             // way a new note lands in the selected folder in Notes.
@@ -2320,6 +2324,7 @@ struct LibraryView: View {
     /// Clicking again for the same week updates that digest in place rather
     /// than leaving a new, near-duplicate file behind each time.
     private func createWeeklyDigest() {
+        guard libraryIsReadyForSheet() else { return }
         let now = Date()
         let notes = store.notes
         let libraryURL = store.storageURL.standardizedFileURL
