@@ -41,6 +41,7 @@ final class LibrarySearchController: ObservableObject {
     @Published private(set) var isSearching = false
 
     private var searchTask: Task<Void, Never>?
+    private var preparationTask: Task<Void, Never>?
     private let documentCache = SearchDocumentCache()
     private let matcher: @Sendable (String, [MeetingNote], [LibraryNoteIdentity: String]) async -> Set<LibraryNoteIdentity>
 
@@ -54,6 +55,7 @@ final class LibrarySearchController: ObservableObject {
 
     deinit {
         searchTask?.cancel()
+        preparationTask?.cancel()
     }
 
     func update(query: String, notes: [MeetingNote]) {
@@ -61,6 +63,10 @@ final class LibrarySearchController: ObservableObject {
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !trimmedQuery.isEmpty else {
+            preparationTask?.cancel()
+            preparationTask = Task { [documentCache] in
+                _ = await documentCache.documents(for: notes)
+            }
             // Cancel first even when this is already the unfiltered state.
             // An unchanged empty query must not rebuild the Library on save.
             if matchingIDs != nil { matchingIDs = nil }
@@ -68,6 +74,7 @@ final class LibrarySearchController: ObservableObject {
             return
         }
 
+        preparationTask?.cancel()
         matchingIDs = []
         isSearching = true
         searchTask = Task { [weak self, documentCache, matcher] in

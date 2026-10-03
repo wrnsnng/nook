@@ -584,7 +584,7 @@ struct LibraryView: View {
     /// The window itself: panes, palette, toolbar, and the notice banner.
     private var libraryChrome: some View {
         NavigationSplitView {
-            sidebar
+            browsingSidebar
                 .navigationSplitViewColumnWidth(min: 260, ideal: 304, max: 380)
                 .toolbar {
                     // As in Notes: what acts on the whole library sits over
@@ -652,6 +652,18 @@ struct LibraryView: View {
                 .background(Color(nsColor: .windowBackgroundColor))
                 .accessibilityElement(children: .contain)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var browsingSidebar: some View {
+        if store.isLoading, store.notes.isEmpty, let catalog = store.discovery,
+           !catalog.entries.isEmpty {
+            LibraryDiscoverySidebar(catalog: catalog, selection: Binding(
+                get: { selection }, set: { requestSelection($0) }
+            ))
+        } else {
+            sidebar
         }
     }
 
@@ -770,7 +782,9 @@ struct LibraryView: View {
         }
         .onChange(of: searchController.matchingIDs) { _, _ in
             refreshLibraryCacheIfNeeded()
-            synchronizeSelectionWithSearch()
+            if !store.isLoading || !store.notes.isEmpty {
+                synchronizeSelectionWithSearch()
+            }
         }
         .onChange(of: currentPhase) { _, phase in
             withAnimation(reduceMotion ? nil : .smooth(duration: 0.34)) {
@@ -1661,6 +1675,11 @@ struct LibraryView: View {
                 )
                     .id(selectedNote.libraryIdentity)
             }
+        } else if store.isLoading, let catalog = store.discovery,
+                  case .note(let identity) = selection,
+                  let entry = catalog.entries.first(where: { $0.identity == identity }) {
+            LibraryDiscoveryPreview(entry: entry, retry: { store.reload() })
+                .id(entry.identity)
         } else if store.isLoading {
             libraryPlaceholder
         } else if case .copies(let id) = selection {
@@ -1708,7 +1727,7 @@ struct LibraryView: View {
         case .loading:
             VStack(spacing: 12) {
                 ProgressView("Loading notes…")
-                Text("Reading your local notes folder.")
+                Text(store.discovery == nil ? "Reading your local notes folder." : "Choose a note to read while the rest of your library loads.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }

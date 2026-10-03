@@ -1,4 +1,109 @@
-# Metadata-first library loading spike
+# Metadata-first library loading
+
+Public proposal: [issue #45](https://github.com/wrnsnng/nook/issues/45).
+Implementation: [PR #46](https://github.com/wrnsnng/nook/pull/46), based on the
+editor focus fix in [PR #47](https://github.com/wrnsnng/nook/pull/47).
+This is proposed code, not a released feature.
+
+## Integrated behavior, October 3, 2026
+
+A cold `MarkdownStore` first discovers separate metadata entries, then loads
+complete notes in the background. The library exposes those entries in a native
+sidebar with loading/count copy. Selecting one reads and validates its exact
+revision and displays a complete, read-only preview. Once the full snapshot
+arrives, the normal sidebar/editor takes over and preserves the selected file
+identity. Search and cross-library actions retain their existing loading guard.
+
+`store.notes` contains only complete models. Summary sessions, saved drafts,
+open actions, prep, digests, folder suggestions, palette search, multi-selection
+and all mutation workflows retain their full-content contract. Existing note
+snapshots skip the extra discovery scan on warm reloads. The search controller
+prepares revision-keyed documents off the main actor after full publication;
+queries still publish complete results, never a partial catalog.
+
+Discovery reuses the codec's metadata semantics, reads and hashes all file
+bytes and distinguishes copies by path plus UUID. Selected-note reads refuse
+body-only edits with unchanged size/date, missing sources and identity changes.
+Cancellation and reload generations reject late results after reload, save or
+folder changes, including away/back. Preview tasks cancel when selection changes.
+The early sidebar uses the same unsaved-draft navigation guard as the normal
+sidebar. Failed discovery falls through to the existing full-loader error path;
+a failed preview provides an explicit retry.
+
+This is intentionally bounded: discovery adds work before the existing complete
+loader. It does not replace full models with a persistent index or reduce their
+steady-state memory. There are no file-format, network, model, privacy or
+credential changes. Native input/accessibility and minimum-hardware acceptance
+remain required before release.
+
+## Integrated measurements
+
+Apple M4 Pro Mac mini, macOS 26.6.2 (25G83), Xcode 27.0 (27A266a), optimized Debug
+(`SWIFT_OPTIMIZATION_LEVEL=-O`, retaining existing DEBUG test hooks). Three fresh
+stores load the same 1,001-note / 130,000-segment / 31,611,951-byte synthetic fixture
+as the historical comparison below. The fixture digest is identical. No other
+build or benchmark ran during this final measurement. OS caches were not flushed.
+
+| Production-store operation | Median of three trials |
+| --- | ---: |
+| Metadata published for first rows | 226 ms |
+| Open the 10,000-segment note while full loading continues | 90 ms |
+| Complete library published, measured from startup | 2,879 ms |
+| First complete transcript search after publication, including 160 ms debounce | 258 ms |
+
+[All three raw trials](library-loading-integrated-results.json) include process
+high-water RSS, which peaked at about 665 MiB including fixture generation and
+the test host. Unlike the streaming prototype, this integration retains all
+complete notes. No production memory reduction is claimed. The earlier full
+loader median was 2,679 ms: early browsing arrives roughly 2.45 seconds sooner,
+while complete loading takes roughly 200 ms longer. These are publication
+measurements, not a measured time to first interactive rendered frame. Search
+checks all 1,000 transcript-only matches, including unopened notes.
+
+Reproduce with the ordinary model setup and the benchmark command below, using
+`TEST_RUNNER_NOOK_LIBRARY_BENCHMARK=integrated` instead of `baseline` or `metadata`.
+The benchmark writes `.build/library-benchmark-integrated.json` and is disabled
+in normal test runs.
+
+## Integrated verification
+
+The final full optimized Debug suite passed 1,387 declarations / 1,848 cases,
+zero failures and zero runtime warnings. One opt-in benchmark was skipped; its
+integrated mode then passed separately. Results are
+`Test-Nook-2026.10.03_20-32-50-+1000.xcresult` and
+`Test-Nook-2026.10.03_20-33-57-+1000.xcresult` under `.build/LibrarySpikeTests/Logs/Test`.
+The production discovery implementation is also used by the original spike's
+correctness suite, avoiding a separate scanner that could diverge.
+
+New integration tests verify separate early/full publication, preview contents,
+complete search of unopened content, folder away/back rejection, save-vs-load
+ordering, same-size/date body edits, missing sources, copied IDs and unreadable
+files. Existing draft, identity, search, mutation and hosted-editor suites pass.
+The editor warning fix is isolated in PR #47.
+
+`NookSnapshot` has `library-loading-light` and `library-loading-dark` modes that
+hold only the synthetic full scan for ten seconds. Real window captures were
+inspected in both appearances before and after publication: all sections are
+visible, progress copy wraps, and the selected note survives the handoff. That
+inspection caught and fixed colliding section-row IDs. This is visual synthetic
+acceptance, not keyboard/VoiceOver, physical IME or minimum-hardware acceptance.
+Offscreen snapshots do not reliably render native sidebar materials; use the
+existing `NOOK_SNAPSHOT_WINDOWED=1` mode for this check.
+
+XcodeGen 2.46.0 includes the new app, snapshot and test sources; repeated
+generation is stable. No signed running app, permissions or personal notes were
+changed. All implementation work is in an isolated worktree.
+
+## Historical spike evidence
+
+The following is the original experiment and recommendation, before UI
+integration. Its statements that the UI is unchanged describe that earlier
+revision, not the integrated behavior above. The original raw comparison is
+preserved to keep the benchmark provenance reviewable.
+
+<details>
+<summary>Original read-only spike and measurements</summary>
+
 
 Public proposal: [issue #45](https://github.com/wrnsnng/nook/issues/45).
 Baseline: main at `04dec1d`, after the one-level folder and speaker-label work.
@@ -171,3 +276,5 @@ XcodeGen 2.46.0 includes all three new test sources. Repeated generation produce
 identical project files. No signed running app, permission settings, personal
 notes or recordings were changed. The original dirty checkout was left intact;
 all work was done in the separate `codex/library-loading-spike` worktree.
+
+</details>
