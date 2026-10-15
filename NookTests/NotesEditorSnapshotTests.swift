@@ -592,6 +592,27 @@ struct NotesEditorSnapshotTests {
     }
 
     @Test
+    func focusNotificationsPublishAfterNativeUpdatesAndCoalesceToTheCurrentResponder() async throws {
+        let fixture = try await hostedFixture(containing: "Synthetic focus note")
+        defer { fixture.window.close() }
+        fixture.editor.insertText("X", replacementRange: NSRange(location: 0, length: 0))
+        try await settleLayout(in: fixture.host) { fixture.model.isFocused }
+        try #require(fixture.window.makeFirstResponder(nil))
+        // AppKit sends this notification synchronously, including when a
+        // representable update disables its text view. Publishing a binding
+        // here reenters SwiftUI while it is already updating the view.
+        #expect(fixture.model.isFocused)
+        try await settleLayout(in: fixture.host) { !fixture.model.isFocused }
+        try #require(fixture.window.makeFirstResponder(fixture.editor))
+        fixture.editor.insertText("Y", replacementRange: NSRange(location: 0, length: 0))
+        try #require(fixture.window.makeFirstResponder(nil))
+        try #require(fixture.window.makeFirstResponder(fixture.editor))
+        try await settleLayout(in: fixture.host) { fixture.model.isFocused }
+        #expect(fixture.window.firstResponder === fixture.editor)
+        #expect(fixture.model.text == "YXSynthetic focus note")
+    }
+
+    @Test
     func reviewedVoiceReplacementIsOneExactNativeUndoableEdit() async throws {
         let original = "Baseline Cafe\u{0301} 👩🏽‍💻\r\nעברית scratch that"
         let replacement = "Baseline Cafe\u{0301} 👩🏽‍💻"

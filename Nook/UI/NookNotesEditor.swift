@@ -312,8 +312,8 @@ private struct PlainNotesTextView: NSViewRepresentable {
             height: CGFloat.greatestFiniteMagnitude
         )
         textView.setAccessibilityLabel(accessibilityLabel)
-        textView.onFirstResponderChange = { [weak coordinator = context.coordinator] focused in
-            coordinator?.parent.onKeyboardChange(focused)
+        textView.onFirstResponderChange = { [weak coordinator = context.coordinator] _ in
+            coordinator?.scheduleFocusPublication()
         }
         scrollView.documentView = textView
         context.coordinator.textView = textView
@@ -366,6 +366,14 @@ private struct PlainNotesTextView: NSViewRepresentable {
         )
     }
 
+    static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
+        coordinator.isDismantled = true
+        if let textView = scrollView.documentView as? KeyActivatingTextView {
+            textView.onFirstResponderChange = nil
+            textView.delegate = nil
+        }
+    }
+
     private func configure(_ textView: NSTextView) {
         let font = NSFont.systemFont(ofSize: fontSize)
         let paragraph = NSMutableParagraphStyle()
@@ -402,6 +410,32 @@ private struct PlainNotesTextView: NSViewRepresentable {
         var appliedLineSpacing: CGFloat?
         /// The focus token already honoured, so each request fires once.
         var appliedFocusToken = 0
+        var isDismantled = false
+        private var focusPublicationScheduled = false
+        private var publishedKeyboardFocus = false
+
+        func scheduleFocusPublication() {
+            guard !isDismantled, !focusPublicationScheduled else { return }
+            focusPublicationScheduled = true
+            // AppKit may resign focus inside updateNSView (for example when
+            // disabling an editor). Never write a SwiftUI binding from that
+            // callback. One queued publication reads the final responder, so
+            // a resign/become burst cannot publish an obsolete blur later.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isDismantled else { return }
+                self.focusPublicationScheduled = false
+                let focused = self.textView.map {
+                    $0.isEditable && $0.window?.firstResponder === $0
+                } ?? false
+                if self.parent.isFocused?.wrappedValue != focused {
+                    self.parent.isFocused?.wrappedValue = focused
+                }
+                if self.publishedKeyboardFocus != focused {
+                    self.publishedKeyboardFocus = focused
+                    self.parent.onKeyboardChange(focused)
+                }
+            }
+        }
 
         init(parent: PlainNotesTextView) {
             self.parent = parent
@@ -413,11 +447,11 @@ private struct PlainNotesTextView: NSViewRepresentable {
         }
 
         func textDidBeginEditing(_ notification: Notification) {
-            parent.isFocused?.wrappedValue = true
+            scheduleFocusPublication()
         }
 
         func textDidEndEditing(_ notification: Notification) {
-            parent.isFocused?.wrappedValue = false
+            scheduleFocusPublication()
         }
     }
 }
