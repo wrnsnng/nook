@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         installApplicationIcon()
         NSApp.setActivationPolicy(.accessory)
+        AppModel.shared.dockPresence.start()
 
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--audit-dark") {

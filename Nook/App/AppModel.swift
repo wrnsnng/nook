@@ -70,7 +70,9 @@ final class AppModel: ObservableObject {
     private var openWelcomeAction: (@MainActor () -> Void)?
     private var openLiveNotesAction: (@MainActor () -> Void)?
     private var closeLiveNotesAction: (@MainActor () -> Void)?
-    private var visibleWindowRoles: Set<NookWindowRole> = []
+    /// Puts Nook in the Dock and ⌘-Tab exactly while one of its windows is
+    /// open, whichever window that is.
+    let dockPresence = DockPresenceController()
     private weak var liveNotesWindow: NSWindow?
     private var launchPresentationGate = LaunchPresentationGate()
     private var cancellables: Set<AnyCancellable> = []
@@ -435,7 +437,6 @@ final class AppModel: ObservableObject {
     }
 
     func windowDidOpen(_ role: NookWindowRole, window: NSWindow) {
-        visibleWindowRoles.insert(role)
         if role == .liveNotes {
             liveNotesWindow = window
             meeting.setLiveNotesDetached(true)
@@ -444,13 +445,12 @@ final class AppModel: ObservableObject {
     }
 
     func windowDidClose(_ role: NookWindowRole) {
-        visibleWindowRoles.remove(role)
         if role == .liveNotes {
             liveNotesWindow = nil
             meeting.setLiveNotesDetached(false)
         }
-        guard visibleWindowRoles.isEmpty else { return }
-        NSApp.setActivationPolicy(.accessory)
+        // Returning to the menu bar is `dockPresence`'s decision, made from
+        // the windows actually open rather than from the roles seen here.
     }
 
     /// Closes the floating notes window and shows My notes in the notch

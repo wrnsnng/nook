@@ -237,6 +237,8 @@ final class MeetingCoordinator: ObservableObject {
     /// opening those resources during the same turn of the main actor.
     private let prepareForAudioCapture: (@MainActor () async throws -> Void)?
     private let capture = CaptureService()
+    /// Who the meeting app showed during the recording, for naming voices.
+    private let rosterRecorder = MeetingRosterRecorder()
     /// Global flag hotkey, registered only while a recording is running.
     private let momentHotKeys = MomentHotKeyController(
         shortcut: ShortcutStore.shared.binding(for: .flagMoment)
@@ -301,6 +303,8 @@ final class MeetingCoordinator: ObservableObject {
     /// sees, such as a Slack video that plays and stops mid-meeting.
     private var recordingEndsWithDetection = false
     private var accumulatedElapsed: TimeInterval = 0
+    /// What the meeting app showed, held from stop until the note is saved.
+    private var recordedRoster = MeetingRoster()
     private var activeElapsedStartedAt: Date?
     private var processingCancellationRequested = false
     /// Once an appended sitting is durable, cancelling would have to roll the
@@ -470,6 +474,7 @@ final class MeetingCoordinator: ObservableObject {
         momentNoticeTask?.cancel()
         momentHotKeys.stop()
         noteHotKeys.stop()
+        recordedRoster = rosterRecorder.stop()
         onRecordingStopped?()
         topPanelHidden = false
         processingCancellationRequested = false
@@ -1023,6 +1028,12 @@ final class MeetingCoordinator: ObservableObject {
                 momentAcknowledgedAt = nil
                 startElapsedClock()
                 startAudioMeter()
+                rosterRecorder.start { [weak self] in
+                    guard let self, let startedAt = self.activeElapsedStartedAt else { return nil }
+                    return Self.currentRecordingOffset(
+                        accumulated: self.accumulatedElapsed, startedAt: startedAt, now: Date()
+                    )
+                }
                 momentHotKeys.start()
                 noteHotKeys.start()
                 startLiveCaptions()
@@ -1143,6 +1154,23 @@ final class MeetingCoordinator: ObservableObject {
         currentGeneration: Int
     ) -> Bool {
         generation == currentGeneration
+    }
+
+    /// Names worth offering for a note's speakers, the user's own excluded.
+    static func participantNames(
+        roster: MeetingRoster,
+        invitees: [String],
+        userNames: Set<String> = []
+    ) -> [String] {
+        let user = Set(userNames.union([roster.selfName].compactMap { $0 }).map { $0.lowercased() })
+        var names: [String] = []
+        for name in (roster.participants + invitees).compactMap(SpeakerNames.sanitized) {
+            guard !user.contains(name.lowercased()),
+                  !names.contains(where: { $0.lowercased() == name.lowercased() })
+            else { continue }
+            names.append(name)
+        }
+        return names
     }
 
     /// Builds the note that must be useful before the on-device model gets a
@@ -1355,6 +1383,11 @@ final class MeetingCoordinator: ObservableObject {
                     transcript, recordingURLs: recordingURLs
                 )
                 try Task.checkCancellation()
+                // Names from the meeting app, only where its active-speaker
+                // highlight clearly matches one separated voice.
+                let named = SpeakerNameMatching.named(transcript, roster: recordedRoster)
+                if named != transcript { NookEventLog.write(.speakersNamedFromZoom) }
+                transcript = named
             }
 
             // A recording started from an existing note joins that note
@@ -1377,13 +1410,24 @@ final class MeetingCoordinator: ObservableObject {
             }
 
             phase = .processing(.saving)
-            let scaffold = Self.transcriptFirstScaffold(
+            let endedAt = Date()
+            var scaffold = Self.transcriptFirstScaffold(
                 for: draft,
                 transcript: transcript,
                 personalNotes: personalNotes,
                 moments: liveMoments,
-                endedAt: Date()
+                endedAt: endedAt
             )
+            // Offered when the user names a speaker: the meeting app's list
+            // first, since those people were there, then the invitees.
+            let invitees = await calendarContext?.attendeeNames(
+                forMeetingFrom: draft.startedAt, to: endedAt
+            ) ?? []
+            scaffold.participants = Self.participantNames(
+                roster: recordedRoster, invitees: invitees,
+                userNames: SpeakerNameMatching.likelyUserNames(in: transcript, roster: recordedRoster)
+            )
+            recordedRoster = MeetingRoster()
             let savedScaffold = try store.save(scaffold)
             transcriptFirstScaffold = savedScaffold
             try Task.checkCancellation()
@@ -2424,6 +2468,8 @@ final class MeetingCoordinator: ObservableObject {
         invalidateSummaryProgress()
         elapsedTask?.cancel()
         meterTask?.cancel()
+        rosterRecorder.discard()
+        recordedRoster = MeetingRoster()
 
         var files = additionalURLs
         if capture.isCapturing,

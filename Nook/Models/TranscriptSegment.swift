@@ -13,7 +13,7 @@ struct TranscriptSegment: Codable, Hashable, Identifiable, Sendable {
     let text: String
     let source: Source
     /// Who said a meeting-side passage, once speakers are separated: a
-    /// name the user chose, or "Speaker 2" until they do. Nil for the
+    /// name the user chose, or "Unclear · voice 2" until they do. Nil for the
     /// user's own voice and for notes that were never separated.
     let speaker: String?
 

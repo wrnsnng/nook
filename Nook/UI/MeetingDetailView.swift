@@ -2257,14 +2257,37 @@ struct MeetingDetailView: View {
                 Text("Speakers")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                let suggestions = SpeakerNameMatching.suggestions(
+                    participants: note.participants, transcript: note.transcript
+                )
                 ForEach(speakers, id: \.self) { speaker in
-                    Button {
-                        beginNamingSpeaker(speaker)
-                    } label: {
-                        Label(speaker, systemImage: "person.fill")
+                    // With names from the meeting app or calendar, the chip
+                    // offers them first; typing a name is always one step on.
+                    if suggestions.isEmpty {
+                        Button {
+                            beginNamingSpeaker(speaker)
+                        } label: {
+                            Label(speaker, systemImage: "person.fill")
+                        }
+                        .controlSize(.small)
+                        .help(SpeakerNames.isPlaceholder(speaker) ? "Name this speaker" : "Rename this speaker")
+                    } else {
+                        Menu {
+                            Section("In this meeting") {
+                                ForEach(suggestions, id: \.self) { name in
+                                    Button(name) { saveSpeakerName(speaker, as: name) }
+                                }
+                            }
+                            Divider()
+                            Button("Other Name…") { beginNamingSpeaker(speaker) }
+                        } label: {
+                            Label(speaker, systemImage: "person.fill")
+                        }
+                        .menuStyle(.button)
+                        .fixedSize()
+                        .controlSize(.small)
+                        .help(SpeakerNames.isPlaceholder(speaker) ? "Name this speaker" : "Rename this speaker")
                     }
-                    .controlSize(.small)
-                    .help(SpeakerNames.isPlaceholder(speaker) ? "Name this speaker" : "Rename this speaker")
                 }
                 Spacer(minLength: 0)
             }
@@ -2283,13 +2306,17 @@ struct MeetingDetailView: View {
     private func saveSpeakerName() {
         guard let speaker = namingSpeaker else { return }
         namingSpeaker = nil
+        saveSpeakerName(speaker, as: speakerNameDraft)
+    }
+
+    private func saveSpeakerName(_ speaker: String, as name: String) {
         // Same rule as renaming the title: never rewrite the file under an
         // unsaved Markdown draft.
         guard canRenameTitle else {
             showCopyNotice(DetailRenamePolicy.markdownDraftBlockedMessage, severity: .info)
             return
         }
-        switch SpeakerNames.rename(speaker, to: speakerNameDraft, in: note.transcript) {
+        switch SpeakerNames.rename(speaker, to: name, in: note.transcript) {
         case .invalidName:
             showCopyNotice("Choose a name other than You or Meeting", severity: .failure)
         case .nameInUse:
