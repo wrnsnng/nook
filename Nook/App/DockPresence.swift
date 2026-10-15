@@ -32,6 +32,15 @@ enum DockPresence {
                 && (window.isVisible || window.isMiniaturized)
         }
     }
+
+    /// Whether to drop to the menu bar. While Nook is hidden (⌘-H) every
+    /// window reports itself invisible, so a window closing then, such as the
+    /// live notes window when a meeting ends, would otherwise strand the
+    /// hidden library outside the Dock and ⌘-Tab. The decision waits until
+    /// Nook is shown again.
+    static func leavesDock(wantsDock: Bool, appIsHidden: Bool) -> Bool {
+        !wantsDock && !appIsHidden
+    }
 }
 
 extension DockPresence.Window {
@@ -74,6 +83,12 @@ final class DockPresenceController {
                 }
             })
         }
+        // Closes while hidden were deferred; settle them once Nook is shown.
+        observers.append(center.addObserver(
+            forName: NSApplication.didUnhideNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reconcile() }
+        })
         observers.append(center.addObserver(
             forName: NSWindow.willCloseNotification, object: nil, queue: .main
         ) { [weak self] note in
@@ -95,7 +110,8 @@ final class DockPresenceController {
         switch (wantsDock, NSApp.activationPolicy()) {
         case (true, .accessory), (true, .prohibited):
             NSApp.setActivationPolicy(.regular)
-        case (false, .regular):
+        case (false, .regular)
+            where DockPresence.leavesDock(wantsDock: wantsDock, appIsHidden: NSApp.isHidden):
             NSApp.setActivationPolicy(.accessory)
         default:
             break
