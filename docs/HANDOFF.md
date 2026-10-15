@@ -6,7 +6,25 @@ contribute.
 
 ## Current release
 
-Nook 1.23.0 (build 42) is the current public release, published September 27,
+Nook 1.24.0 (build 44) is the current public release, published October 15,
+2026: Zoom speaker names (PR #51), early library browsing while a large
+library loads (PR #46) and Dock presence derived from open windows (PR #52).
+It was built locally on Xcode 27.0 (27A266a) with
+`Scripts/build-distribution-app.sh` from a clean checkout of
+[fb95ea1](https://github.com/wrnsnng/nook/commit/fb95ea16b2bac2c16b52571bfd338bf535f27e35)
+(release PR #55), the same way as 1.22.1, and released at the maintainer's
+direction **without** the hands-on acceptance under
+[Manual release acceptance](#manual-release-acceptance). Developer ID signed
+(team V2KY59725J), notarized, stapled and Gatekeeper accepted; the archive,
+all five deltas and the feed were verified against their EdDSA signatures and
+byte-compared after upload. The previous appcast is retained privately for
+rollback. The feed was rebuilt with every published archive (PR #54), which
+restores the 1.21.0 to 1.23.0 entries that 1.23.1's feed had dropped.
+
+Before it, 1.23.1 (build 43, October 14): a manual recording no longer stops
+when a detected meeting ends, and release zips carry no Finder metadata.
+
+Earlier, 1.23.0 (build 42) was published September 27,
 2026: folder suggestions and automatic filing of recurring meetings, plus a UX
 sweep, built locally on Xcode 27 from
 [04dec1d](https://github.com/wrnsnng/nook/commit/04dec1dd3656426b577cb765048d757a8907d081)
@@ -42,7 +60,9 @@ hands-on acceptance described under
 - The test action passes a temporary `storageDirectory` to the test host.
   Without it, a fresh local build scanned `~/Documents/Nook`, waited on the
   Documents privacy prompt and stalled the whole run.
-- Releases: [v1.23.0](https://github.com/wrnsnng/nook-releases/releases/tag/v1.23.0),
+- Releases: [v1.24.0](https://github.com/wrnsnng/nook-releases/releases/tag/v1.24.0),
+  [v1.23.1](https://github.com/wrnsnng/nook-releases/releases/tag/v1.23.1),
+  [v1.23.0](https://github.com/wrnsnng/nook-releases/releases/tag/v1.23.0),
   [v1.22.2](https://github.com/wrnsnng/nook-releases/releases/tag/v1.22.2),
   [v1.22.1](https://github.com/wrnsnng/nook-releases/releases/tag/v1.22.1),
   [v1.22.0](https://github.com/wrnsnng/nook-releases/releases/tag/v1.22.0).
@@ -57,29 +77,11 @@ feature PRs #22, #23 and #25 through #27 are no longer pending implementation.
 Linear COM-279 and COM-285 through COM-289 now record delivery as Done. That
 status does not certify the physical acceptance listed below.
 
-Current proposed work, not merged or released:
+Since then, PRs #46, #47 and #48 were merged on October 15 and #46 shipped in
+1.24.0. #47 (editor focus publication) and #48 (process-death draft recovery
+tests) carry no user-visible change. Their physical acceptance remains open
+in issues #15 / COM-291 and #14 / COM-290; issue #45 remains open.
 
-- [PR #47](https://github.com/wrnsnng/nook/pull/47): defer and coalesce native
-  editor focus publication after SwiftUI updates. A hosted regression failed
-  before the fix; all 21 editor tests pass afterward, with recorded warnings
-  reduced from four to zero. Physical IME, dictation, VoiceOver and minimum-
-  hardware performance remain open in issue #15 / COM-291.
-- [PR #46](https://github.com/wrnsnng/nook/pull/46), based on #47: integrate
-  metadata discovery and read-only previews into the library while retaining
-  complete models for all editing, search and cross-library consumers. Folder
-  generations and exact revisions reject stale discovery/preview results.
-  Measurements, tradeoffs and acceptance limits live in the PR and its
-  `docs/proposals/LIBRARY_LOADING_SPIKE.md`; prototype memory numbers are not
-  production memory claims. Issue #45 remains open.
-- [PR #48](https://github.com/wrnsnng/nook/pull/48), based on #47: kill and restart
-  synthetic editor processes across all three draft kinds, unchanged originals,
-  external edits and an unavailable original library path. All nine cases pass
-  with exact draft-text byte recovery and original-file preservation. The
-  generated metadata envelope is not compared byte for byte for My Notes or
-  Quick Note. Full suite: 1,376
-  declarations / 1,835 cases, no failures, skips or runtime warnings. It does
-  not certify installed-app UI, physical volume removal, final-keystroke or
-  power-loss durability. Issue #14 / COM-290 remains open for manual acceptance.
 - Issue #29 still tracks future App Intents surfaces, including widgets and
   Control Center. Existing phase-one delivery does not close that future scope.
 
@@ -89,7 +91,7 @@ installed-update gaps remain in [Manual release acceptance](#manual-release-acce
 even where an implementation ticket is closed. No signed app, permission grants,
 real meetings or user notes were changed by this work.
 
-The root checkout is clean on main at `04dec1d`. The old uncommitted combined
+The old uncommitted combined
 feature tree was reviewed in full and exactly matches historical commit
 `c357a83`, already an ancestor of main. Its local archive and backup tag are
 retained; it contained no unique unmerged work. New changes use isolated,
