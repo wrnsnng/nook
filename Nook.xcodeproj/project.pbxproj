@@ -31,6 +31,7 @@
 		108C84CBB417186D3963CEE3 /* DigestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FBF23AE1122A2E12B8EE118 /* DigestTests.swift */; };
 		10987819D5C8966D964521DD /* ShortcutStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A7DA9CAAF9000EEBF8659B5 /* ShortcutStore.swift */; };
 		11568C30A69687B480003A2F /* QuickNoteSuggestionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 787965085FCF5C5C4AF783B6 /* QuickNoteSuggestionTests.swift */; };
+		11EB2EF6FE8A85660E1B7887 /* DockPresence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8302F23C364FF3E9FFE57D61 /* DockPresence.swift */; };
 		11FE5A8F5F6B8B42CBDCFBA4 /* StatusMenuView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77437DEB25AC4ECE82644D22 /* StatusMenuView.swift */; };
 		13570898B78BD8B2F8CC7B12 /* SummaryReloadStalenessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BCB80D68974CF72FC403BD6 /* SummaryReloadStalenessTests.swift */; };
 		1478E8EB0F7B98D770E0FCF5 /* PrivacyStorageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40C568E6906587FA1D689E5F /* PrivacyStorageTests.swift */; };
@@ -152,6 +153,7 @@
 		6773A7841664AD0E03F727FC /* AudioInputCheckService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DF4933A199D635F45A02717 /* AudioInputCheckService.swift */; };
 		68DEF893547BEF1D4ED02FFC /* CaptureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B742437E025D0BAB1C7C0BA /* CaptureService.swift */; };
 		6AA078B4C6F59FC6F5CD4BA2 /* FollowUpDraftView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70FD8B05E788591D235C31CF /* FollowUpDraftView.swift */; };
+		6B4C5E225357963161BED131 /* DockPresenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 872074F05C3F3EEAAD3C56CB /* DockPresenceTests.swift */; };
 		6B74A333C06CDBE4D3678F51 /* MarkdownDraftController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E8AD6D39BBB6970C574F566 /* MarkdownDraftController.swift */; };
 		6C85F2758CC4E80FD1EB848F /* FolderPlacementMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C3F77E67C5EBF6359F25343 /* FolderPlacementMemory.swift */; };
 		6D884813C3BDCDE2D81B504D /* StorageInventoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00DF80B9D8531C8ED4F3BF61 /* StorageInventoryView.swift */; };
@@ -306,6 +308,7 @@
 		E88CBF83F68887A275C23C9D /* SummaryItemReview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16F5EDF25A914ABDFB71A45A /* SummaryItemReview.swift */; };
 		E8DB073A54A4C670E6F0858B /* NoteCombiner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B4EC858AE18294670CC43A6 /* NoteCombiner.swift */; };
 		E9ACF71836EC73826935E81A /* NoteActionOutputGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = F16A76A2084A148B53CEA7ED /* NoteActionOutputGuard.swift */; };
+		EB20423F02EB5038366D9903 /* DockPresence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8302F23C364FF3E9FFE57D61 /* DockPresence.swift */; };
 		EC053D3C49530CD1D3B87C32 /* OpenActionsController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A3FB7F59FFAEBB639390737 /* OpenActionsController.swift */; };
 		EC3B6D39C49CFB59E1CC9683 /* NoteActionOutputGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = F16A76A2084A148B53CEA7ED /* NoteActionOutputGuard.swift */; };
 		EC74DF63D37AAF8B3FE41484 /* NotchPanelCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7D40B68EE579A68D1A8722E /* NotchPanelCoordinator.swift */; };
@@ -456,6 +459,7 @@
 		7FBF23AE1122A2E12B8EE118 /* DigestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DigestTests.swift; sourceTree = "<group>"; };
 		8161483F1374BD8342076C40 /* RecordingRecovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingRecovery.swift; sourceTree = "<group>"; };
 		82F5D4466C034B90191F6217 /* MeetingNotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingNotificationService.swift; sourceTree = "<group>"; };
+		8302F23C364FF3E9FFE57D61 /* DockPresence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockPresence.swift; sourceTree = "<group>"; };
 		83933D3879F3DCE359A1FFF2 /* QuickNoteController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickNoteController.swift; sourceTree = "<group>"; };
 		83A5502CE70F9EA4C3BE8F69 /* PermissionSetupController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionSetupController.swift; sourceTree = "<group>"; };
 		843B3D27D068E5D01683C0B6 /* PersonalNotesDraftTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonalNotesDraftTests.swift; sourceTree = "<group>"; };
@@ -463,6 +467,7 @@
 		84D7501C10A626471D08DFAA /* FollowThroughTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowThroughTests.swift; sourceTree = "<group>"; };
 		851C3C409ACA6E327A1C5D68 /* NookWindowBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NookWindowBridge.swift; sourceTree = "<group>"; };
 		8559C0730D47F553693962B4 /* LibraryAnswerService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryAnswerService.swift; sourceTree = "<group>"; };
+		872074F05C3F3EEAAD3C56CB /* DockPresenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockPresenceTests.swift; sourceTree = "<group>"; };
 		8A3A93E8515E6665F6E80E33 /* LibraryFoldersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryFoldersTests.swift; sourceTree = "<group>"; };
 		8A9FD90AC40A43EB7E5E0674 /* RecordingIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingIntents.swift; sourceTree = "<group>"; };
 		8BCB80D68974CF72FC403BD6 /* SummaryReloadStalenessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SummaryReloadStalenessTests.swift; sourceTree = "<group>"; };
@@ -688,6 +693,7 @@
 			children = (
 				3AA003E269F1E0F3206F33F2 /* AppDelegate.swift */,
 				0A6655959382556C4DA62D72 /* AppModel.swift */,
+				8302F23C364FF3E9FFE57D61 /* DockPresence.swift */,
 				1E12DEFF243E7B4B84A7A135 /* NookApp.swift */,
 			);
 			path = App;
@@ -811,6 +817,7 @@
 				6271F2989B3F82935AE714D4 /* DictationSettingsTests.swift */,
 				7FBF23AE1122A2E12B8EE118 /* DigestTests.swift */,
 				64E89E9B358F9219563BE4F9 /* DisfluencyFilterTests.swift */,
+				872074F05C3F3EEAAD3C56CB /* DockPresenceTests.swift */,
 				A2486A002753540E9DE6F29B /* DraftJournalTests.swift */,
 				3BD104EA96D6C1BEE2A19E3C /* DraftLifecycleAcceptanceTests.swift */,
 				164E8F9D0C754E6BFE6AF8F0 /* DraftRecoveryWorkflowTests.swift */,
@@ -1126,6 +1133,7 @@
 				92275CBAE58E80B738E15FC6 /* DictationStyle.swift in Sources */,
 				3521D116CFAB99B6C5D611E2 /* DigestBuilder.swift in Sources */,
 				CA7026B6017BD95CA2462540 /* DisfluencyFilter.swift in Sources */,
+				11EB2EF6FE8A85660E1B7887 /* DockPresence.swift in Sources */,
 				45556C3D96DE8C2A9020610A /* DraftJournal.swift in Sources */,
 				4D8CC4B0022CC4D8357AE76C /* DraftRecoveryController.swift in Sources */,
 				076A464FDAFB503A10C4BA29 /* DraftRecoveryView.swift in Sources */,
@@ -1249,6 +1257,7 @@
 				E6271473FFF997A64B0977A7 /* DictationStyle.swift in Sources */,
 				8BBE249F02F3FD3D109D4639 /* DigestBuilder.swift in Sources */,
 				E366B7E96410E6528C2EE330 /* DisfluencyFilter.swift in Sources */,
+				EB20423F02EB5038366D9903 /* DockPresence.swift in Sources */,
 				382E4A0B6C2DBD96EECB69AE /* DraftJournal.swift in Sources */,
 				40855CB715DF347E94DAB82C /* DraftRecoveryController.swift in Sources */,
 				5A3887A5172015D8463B785C /* DraftRecoveryView.swift in Sources */,
@@ -1366,6 +1375,7 @@
 				5952AB977949651A552F6C5A /* DictationSettingsTests.swift in Sources */,
 				108C84CBB417186D3963CEE3 /* DigestTests.swift in Sources */,
 				5DC75A7BFD2240D9EC41E4A9 /* DisfluencyFilterTests.swift in Sources */,
+				6B4C5E225357963161BED131 /* DockPresenceTests.swift in Sources */,
 				581DFB4108A73FDF7869679F /* DraftJournalTests.swift in Sources */,
 				229A9C81E1DA279AE61F7CFC /* DraftLifecycleAcceptanceTests.swift in Sources */,
 				E1A2B6FCF06D23D7E2FF509E /* DraftRecoveryWorkflowTests.swift in Sources */,
