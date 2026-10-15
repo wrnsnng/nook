@@ -146,6 +146,27 @@ if [[ -n "$RELEASE_NOTES_PATH" ]]; then
   fi
 fi
 
+# The feed is rebuilt from the archives in this folder, so a machine that did
+# not publish the last few versions would drop them from the feed and lose
+# their deltas. 1.23.1 shipped that way, skipping 1.21.0 to 1.23.0. Fetch every
+# archive already published first; deltas are regenerated from these.
+# Archives Sparkle already retired to old_updates are not fetched again.
+if gh release view updates --repo "$RELEASE_REPOSITORY" >/dev/null 2>&1; then
+  if ! PUBLISHED_ARCHIVES=$(gh release view updates --repo "$RELEASE_REPOSITORY" \
+    --json assets --jq '.assets[].name | select(test("^Nook-.*[.]zip$"))'); then
+    echo "Could not list the published update archives." >&2
+    exit 69
+  fi
+  for archive in ${(f)PUBLISHED_ARCHIVES}; do
+    [[ -e "$FEED_DIR/$archive" || -e "$FEED_DIR/old_updates/$archive" ]] && continue
+    if ! gh release download updates --repo "$RELEASE_REPOSITORY" \
+      --pattern "$archive" --dir "$FEED_DIR"; then
+      echo "Could not fetch the published archive $archive." >&2
+      exit 69
+    fi
+  done
+fi
+
 # Release notes attach only to items the generator creates, so an appcast that
 # already lists this version would keep its empty description. Rebuilding from
 # the archives present restores every item with its notes.
