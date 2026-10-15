@@ -74,6 +74,13 @@ enum MarkdownCodec {
            let list = String(data: data, encoding: .utf8) {
             frontmatterLines.append("speakers: \(list)")
         }
+        // Names offered when naming a speaker. Written only when there are
+        // some, so every other note keeps the exact bytes it always had.
+        if note.kind == .meeting, !note.participants.isEmpty,
+           let data = try? JSONEncoder().encode(note.participants),
+           let list = String(data: data, encoding: .utf8) {
+            frontmatterLines.append("participants: \(list)")
+        }
         let frontmatter = (frontmatterLines + ["---"]).joined(separator: "\n")
 
         // A spoken note is a title and then prose, with nothing after it.
@@ -277,6 +284,11 @@ enum MarkdownCodec {
             moments: moments,
             sessions: sessions,
             audioStart: audioStart,
+            participants: kind == .meeting
+                ? (metadata["participants"]?.data(using: .utf8))
+                    .flatMap { try? JSONDecoder().decode([String].self, from: $0) }?
+                    .compactMap(SpeakerNames.sanitized) ?? []
+                : [],
             extraSections: preservedSections(in: blocks),
             fileURL: fileURL,
             fileRevision: fileURL.map { _ in

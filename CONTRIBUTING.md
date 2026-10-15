@@ -94,6 +94,9 @@ security impact, and any manual verification still needed. Maintainers may ask
 for a smaller change or additional evidence when platform behavior is difficult
 to reproduce.
 
+A pull request that changes what people see or do in Nook adds a changeset, the
+release note for that change. See [.changeset/README.md](.changeset/README.md).
+
 CI runs without signing or publishing credentials. Passing CI does not replace
 manual permission, capture, audio-quality, display-geometry, or update testing.
 

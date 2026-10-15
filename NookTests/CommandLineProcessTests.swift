@@ -125,7 +125,9 @@ struct CommandLineProcessTests {
         let expected = getpid()
         let writer = Task {
             try await Task.sleep(for: .milliseconds(50))
-            try Data(String(expected).utf8).write(to: marker)
+            // Atomic, so the reader sees the old marker or the whole PID,
+            // never a truncated file or a prefix of its digits.
+            try Data(String(expected).utf8).write(to: marker, options: .atomic)
         }
         defer { writer.cancel() }
         #expect(try await fixture.waitForPID() == expected)
@@ -476,7 +478,12 @@ private struct ProcessFixture: Sendable {
     func waitForPID() async throws -> pid_t {
         // Shell redirection creates the file before printf writes its bytes.
         // Existence alone races that write, especially on a busy CI host.
-        for _ in 0..<200 {
+        // The limit is wall-clock time rather than a poll count: on a loaded
+        // runner each 10ms sleep can overrun, and the writer may wait seconds
+        // for a thread, so a fixed count timed out with the PID on its way.
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(10))
+        while clock.now < deadline {
             if let bytes = try? data("pid"),
                let pid = pid_t(String(decoding: bytes, as: UTF8.self)), pid > 0 {
                 return pid

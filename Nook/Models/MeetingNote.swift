@@ -151,6 +151,10 @@ struct MeetingNote: Identifiable, Hashable, Sendable {
     /// was appended after earlier audio was already gone, which leaves the
     /// kept file starting partway along the combined timeline.
     var audioStart: TimeInterval = 0
+    /// Names the meeting app or the calendar showed for this meeting, offered
+    /// when the user names a separated speaker. Only names, never who said
+    /// what: that is the transcript's speaker labels.
+    var participants: [String] = []
     /// Sections and loose lines the file carries that no field models. Kept so
     /// re-encoding a hand-edited note cannot delete somebody's writing.
     var extraSections: [ExtraSection] = []
@@ -196,6 +200,7 @@ struct MeetingNote: Identifiable, Hashable, Sendable {
         moments: [MeetingMoment] = [],
         sessions: [MeetingSession] = [],
         audioStart: TimeInterval = 0,
+        participants: [String] = [],
         extraSections: [ExtraSection] = [],
         fileURL: URL? = nil,
         fileModified: Date? = nil,
@@ -222,6 +227,7 @@ struct MeetingNote: Identifiable, Hashable, Sendable {
         self.moments = moments
         self.sessions = sessions
         self.audioStart = audioStart
+        self.participants = participants
         self.extraSections = extraSections
         self.fileAddress = FileAddress(noteID: id, url: fileURL)
         self.fileModified = fileModified

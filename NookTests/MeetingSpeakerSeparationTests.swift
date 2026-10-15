@@ -38,7 +38,7 @@ struct MeetingSpeakerSeparationTests {
             transcript(), recordingURLs: [capture], isEnabled: true
         )
 
-        #expect(labelled.map(\.speaker) == ["Speaker 1", nil, "Speaker 2", "Speaker 1"])
+        #expect(labelled.map(\.speaker) == ["Unclear · voice 1", nil, "Unclear · voice 2", "Unclear · voice 1"])
         #expect(labelled[1].speakerLabel == "You")
     }
 

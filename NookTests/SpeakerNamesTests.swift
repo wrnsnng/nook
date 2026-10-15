@@ -21,12 +21,12 @@ struct SpeakerNamesTests {
             [lines[0].id: 0, lines[1].id: 1, lines[2].id: 0],
             to: lines
         )
-        #expect(labelled[0].speaker == "Speaker 1")
+        #expect(labelled[0].speaker == "Unclear · voice 1")
         #expect(labelled[1].speaker == nil)
-        #expect(labelled[2].speaker == "Speaker 1")
+        #expect(labelled[2].speaker == "Unclear · voice 1")
         #expect(labelled[3].speaker == nil)
         #expect(labelled[3].speakerLabel == "Meeting")
-        #expect(SpeakerNames.speakers(in: labelled) == ["Speaker 1"])
+        #expect(SpeakerNames.speakers(in: labelled) == ["Unclear · voice 1"])
     }
 
     /// Naming a speaker updates every line they said, and only theirs.
@@ -34,11 +34,11 @@ struct SpeakerNamesTests {
     func namingASpeakerUpdatesEveryLineTheySaid() throws {
         let lines = transcript()
         let labelled = SpeakerNames.apply([lines[0].id: 0, lines[2].id: 0, lines[3].id: 1], to: lines)
-        guard case .renamed(let renamed) = SpeakerNames.rename("Speaker 1", to: "  Ana  ", in: labelled) else {
+        guard case .renamed(let renamed) = SpeakerNames.rename("Unclear · voice 1", to: "  Ana  ", in: labelled) else {
             Issue.record("Expected a rename")
             return
         }
-        #expect(renamed.map(\.speaker) == ["Ana", nil, "Ana", "Speaker 2"])
+        #expect(renamed.map(\.speaker) == ["Ana", nil, "Ana", "Unclear · voice 2"])
     }
 
     /// A person cannot take a source's label or another speaker's name.
@@ -46,9 +46,9 @@ struct SpeakerNamesTests {
     func namesThatWouldReadBackWronglyAreRefused() {
         let lines = transcript()
         let labelled = SpeakerNames.apply([lines[0].id: 0, lines[3].id: 1], to: lines)
-        #expect(SpeakerNames.rename("Speaker 1", to: "you", in: labelled) == .invalidName)
-        #expect(SpeakerNames.rename("Speaker 1", to: "**", in: labelled) == .invalidName)
-        #expect(SpeakerNames.rename("Speaker 1", to: "Speaker 2", in: labelled) == .nameInUse)
+        #expect(SpeakerNames.rename("Unclear · voice 1", to: "you", in: labelled) == .invalidName)
+        #expect(SpeakerNames.rename("Unclear · voice 1", to: "**", in: labelled) == .invalidName)
+        #expect(SpeakerNames.rename("Unclear · voice 1", to: "Unclear · voice 2", in: labelled) == .nameInUse)
         #expect(SpeakerNames.sanitized("Ana: *lead*\nDesigner") == "Ana lead Designer")
     }
 
@@ -58,7 +58,7 @@ struct SpeakerNamesTests {
     func speakerNamesRoundTripThroughMarkdown() throws {
         let lines = transcript()
         var labelled = SpeakerNames.apply([lines[0].id: 0, lines[2].id: 0, lines[3].id: 1], to: lines)
-        if case .renamed(let named) = SpeakerNames.rename("Speaker 1", to: "Ana Silva", in: labelled) {
+        if case .renamed(let named) = SpeakerNames.rename("Unclear · voice 1", to: "Ana Silva", in: labelled) {
             labelled = named
         }
         let note = MeetingNote(
@@ -70,12 +70,12 @@ struct SpeakerNamesTests {
             transcript: labelled
         )
         let markdown = MarkdownCodec.encode(note)
-        #expect(markdown.contains("speakers: [\"Ana Silva\",\"Speaker 2\"]"))
+        #expect(markdown.contains("speakers: [\"Ana Silva\",\"Unclear · voice 2\"]"))
         #expect(markdown.contains("**Ana Silva:** Shall we start?"))
         #expect(markdown.contains("**You:** Yes, go ahead."))
 
         let decoded = try #require(MarkdownCodec.decode(markdown, fileURL: nil))
-        #expect(decoded.transcript.map(\.speakerLabel) == ["Ana Silva", "You", "Ana Silva", "Speaker 2"])
+        #expect(decoded.transcript.map(\.speakerLabel) == ["Ana Silva", "You", "Ana Silva", "Unclear · voice 2"])
         #expect(decoded.transcript.map(\.source) == [.system, .microphone, .system, .system])
     }
 
@@ -110,5 +110,15 @@ struct SpeakerNamesTests {
         let a = TranscriptSegment(startTime: 0, duration: 2, text: "So the plan", source: .system, speaker: "Ana")
         let b = TranscriptSegment(startTime: 2.2, duration: 2, text: "is fine", source: .system, speaker: "Leo")
         #expect(TranscriptAssembler.coalesce([a, b]).count == 2)
+    }
+
+    /// Notes written before the "Unclear" label still read their "Speaker 2"
+    /// voices as unnamed.
+    @Test
+    func olderPlaceholdersStillCountAsUnnamed() {
+        #expect(SpeakerNames.isPlaceholder("Speaker 2"))
+        #expect(SpeakerNames.isPlaceholder("Unclear · voice 3"))
+        #expect(!SpeakerNames.isPlaceholder("Boardroom · voice 1"))
+        #expect(!SpeakerNames.isPlaceholder("Ana"))
     }
 }

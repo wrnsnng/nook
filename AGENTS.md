@@ -144,6 +144,9 @@ identifier explicitly and would not override a new setting you add.
 - Match the surrounding code: naming, comment density, and structure.
 - Tests are named as behaviour, not as methods, and assert user-visible
   outcomes. Add one for any behaviour change.
+- A user-visible change adds a changeset (`Scripts/changeset.py add`), written
+  for people using Nook. Do not edit `CHANGELOG.md` or `Releases/` by hand
+  outside a release.
 - Prefer deterministic code over a model call where both are possible. Clean-up
   in `DisfluencyFilter` is a fixed word list precisely so it cannot invent text.
 

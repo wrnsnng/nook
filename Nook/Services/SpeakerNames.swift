@@ -6,14 +6,23 @@ import Foundation
 /// listed in the frontmatter, so the file reads correctly anywhere and no
 /// voiceprint or model state outlives the separation that produced it.
 enum SpeakerNames {
-    /// "Speaker 1", "Speaker 2": what an unnamed voice is called until the
-    /// user names it. One-based, in order of first appearance.
+    /// "Unclear · voice 1": what a voice is called until it is named. It
+    /// reads as a voice Nook could tell apart but not identify, not as one
+    /// more person in the meeting. One-based, in order of first appearance.
     static func placeholder(_ index: Int) -> String {
-        "Speaker \(index + 1)"
+        "Unclear · voice \(index + 1)"
     }
 
+    /// Several voices behind one name in the meeting app, such as people in
+    /// one meeting room: "Boardroom · voice 2".
+    static func sharedName(_ name: String, voice index: Int) -> String {
+        "\(name.prefix(28)) · voice \(index + 1)"
+    }
+
+    /// Placeholders as written now, and as notes before them were written
+    /// ("Speaker 2"), which are still unnamed voices.
     static func isPlaceholder(_ name: String) -> Bool {
-        name.range(of: #"^Speaker \d+$"#, options: .regularExpression) != nil
+        name.range(of: #"^(Unclear · voice|Speaker) \d+$"#, options: .regularExpression) != nil
     }
 
     /// The labels the source column already uses. A person cannot be called

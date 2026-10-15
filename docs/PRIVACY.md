@@ -156,13 +156,16 @@ macOS-controlled permission:
 
 This is the broadest permission Nook asks for, and it deserves to be understood
 rather than clicked through. Granting it lets an app read and control other
-apps' interfaces. Nook uses it for exactly two operations: reading which element
-currently has keyboard focus, and writing text into that element. It does not
-read the surrounding document, observe other applications, or record keystrokes.
+apps' interfaces. For dictation Nook uses it for exactly two operations: reading
+which element currently has keyboard focus, and writing text into that element.
+It does not read the surrounding document or record keystrokes. The only other
+use is the opt-in *Name speakers from Zoom*, described under Speaker separation,
+which reads Zoom's meeting window and nothing else.
 
-Nook never requests Accessibility access during first-run setup or for meeting
-recording. It is requested only when a user first switches dictation on, and
-dictation is the only feature that stops working if it is revoked.
+Nook never requests Accessibility access during first-run setup or when a
+recording starts. It is requested only when a user first switches dictation or
+*Name speakers from Zoom* on, and those are the only features that stop working
+if it is revoked.
 
 Dictation captures the microphone through `AVAudioEngine` rather than
 ScreenCaptureKit, so it needs no screen-recording access and captures no system
@@ -223,7 +226,7 @@ chooses.
 ## Speaker separation
 
 After a new meeting is transcribed, Nook finds who spoke when on the meeting
-side and labels those passages *Speaker 1*, *Speaker 2*, and so on, until the
+side and labels those passages *Unclear · voice 1*, *Unclear · voice 2*, and so on, until the
 user names them in the transcript. Names are written into the note's Markdown
 and nowhere else. Settings, Listening, *Tell speakers apart* turns this off.
 
@@ -246,6 +249,30 @@ and nowhere else. Settings, Listening, *Tell speakers apart* turns this off.
   the caller. Voice embeddings (voiceprints) exist only in memory during one
   analysis and are never written to disk or kept between meetings.
 - **Permissions.** None beyond those already used for recording.
+
+### Naming speakers from Zoom (opt-in)
+
+Off by default. Settings, Listening, *Name speakers from Zoom* turns it on, and
+that is when Nook asks for Accessibility access if it does not already have it.
+
+- **What it reads.** While a recording runs, about once a second, the Zoom
+  desktop app's meeting window: each participant's display name, whether they
+  are muted, and which tile Zoom marks or enlarges as the active speaker. It
+  reads no other window, no other application, no chat, and no video. When
+  the Zoom desktop app is not running, nothing is read. Zoom in a web browser
+  is never read, so the feature does not work there.
+- **What it keeps.** The readings stay in memory until the note is saved, then
+  are discarded. A voice is named only where Zoom's active speaker clearly
+  matches it; several voices behind one Zoom name, such as a meeting room,
+  are numbered under that name. The user's own name is never given to
+  another voice. No voiceprint is kept, so people in a room are told apart
+  within one meeting but never recognised in another. The note keeps the names beside transcript lines and a
+  `participants:` list in its frontmatter, offered when the user names a
+  speaker. Nothing else is written.
+- **Calendar.** When calendar context is on, the invitees of the event the
+  recording overlapped are also offered as names. Invitees are never assigned
+  to a voice automatically.
+- **Where it runs.** Entirely on this Mac. Nothing is sent anywhere.
 
 ## The command-line assistant bridge (opt-in)
 

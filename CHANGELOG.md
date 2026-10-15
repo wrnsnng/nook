@@ -4,7 +4,22 @@ Nook follows a user-facing release-note model. Each published version has a
 Markdown note in [`Releases/`](Releases/) and a matching `v<version>` release in
 the [binary releases repository](https://github.com/wrnsnng/nook-releases/releases).
 
+Unreleased changes live in [`.changeset/`](.changeset/) until the next
+release collects them.
+
 ## Unreleased
+
+## 1.23.1
+
+[Release notes](Releases/Nook-1.23.1.md)
+
+- A recording you start yourself no longer stops on its own when another app
+  goes quiet. Playing a Slack video during a meeting could end the recording
+  and finish the transcript when the video ended.
+- Release downloads no longer carry Finder metadata files. Apps unpacked by
+  tools other than Archive Utility, including many managed-Mac installers,
+  failed signature checks inside Sparkle.framework and Gatekeeper refused to
+  open them.
 
 ## 1.23.0
 

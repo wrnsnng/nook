@@ -144,8 +144,21 @@ in CI artifacts, pasted into issues, or accepted from a pull request.
 
 ## Version and release-note mapping
 
-Update `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in `project.yml`, then
-regenerate the Xcode project.
+Release notes are collected as changesets in [`.changeset/`](../.changeset/),
+one per user-visible pull request. CI fails a pull request that changes the
+app without one, unless it carries the `no-changeset` label. To prepare a
+release:
+
+```sh
+Scripts/changeset.py status
+Scripts/changeset.py version --summary "One sentence about this release."
+xcodegen generate
+```
+
+`version` bumps `MARKETING_VERSION` by the largest level any changeset asks
+for, increments `CURRENT_PROJECT_VERSION`, writes the release note and the
+changelog entry, and deletes the changesets it used. Edit the release note
+before publishing; the summary and the order of items are a person's call.
 
 - `MARKETING_VERSION` is the user-facing version, release-note filename, and
   `v<version>` GitHub tag.
@@ -279,6 +292,12 @@ The pinned `sign_update` supports `--verify <archive> <signature>` and
 `--verify <appcast.xml>`, with `--account <existing matching account>`. Its
 verification mode still accesses the configured Keychain key. Do not edit XML
 or release notes after signing.
+
+Every release zip is written with `ditto --norsrc --noextattr --noacl` and
+checked by `Scripts/verify-release-archive.sh`, which rejects `._*`,
+`__MACOSX` and `.DS_Store` entries, extracts with plain `unzip`, adds a browser
+quarantine flag and requires strict `codesign` and `spctl` to pass. Run it on
+any archive before upload, including archives repacked by hand.
 
 Record SHA-256 and byte length for the prepared appcast, update archive, all
 deltas, and `build/distribution/Nook.zip`. The stable alias, versioned update

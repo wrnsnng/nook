@@ -27,6 +27,14 @@ enum NookEventLog {
         case meetingStopStarted = "meeting.stop-started"
         // Spotlight refused a sync. The next library change retries it.
         case spotlightIndexFailed = "spotlight.index-failed"
+        // Naming speakers from Zoom, once per recording when it is switched
+        // on: which of these happened is what tells a missing permission
+        // from Zoom changing its window.
+        case speakersZoomNotPermitted = "speakers.zoom-not-permitted"
+        case speakersZoomNothingRead = "speakers.zoom-nothing-read"
+        case speakersZoomRead = "speakers.zoom-read"
+        case speakersZoomActiveSpeakerSeen = "speakers.zoom-active-speaker-seen"
+        case speakersNamedFromZoom = "speakers.named-from-zoom"
         case summaryGenerated = "summary.generated"
         case summaryGenerationFailed = "summary.generation-failed"
         case summaryModelUnavailable = "summary.model-unavailable"

@@ -10,6 +10,11 @@ struct CalendarMeetingEvent: Hashable, Sendable {
     /// Whether the event repeats. Read from the local calendar only, and
     /// only used to decide whether a new meeting joins a recurring series.
     var isRecurring = false
+    /// Invitees' display names, without the user. Only offered as names for
+    /// separated speakers; an invitation is no evidence anyone attended.
+    var attendeeNames: [String] = []
+    /// When the event is scheduled to end; nil in tests and older callers.
+    var endDate: Date?
 
     var key: String { "\(startDate.timeIntervalSince1970)|\(title)" }
 }
@@ -78,7 +83,11 @@ struct EventKitCalendarProvider: CalendarEventProviding {
                     title: event.title ?? "",
                     attendeeCount: event.attendees?.count ?? 0,
                     startDate: event.startDate,
-                    isRecurring: event.hasRecurrenceRules
+                    isRecurring: event.hasRecurrenceRules,
+                    attendeeNames: (event.attendees ?? [])
+                        .filter { !$0.isCurrentUser && $0.participantType == .person }
+                        .compactMap(\.name),
+                    endDate: event.endDate
                 )
             }
     }
@@ -176,6 +185,36 @@ final class CalendarContextService: ObservableObject {
             end: date.addingTimeInterval(10 * 60)
         )
         return Self.nearestEvent(to: date, among: events)
+    }
+
+    /// Invitees of the event a recording overlaps, as suggestions for naming
+    /// its speakers. Empty when calendar context is off or denied.
+    func attendeeNames(forMeetingFrom start: Date, to end: Date) async -> [String] {
+        guard isEnabled, !accessDenied else { return [] }
+        let provider = self.provider
+        let events = await Task.detached(priority: .utility) {
+            provider.events(between: start.addingTimeInterval(-60 * 60), end: end)
+        }.value
+        return Self.attendeeNames(forMeetingFrom: start, to: end, among: events)
+    }
+
+    /// The event that overlaps the recording most, so a meeting that ran over
+    /// into the next one still takes its own invitees.
+    nonisolated static func attendeeNames(
+        forMeetingFrom start: Date,
+        to end: Date,
+        among events: [CalendarMeetingEvent],
+        assumedLength: TimeInterval = 30 * 60
+    ) -> [String] {
+        let best = events
+            .map { event -> (CalendarMeetingEvent, TimeInterval) in
+                let eventEnd = event.endDate ?? event.startDate.addingTimeInterval(assumedLength)
+                let shared = min(end, eventEnd).timeIntervalSince(max(start, event.startDate))
+                return (event, shared)
+            }
+            .filter { $0.1 > 0 && !$0.0.attendeeNames.isEmpty }
+            .max { $0.1 < $1.1 }
+        return best?.0.attendeeNames ?? []
     }
 
     /// Whether the calendar event a meeting was recorded from repeats.

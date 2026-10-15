@@ -68,7 +68,7 @@ if ! vtool -show-build "$executable" | grep -q 'sdk 27'; then
 fi
 
 mkdir -p "$OUTPUT_DIR"
-( cd "$app/.." && /usr/bin/ditto -c -k --keepParent Nook.app "$OUTPUT_DIR/Nook-stable-unsigned.zip" )
+( cd "$app/.." && /usr/bin/ditto -c -k --norsrc --noextattr --noacl --keepParent Nook.app "$OUTPUT_DIR/Nook-stable-unsigned.zip" )
 ( cd "$OUTPUT_DIR" && shasum -a 256 Nook-stable-unsigned.zip > Nook-stable-unsigned.zip.sha256 )
 echo "Built $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info") ($(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$info")) from $(git rev-parse HEAD)"
 cat "$OUTPUT_DIR/Nook-stable-unsigned.zip.sha256"

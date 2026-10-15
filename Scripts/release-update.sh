@@ -100,7 +100,7 @@ if [[ -e "$SUBMISSION_ARCHIVE" || -e "$UPDATE_ARCHIVE" || -e "$FINAL_ARCHIVE" ]]
 fi
 
 echo "Submitting Nook $VERSION ($BUILD) to Apple notarization..."
-/usr/bin/ditto -c -k --keepParent "$APP_PATH" "$SUBMISSION_ARCHIVE"
+/usr/bin/ditto -c -k --norsrc --noextattr --noacl --keepParent "$APP_PATH" "$SUBMISSION_ARCHIVE"
 xcrun notarytool submit "$SUBMISSION_ARCHIVE" \
   --keychain-profile "$NOTARY_PROFILE" \
   --wait
@@ -110,7 +110,8 @@ xcrun stapler validate "$APP_PATH"
 ./Scripts/verify-release-app.sh "$APP_PATH"
 /usr/sbin/spctl --assess --type execute --verbose=4 "$APP_PATH"
 
-/usr/bin/ditto -c -k --keepParent "$APP_PATH" "$UPDATE_ARCHIVE"
+/usr/bin/ditto -c -k --norsrc --noextattr --noacl --keepParent "$APP_PATH" "$UPDATE_ARCHIVE"
+./Scripts/verify-release-archive.sh "$UPDATE_ARCHIVE"
 /usr/bin/ditto "$UPDATE_ARCHIVE" "$FINAL_ARCHIVE"
 /bin/rm -f "$STABLE_ARCHIVE"
 /usr/bin/ditto "$UPDATE_ARCHIVE" "$STABLE_ARCHIVE"
@@ -143,6 +144,38 @@ if [[ -n "$RELEASE_NOTES_PATH" ]]; then
     echo "Could not build the HTML release notes." >&2
     exit 74
   fi
+fi
+
+# The feed is rebuilt from the archives in this folder, so a machine that did
+# not publish the last few versions would drop them from the feed and lose
+# their deltas. 1.23.1 shipped that way, skipping 1.21.0 to 1.23.0. Fetch every
+# archive already published first; deltas are regenerated from these.
+# Archives Sparkle already retired to old_updates are not fetched again.
+# Only a feed release that does not exist yet may be skipped. Any other failure
+# (gh missing, signed out, offline) would quietly drop versions again.
+if ! command -v gh >/dev/null 2>&1; then
+  echo "GitHub CLI is required to fetch the published update archives." >&2
+  exit 69
+fi
+if ! FEED_RELEASE_ERROR=$(gh release view updates --repo "$RELEASE_REPOSITORY" 2>&1 >/dev/null); then
+  if [[ "$FEED_RELEASE_ERROR" != *"release not found"* ]]; then
+    echo "Could not check the published update feed: $FEED_RELEASE_ERROR" >&2
+    exit 69
+  fi
+else
+  if ! PUBLISHED_ARCHIVES=$(gh release view updates --repo "$RELEASE_REPOSITORY" \
+    --json assets --jq '.assets[].name | select(test("^Nook-.*[.]zip$"))'); then
+    echo "Could not list the published update archives." >&2
+    exit 69
+  fi
+  for archive in ${(f)PUBLISHED_ARCHIVES}; do
+    [[ -e "$FEED_DIR/$archive" || -e "$FEED_DIR/old_updates/$archive" ]] && continue
+    if ! gh release download updates --repo "$RELEASE_REPOSITORY" \
+      --pattern "$archive" --dir "$FEED_DIR"; then
+      echo "Could not fetch the published archive $archive." >&2
+      exit 69
+    fi
+  done
 fi
 
 # Release notes attach only to items the generator creates, so an appcast that

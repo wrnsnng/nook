@@ -41,6 +41,7 @@ struct SettingsView: View {
     @State private var showingRestoreAllDefaultsConfirmation = false
     @AppStorage(NotchPeekPreference.key) private var notchPeekEnabled = true
     @AppStorage(SpeakerSeparationPreference.key) private var separateSpeakers = true
+    @AppStorage(ZoomSpeakerNamesPreference.key) private var nameSpeakersFromZoom = false
     @AppStorage(SpotlightIndexPreference.key) private var spotlightEnabled = true
     @AppStorage(AutoFilingPreference.key) private var fileRecurringMeetings = true
     /// Nil until the bundle's signature has been read, which happens off the
@@ -213,16 +214,53 @@ struct SettingsView: View {
                     }
                 }
                 Toggle("Tell speakers apart", isOn: $separateSpeakers)
+                Toggle("Name speakers from Zoom", isOn: $nameSpeakersFromZoom)
+                    .disabled(!separateSpeakers)
+                    .onChange(of: nameSpeakersFromZoom) { _, enabled in
+                        // Asked for at the moment it is needed, as dictation
+                        // does, never on Nook's own initiative.
+                        if enabled, !TextInsertionService.isTrusted {
+                            TextInsertionService.requestTrust()
+                        }
+                        accessibilityGranted = TextInsertionService.isTrusted
+                    }
+                // Without access the setting reads nothing, so say so
+                // here rather than leave a meeting to come back unnamed.
+                if separateSpeakers, nameSpeakersFromZoom, !accessibilityGranted {
+                    HStack(alignment: .firstTextBaseline, spacing: NookSpacing.medium) {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .foregroundStyle(NookPalette.warning)
+                            .accessibilityHidden(true)
+                        Text("Nook needs Accessibility access to read names from Zoom. Allow it in System Settings, then come back to Nook.")
+                            .font(NookType.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                        Button("Allow…") {
+                            TextInsertionService.requestTrust()
+                            TextInsertionService.openAccessibilitySettings()
+                        }
+                    }
+                }
             } header: {
                 Text("Transcription")
             } footer: {
-                Text("Recognition runs with Apple’s on-device speech model. You can change the language between meetings. After a meeting, Nook separates the other voices on this Mac and labels them Speaker 1, Speaker 2 until you name them.")
+                Text("Recognition runs with Apple’s on-device speech model. You can change the language between meetings. After a meeting, Nook separates the other voices on this Mac and labels them Unclear · voice 1, Unclear · voice 2 until you name them. Name speakers from Zoom reads participant names and who Zoom shows as speaking from the Zoom desktop app while you record, using Accessibility access, and names a voice when the match is clear. It does not work with Zoom in a web browser. Names stay in the note on this Mac.")
             }
 
             audioInputCheckSection
             storageSection
         }
         .formStyle(.grouped)
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: NSApplication.didBecomeActiveNotification
+            )
+        ) { _ in
+            // The grant happens in System Settings, so coming back to Nook is
+            // the moment to re-check it.
+            accessibilityGranted = TextInsertionService.isTrusted
+        }
         .onDisappear {
             AppModel.shared.stopAudioInputCheck()
         }
