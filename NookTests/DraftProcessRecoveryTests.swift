@@ -14,17 +14,18 @@ struct DraftProcessRecoveryTests {
         try manager.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? manager.removeItem(at: root) }
         try "synthetic-only".write(to: root.appendingPathComponent("probe.marker"), atomically: true, encoding: .utf8)
-        let app = Bundle.main.bundleURL
-        let tool = app.deletingLastPathComponent().appendingPathComponent("NookRecoveryProbe")
-        try #require(manager.isExecutableFile(atPath: tool.path))
+        // The Debug test host doubles as the probe (see RecoveryProbe), so the
+        // child is the same binary that is already built, not a second copy.
+        let tool = try #require(Bundle.main.executableURL)
         func child(_ operation: String) throws -> Process {
             let process = Process()
             process.executableURL = tool
-            process.arguments = [operation, root.path, kind.rawValue]
-            // Tools need the same built frameworks as the app test host.
-            var environment = ProcessInfo.processInfo.environment
-            environment["DYLD_FRAMEWORK_PATH"] = app.deletingLastPathComponent().path
-            process.environment = environment
+            process.arguments = [RecoveryProbe.flag, operation, root.path, kind.rawValue]
+            // Without these the child would inject and run this test bundle
+            // again instead of staying a bare probe.
+            process.environment = ProcessInfo.processInfo.environment.filter { key, _ in
+                key != "DYLD_INSERT_LIBRARIES" && !key.hasPrefix("XCTest") && !key.hasPrefix("XCInject")
+            }
             let output = root.appendingPathComponent(operation + ".log")
             manager.createFile(atPath: output.path, contents: nil)
             let handle = try FileHandle(forWritingTo: output)

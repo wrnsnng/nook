@@ -1,12 +1,35 @@
+#if DEBUG
 import Foundation
 
-/// Test-only executable: no AppModel, UI, capture, providers or user library.
+/// Test-only mode of the Debug app binary: no AppModel, UI, capture, providers
+/// or user library. DraftProcessRecoveryTests launches the already-built test
+/// host this way instead of a separate tool, which compiled every Nook source a
+/// second time. Release builds, which are what ships, do not contain it at all.
 /// The parent owns its temporary directory and kills only this child process.
-@main
-struct RecoveryProbe {
+enum RecoveryProbe {
+    static let flag = "--recovery-probe"
+
+    /// Called first thing in NookApp.init, before SwiftUI builds any scene or
+    /// the app delegate launches, so a probe never reaches AppModel.shared.
     @MainActor
-    static func main() async throws {
+    static func runIfRequested() {
         let args = CommandLine.arguments
+        guard args.count > 1, args[1] == flag else { return }
+        Task { @MainActor in
+            do {
+                try await run(Array(args.dropFirst()))
+                exit(0)
+            } catch {
+                FileHandle.standardError.write(Data("Recovery probe failed: \(error)\n".utf8))
+                exit(1)
+            }
+        }
+        // Serve the main actor without ever starting NSApplication.
+        dispatchMain()
+    }
+
+    @MainActor
+    private static func run(_ args: [String]) async throws {
         guard args.count == 4,
               ["checkpoint", "recover"].contains(args[1]),
               let kind = DraftEditorKind(rawValue: args[3]) else { throw ProbeError.invalidArguments }
@@ -65,3 +88,4 @@ struct RecoveryProbe {
     struct Receipt: Codable { let path: String; let remaining: Int }
     enum ProbeError: Error { case invalidArguments, missingCheckpoint, changedCheckpoint }
 }
+#endif

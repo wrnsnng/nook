@@ -2,7 +2,8 @@
 
 October 3, 2026, macOS 26.6.2 (25G83), Xcode 27.0 (27A266a), Apple M4 Pro.
 
-`DraftProcessRecoveryTests` runs `NookRecoveryProbe`, a test-only target, with
+`DraftProcessRecoveryTests` runs the Debug test-host binary in its
+`--recovery-probe` mode (`RecoveryProbe`, compiled only into Debug builds) with
 marked temporary directories containing synthetic data. The real My Notes,
 Markdown and Quick Note controllers write about 108 KB of unfinished text,
 including decomposed Unicode, Japanese, emoji, CRLF and trailing whitespace.
