@@ -174,7 +174,7 @@ enum MarkdownCodec {
 
     /// A discovery result has no editable content. Keeping it a different type
     /// prevents an unloaded transcript from reaching a whole-note save as empty.
-    /// The loading spike uses this; the production store still fully decodes.
+    /// Early library rows use this; opening or saving a note still fully decodes.
     struct Metadata: Hashable, Sendable {
         let id: UUID
         let kind: NoteKind
