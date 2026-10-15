@@ -151,7 +151,18 @@ fi
 # their deltas. 1.23.1 shipped that way, skipping 1.21.0 to 1.23.0. Fetch every
 # archive already published first; deltas are regenerated from these.
 # Archives Sparkle already retired to old_updates are not fetched again.
-if gh release view updates --repo "$RELEASE_REPOSITORY" >/dev/null 2>&1; then
+# Only a feed release that does not exist yet may be skipped. Any other failure
+# (gh missing, signed out, offline) would quietly drop versions again.
+if ! command -v gh >/dev/null 2>&1; then
+  echo "GitHub CLI is required to fetch the published update archives." >&2
+  exit 69
+fi
+if ! FEED_RELEASE_ERROR=$(gh release view updates --repo "$RELEASE_REPOSITORY" 2>&1 >/dev/null); then
+  if [[ "$FEED_RELEASE_ERROR" != *"release not found"* ]]; then
+    echo "Could not check the published update feed: $FEED_RELEASE_ERROR" >&2
+    exit 69
+  fi
+else
   if ! PUBLISHED_ARCHIVES=$(gh release view updates --repo "$RELEASE_REPOSITORY" \
     --json assets --jq '.assets[].name | select(test("^Nook-.*[.]zip$"))'); then
     echo "Could not list the published update archives." >&2
