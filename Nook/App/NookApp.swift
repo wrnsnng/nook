@@ -7,6 +7,14 @@ struct NookApp: App {
     @StateObject private var updater = NookUpdateController()
     @StateObject private var shortcuts = ShortcutStore.shared
 
+    init() {
+        #if DEBUG
+        // Never returns when DraftProcessRecoveryTests launches the test host
+        // as a crash-recovery probe; a no-op on every other launch.
+        RecoveryProbe.runIfRequested()
+        #endif
+    }
+
     var body: some Scene {
         MenuBarExtra {
             StatusMenuView()
