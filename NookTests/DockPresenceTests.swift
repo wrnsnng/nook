@@ -42,4 +42,13 @@ struct DockPresenceTests {
         let settings = window()
         #expect(DockPresence.wantsDock([settings, window(panel: true)]))
     }
+
+    /// While Nook is hidden every window reads as invisible. A window closing
+    /// then must not drop Nook from the Dock and strand the hidden ones.
+    @Test
+    func aCloseWhileHiddenWaitsUntilNookIsShown() {
+        #expect(!DockPresence.leavesDock(wantsDock: false, appIsHidden: true))
+        #expect(DockPresence.leavesDock(wantsDock: false, appIsHidden: false))
+        #expect(!DockPresence.leavesDock(wantsDock: true, appIsHidden: false))
+    }
 }
